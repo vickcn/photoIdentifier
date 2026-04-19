@@ -1,5 +1,7 @@
 # Python
 __pycache__/
+**.pyc
+**drive_tokens**
 *.py[cod]
 *$py.class
 *.so
@@ -28,6 +30,7 @@ data*/
 # PyInstaller
 *.manifest
 *.spec
+*.DS_Store**
 
 # Installer logs
 pip-log.txt
@@ -83,7 +86,9 @@ celerybeat-schedule
 *.sage.py
 
 # Environments
-.env
+**.env
+**.env.**
+!.env.example
 .venv
 env/
 venv/
@@ -222,5 +227,6 @@ out/
 build/
 
 # Secrets
-.secrets/
+**.secrets**
+**.vercel**
 .vercel
