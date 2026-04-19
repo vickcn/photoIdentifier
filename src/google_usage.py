@@ -109,10 +109,10 @@ async def analyze_brand_strap_image(b64_image: str, content_type: str) -> PhotoA
     你是一個專業的圖片審核系統。請分析這張圖片，並回傳純 JSON 格式的結果，不要任何 markdown 標記。
     
     【辨識目標與規則】：
-    1. 偵測圖片中「所有」清晰可見的人臉，每個人臉都需要各自提供:
+    1. 偵測圖片中「所有」清晰可見的人臉，每個人臉都需要各自提供 (⚠️嚴格限制：最多只列出前 5 個最清晰的人臉):
        - bbox: [ymin, xmin, ymax, xmax] 以 0 到 1000 的整數表示
        - confidence: 0.0 到 1.0 的信心度浮點數
-    2. 偵測圖片中「所有」名牌帶子 (識別證帶、掛繩、lanyard/strap)，每條帶子各自提供:
+    2. 偵測圖片中「所有」名牌帶子 (識別證帶、掛繩、lanyard/strap)，每條帶子各自提供 (⚠️嚴格限制：最多只列出前 5 個最清晰的帶子):
        - bbox: [ymin, xmin, ymax, xmax] 以 0 到 1000 的整數表示  
        - confidence: 0.0 到 1.0 的信心度浮點數
     3. 如果有帶子，請辨識其整體主要顏色。請特別區分『青色 (Cyan/Teal)』與『藍色 (Blue)』。
@@ -158,9 +158,39 @@ async def analyze_brand_strap_image(b64_image: str, content_type: str) -> PhotoA
             cleaned_text = match.group(0)
             
         result_json = json.loads(cleaned_text)
+        
+        # 【邏輯防護】自動過濾掉重複的 BBox，防止 AI 幻覺產生大量一模一樣的框
+        def dedup_bboxes(bboxes, confidences):
+            seen = set()
+            new_bboxes = []
+            new_confs = []
+            for b, c in zip(bboxes, confidences):
+                idx_tuple = tuple(b)
+                if idx_tuple not in seen:
+                    seen.add(idx_tuple)
+                    new_bboxes.append(b)
+                    new_confs.append(c)
+            return new_bboxes, new_confs
+            
+        if isinstance(result_json.get("face_bboxes"), list) and isinstance(result_json.get("face_confidences"), list):
+            result_json["face_bboxes"], result_json["face_confidences"] = dedup_bboxes(
+                result_json["face_bboxes"], result_json["face_confidences"]
+            )
+        if isinstance(result_json.get("strap_bboxes"), list) and isinstance(result_json.get("strap_confidences"), list):
+            result_json["strap_bboxes"], result_json["strap_confidences"] = dedup_bboxes(
+                result_json["strap_bboxes"], result_json["strap_confidences"]
+            )
+            
     except json.JSONDecodeError as e:
         logger.error("JSON 解析失敗，原始回傳內容:\n%s", response_text)
-        raise HTTPException(status_code=502, detail="模型回傳非 JSON 格式") from e
+        # 如果真的解析失敗（例如被截斷），為了保持批次處理不中斷，我們可以給一個預設的安全失敗值而不是直接噴 502
+        logger.warning("解析破裂，啟用預設空白結果回傳")
+        result_json = {
+             "has_face": False, "face_bboxes": [], "face_confidences": [],
+             "has_brand_strap": False, "strap_bboxes": [], "strap_confidences": [],
+             "strap_color": None, "is_safe_for_public": False,
+             "moderation_reason": "AI 模組產生無效格式（可能為物件過多），系統強制阻擋公布。"
+        }
         
     if not isinstance(result_json, dict):
         raise HTTPException(status_code=502, detail="模型回傳內容格式錯誤")
