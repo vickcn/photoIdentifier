@@ -154,21 +154,27 @@
                     <p>尚未載入圖片，請從左側上傳或指定批量資料夾</p>
                 </div>
 
+                <!-- Viewer + Review Side-by-Side Wrapper -->
+                <div id="viewer-review-wrapper" class="viewer-review-wrapper">
+
                 <!-- Split Viewer -->
                 <div id="split-viewer" class="split-viewer hidden">
-                    <div class="viewer-nav">
+                    <!-- Fullscreen close button -->
+                    <button class="fs-close-btn" id="fs-close-btn" onclick="window.__exitFullscreen()" title="離開全螢幕">✕ 離開全螢幕</button>
+
+                    <div class="viewer-nav" id="viewer-nav">
                         <button class="nav-btn" id="prev-btn">◀</button>
                         <span class="page-indicator" id="page-indicator">1 / 1</span>
                         <button class="nav-btn" id="next-btn">▶</button>
                     </div>
 
                     <div class="viewer-images">
-                        <div class="image-box">
-                            <div class="image-label">原圖</div>
+                        <div class="image-box" onclick="window.__toggleFullscreen()" title="點擊放大 / 縮小">
+                            <div class="image-label">原圖 <span class="fs-hint">🔍 點擊全螢幕</span></div>
                             <img id="original-img" src="" alt="原始圖片">
                         </div>
-                        <div class="image-box">
-                            <div class="image-label">AI 標註圖</div>
+                        <div class="image-box" onclick="window.__toggleFullscreen()" title="點擊放大 / 縮小">
+                            <div class="image-label">AI 標註圖 <span class="fs-hint">🔍 點擊全螢幕</span></div>
                             <img id="annotated-img" src="" alt="後製標註圖片">
                         </div>
                     </div>
@@ -195,8 +201,37 @@
                                 <strong class="stat-value" id="strap-color">無</strong>
                             </div>
                         </div>
+
+                        <!-- Human Decision Buttons -->
+                        <div class="decision-buttons" id="decision-buttons" style="display:none;">
+                            <button class="decision-btn" id="btn-set-safe" onclick="window.__setDecision('safe')">
+                                ✅ 設為 Safe
+                            </button>
+                            <button class="decision-btn" id="btn-set-unsafe" onclick="window.__setDecision('unsafe')">
+                                ❌ 設為 Unsafe
+                            </button>
+                        </div>
                     </div>
                 </div>
+
+                <!-- Review Summary Panel -->
+                <div id="review-summary" class="review-summary" style="display:none;">
+                    <div class="review-summary-header">
+                        <h3>📋 裁決清單</h3>
+                        <div class="review-counts">
+                            <span class="safe-count" id="review-safe-count">Safe: 0</span>
+                            <span class="unsafe-count" id="review-unsafe-count">Unsafe: 0</span>
+                        </div>
+                    </div>
+                    <div class="review-list" id="review-list"></div>
+                    <div class="finalize-section">
+                        <button class="finalize-btn" id="finalize-btn" onclick="window.__finalizeReview()">
+                            🚀 確認並批次歸檔
+                        </button>
+                    </div>
+                </div>
+
+                </div><!-- end viewer-review-wrapper -->
             </section>
         </main>
     </div>

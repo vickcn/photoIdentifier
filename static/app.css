@@ -28,7 +28,8 @@ body {
 
 .app-container {
     width: 100%;
-    max-width: 1200px;
+    max-width: 1600px;
+    width: 95%;
     display: flex;
     flex-direction: column;
     gap: 2rem;
@@ -67,7 +68,7 @@ body {
 
 .main-content {
     display: grid;
-    grid-template-columns: 1fr 2fr;
+    grid-template-columns: 380px 1fr;
     gap: 2rem;
 }
 
@@ -307,6 +308,11 @@ button:disabled {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 1rem;
+    cursor: zoom-in;
+}
+
+.viewer-images.no-zoom {
+    cursor: default;
 }
 
 .image-box {
@@ -579,3 +585,444 @@ button:disabled {
 .stat-item.success .value { color: var(--success-color); }
 .stat-item.failed .value { color: var(--danger-color); }
 .stat-item.pending .value { color: #ffd740; }
+
+/* Fullscreen Mode */
+.split-viewer.fullscreen-mode {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(15, 23, 42, 0.98);
+    backdrop-filter: blur(20px);
+    z-index: 2000;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    animation: fadeIn 0.3s ease;
+}
+
+.split-viewer.fullscreen-mode .viewer-images {
+    flex: 1;
+    min-height: 0;
+    cursor: zoom-out;
+}
+
+.split-viewer.fullscreen-mode .image-box {
+    aspect-ratio: auto;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.split-viewer.fullscreen-mode .image-box img {
+    max-height: 75vh;
+}
+
+.split-viewer.fullscreen-mode .viewer-nav {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 1rem;
+    border-radius: 1rem;
+    width: fit-content;
+    align-self: center;
+}
+
+.close-fullscreen {
+    position: absolute;
+    top: 2rem;
+    right: 2rem;
+    background: var(--danger-color);
+    color: white;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    z-index: 2001;
+}
+
+.split-viewer.fullscreen-mode .close-fullscreen {
+    display: flex;
+}
+
+/* === Human-in-the-Loop Review System === */
+
+/* Decision Buttons */
+.decision-buttons {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--glass-border);
+}
+
+.decision-btn {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    font-weight: 600;
+    font-size: 0.95rem;
+    border: 2px solid transparent;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.decision-btn::before {
+    content: '';
+    position: absolute;
+    top: 0; left: -100%; right: 0; bottom: 0;
+    width: 300%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+    transition: left 0.5s ease;
+}
+
+.decision-btn:hover::before {
+    left: 100%;
+}
+
+.decision-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    transform: translateY(-1px);
+}
+
+.decision-btn.active-safe {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: var(--success-color);
+    color: var(--success-color);
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+}
+
+.decision-btn.active-unsafe {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: var(--danger-color);
+    color: var(--danger-color);
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
+}
+
+/* Override Badge */
+.override-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 2rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    margin-left: 0.5rem;
+    animation: fadeIn 0.3s ease;
+}
+
+/* Review Summary Panel */
+.review-summary {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--glass-border);
+    border-radius: 1rem;
+    margin-top: 1.5rem;
+    overflow: hidden;
+    animation: fadeIn 0.4s ease;
+}
+
+.review-summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.review-summary-header h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.review-counts {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.85rem;
+}
+
+.review-counts .safe-count {
+    color: var(--success-color);
+    font-weight: 600;
+}
+
+.review-counts .unsafe-count {
+    color: var(--danger-color);
+    font-weight: 600;
+}
+
+.review-counts .pending-count {
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+.review-list {
+    max-height: 260px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
+}
+
+.review-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.review-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+}
+
+.review-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.7rem 1.25rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.review-item:last-child {
+    border-bottom: none;
+}
+
+.review-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.review-item.current {
+    background: rgba(99, 102, 241, 0.1);
+    border-left: 3px solid var(--accent-color);
+}
+
+.review-item-index {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    min-width: 28px;
+    text-align: center;
+    font-weight: 500;
+}
+
+.review-item-name {
+    flex: 1;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.review-item-badge {
+    padding: 0.15rem 0.5rem;
+    border-radius: 1rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.review-item-badge.safe {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--success-color);
+}
+
+.review-item-badge.unsafe {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger-color);
+}
+
+.review-item-override {
+    font-size: 0.7rem;
+    color: #fbbf24;
+}
+
+/* Finalize Button */
+.finalize-section {
+    padding: 1rem 1.25rem;
+    border-top: 1px solid var(--glass-border);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.finalize-btn {
+    width: 100%;
+    padding: 1rem 1.5rem;
+    border: none;
+    border-radius: 0.75rem;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    color: white;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%);
+    background-size: 200% 200%;
+    animation: gradientShift 3s ease infinite;
+    box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.finalize-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px rgba(99, 102, 241, 0.4);
+}
+
+.finalize-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    animation: none;
+}
+
+@keyframes gradientShift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+/* === Viewer + Review Side-by-Side Layout === */
+.viewer-review-wrapper {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+    width: 100%;
+}
+
+.viewer-review-wrapper .split-viewer {
+    flex: 1;
+    min-width: 0;
+}
+
+.viewer-review-wrapper .review-summary {
+    width: 300px;
+    flex-shrink: 0;
+    margin-top: 0 !important;
+    /* Keep review panel sticky while scrolling */
+    position: sticky;
+    top: 1.5rem;
+    max-height: calc(100vh - 3rem);
+    overflow-y: auto;
+}
+
+/* Widen the viewer panel itself */
+.viewer-panel {
+    flex: 1.5 !important;
+}
+
+/* === Image Box Interaction Hints === */
+.fs-hint {
+    font-size: 0.7rem;
+    opacity: 0.5;
+    font-weight: 400;
+    letter-spacing: 0.3px;
+    margin-left: 0.4rem;
+    transition: opacity 0.2s;
+}
+
+.image-box {
+    cursor: zoom-in;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.image-box:hover .fs-hint {
+    opacity: 1;
+}
+
+.image-box:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
+}
+
+/* === Fullscreen Mode === */
+.split-viewer.fullscreen-mode {
+    position: fixed !important;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(8, 8, 12, 0.97);
+    backdrop-filter: blur(20px);
+    padding: 4rem 2rem 6rem;
+    display: flex !important;
+    flex-direction: column;
+    border-radius: 0 !important;
+    overflow-y: auto;
+}
+
+.split-viewer.fullscreen-mode .viewer-images {
+    flex: 1;
+    gap: 2rem;
+}
+
+.split-viewer.fullscreen-mode .image-box {
+    cursor: zoom-out;
+    flex: 1;
+}
+
+.split-viewer.fullscreen-mode .image-box img {
+    max-height: 70vh;
+    width: 100%;
+    object-fit: contain;
+}
+
+/* Floating nav in fullscreen */
+.split-viewer.fullscreen-mode .viewer-nav {
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10001;
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 0.75rem 2rem;
+    border-radius: 3rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.split-viewer.fullscreen-mode .result-details {
+    max-width: 900px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+/* Fullscreen close button */
+.fs-close-btn {
+    display: none;
+    position: fixed;
+    top: 1.5rem;
+    right: 1.5rem;
+    z-index: 10002;
+    background: rgba(239, 68, 68, 0.85);
+    color: white;
+    border: none;
+    border-radius: 0.6rem;
+    padding: 0.6rem 1.2rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    backdrop-filter: blur(8px);
+}
+
+.split-viewer.fullscreen-mode .fs-close-btn {
+    display: block;
+}
+
+.fs-close-btn:hover {
+    background: rgba(239, 68, 68, 1);
+    transform: scale(1.05);
+}
+

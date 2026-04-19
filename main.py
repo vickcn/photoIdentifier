@@ -366,6 +366,87 @@ async def organize_batch(req: OrganizeRequest):
     }
 
 
+class FinalizeReviewRequest(BaseModel):
+    decisions: list[dict]  # [{file_name, drive_id, user_decision: "safe"|"unsafe"}, ...]
+    target_folder_id: str
+
+@app.post("/finalize_review/")
+async def finalize_review(req: FinalizeReviewRequest, request: Request):
+    """根據使用者最終裁決，將 Drive 原始檔案搬移到 Safe/Unsafe 子資料夾"""
+    user_key = request.session.get("user_key")
+    if not user_key:
+        raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
+
+    try:
+        creds = load_user_credentials(user_key)
+        from googleapiclient.discovery import build as gbuild
+        drive_service = gbuild("drive", "v3", credentials=creds, cache_discovery=False)
+
+        # 建立或取得 Safe / Unsafe 子資料夾
+        def get_or_create_subfolder(name: str, parent_id: str):
+            q = f"name = '{name}' and mimeType = 'application/vnd.google-apps.folder' and '{parent_id}' in parents and trashed = false"
+            res = drive_service.files().list(q=q, fields="files(id)").execute()
+            items = res.get("files", [])
+            if items:
+                return items[0]["id"]
+            meta = {
+                "name": name,
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent_id]
+            }
+            folder = drive_service.files().create(body=meta, fields="id").execute()
+            return folder.get("id")
+
+        safe_folder_id = await run_in_threadpool(get_or_create_subfolder, "Safe_Results", req.target_folder_id)
+        unsafe_folder_id = await run_in_threadpool(get_or_create_subfolder, "Unsafe_Results", req.target_folder_id)
+
+        moved_count = 0
+        errors = []
+
+        for item in req.decisions:
+            file_id = item.get("drive_id")
+            file_name = item.get("file_name", "unknown")
+            decision = item.get("user_decision", "safe")
+
+            if not file_id:
+                errors.append(f"{file_name}: 缺少 drive_id")
+                continue
+
+            target_parent = safe_folder_id if decision == "safe" else unsafe_folder_id
+
+            try:
+                # 取得檔案目前的 parents
+                file_info = await run_in_threadpool(
+                    lambda: drive_service.files().get(fileId=file_id, fields="parents").execute()
+                )
+                current_parents = ",".join(file_info.get("parents", []))
+
+                # 移動檔案：移除舊 parent，加入新 parent
+                await run_in_threadpool(
+                    lambda fid=file_id, tp=target_parent, cp=current_parents: drive_service.files().update(
+                        fileId=fid,
+                        addParents=tp,
+                        removeParents=cp,
+                        fields="id, parents"
+                    ).execute()
+                )
+                moved_count += 1
+            except Exception as e:
+                errors.append(f"{file_name}: {str(e)}")
+
+        return {
+            "message": f"成功歸檔 {moved_count} 個檔案到 Drive。",
+            "moved": moved_count,
+            "errors": errors
+        }
+
+    except Exception as e:
+        logger.exception("Finalize review error: %s", e)
+        if "找不到使用者憑證" in str(e):
+            raise HTTPException(status_code=401, detail="Google 授權已失效，請重新連結。")
+        raise HTTPException(status_code=500, detail=f"歸檔失敗: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

@@ -55,6 +55,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const pageIndicator = document.getElementById('page-indicator');
     const prevBtn = document.getElementById('prev-btn');
     const nextBtn = document.getElementById('next-btn');
+    const closeFsBtn = document.getElementById('close-fs-btn');
+    const viewerImages = document.querySelector('.viewer-images');
 
     // Stats Elements
     const safetyBadge = document.getElementById('safety-badge');
@@ -67,11 +69,47 @@ document.addEventListener('DOMContentLoaded', () => {
     // Toast
     const toastEl = document.getElementById('toast');
 
+    // === Fullscreen Listeners ===
+    // Clicking image-box is handled via onclick in HTML.
+    // Close button handled via onclick in HTML.
+    // Escape key to exit fullscreen.
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') toggleFullscreen(false);
+    });
+
     // State
     let currentBatchResults = [];
     let currentIndex = 0;
+    let batchMode = null; // 'local' | 'drive'
+
+    // Review Elements
+    const decisionButtons = document.getElementById('decision-buttons');
+    const btnSetSafe = document.getElementById('btn-set-safe');
+    const btnSetUnsafe = document.getElementById('btn-set-unsafe');
+    const reviewSummary = document.getElementById('review-summary');
+    const reviewList = document.getElementById('review-list');
+    const reviewSafeCount = document.getElementById('review-safe-count');
+    const reviewUnsafeCount = document.getElementById('review-unsafe-count');
+    const finalizeBtn = document.getElementById('finalize-btn');
 
     // === Helpers ===
+    function toggleFullscreen(force) {
+        if (force === true) {
+            splitViewer.classList.add('fullscreen-mode');
+            document.body.style.overflow = 'hidden';
+        } else if (force === false) {
+            splitViewer.classList.remove('fullscreen-mode');
+            document.body.style.overflow = '';
+        } else {
+            const isNowFS = splitViewer.classList.toggle('fullscreen-mode');
+            document.body.style.overflow = isNowFS ? 'hidden' : '';
+        }
+    }
+
+    // Expose for HTML onclick attributes
+    window.__toggleFullscreen = () => toggleFullscreen();
+    window.__exitFullscreen   = () => toggleFullscreen(false);
+
     function showToast(msg, type = 'success') {
         toastEl.textContent = msg;
         toastEl.className = `toast show ${type}`;
@@ -234,6 +272,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // === Batch Mode Handling ===
     analyzeBatchBtn.addEventListener('click', async () => {
         const source = document.querySelector('input[name="batch-source"]:checked').value;
+        batchMode = source;
         const currentConcurrency = parseInt(batchConcurrency.value) || 3;
         
         let endpoint = '/batch/';
@@ -269,6 +308,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // Reset and Show Progress UI
         updateProgressUI(0, 0, 0, 0);
         currentBatchResults = [];
+        // Hide review UI from previous run
+        reviewSummary.style.display = 'none';
+        decisionButtons.style.display = 'none';
         showLoading(true);
         document.getElementById('loading-text').textContent = '正在啟動批量辨識引擎...';
 
@@ -312,6 +354,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (data.status === 'ok') {
                             successCount++;
                             totalImages = data.total;
+                            // 初始化 user_decision 為 AI 判定值
+                            const aiSafe = data.result ? data.result.is_safe_for_public : data.is_safe_for_public;
+                            data.user_decision = aiSafe ? 'safe' : 'unsafe';
+                            data.ai_decision = data.user_decision; // 保存原始 AI 判定以比較
                             currentBatchResults.push(data); // 立即加入結果清單
                             
                             // 若是第一張完成的圖，立刻打開檢視器讓使用者看結果
@@ -347,6 +393,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 organizeArea.classList.add('hidden');
             }
 
+            // 顯示人工裁決 UI
+            if (currentBatchResults.length > 0) {
+                decisionButtons.style.display = 'flex';
+                reviewSummary.style.display = 'block';
+                renderReviewSummary();
+                renderDecisionButtons();
+            }
+
         } catch (e) {
             showToast(e.message, 'error');
         } finally {
@@ -370,6 +424,9 @@ document.addEventListener('DOMContentLoaded', () => {
         splitViewer.classList.remove('hidden');
 
         pageIndicator.textContent = `${currentIndex + 1} / ${currentBatchResults.length}`;
+
+        // 更新裁決按鈕狀態
+        renderDecisionButtons();
         
         // 判斷是否為雲端模式或本地模式的串流數據
         const isStream = !!currentData.drawn_image_b64;
@@ -416,6 +473,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentBatchResults.length > 0) {
             currentIndex = (currentIndex - 1 + currentBatchResults.length) % currentBatchResults.length;
             renderBatchViewer();
+            highlightCurrentInSummary();
         }
     });
 
@@ -423,8 +481,195 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentBatchResults.length > 0) {
             currentIndex = (currentIndex + 1) % currentBatchResults.length;
             renderBatchViewer();
+            highlightCurrentInSummary();
         }
     });
+
+    // === Human-in-the-Loop Review Functions ===
+
+    function renderDecisionButtons() {
+        if (currentBatchResults.length === 0) return;
+        const currentData = currentBatchResults[currentIndex];
+        if (!currentData) return;
+
+        // Reset button states
+        btnSetSafe.classList.remove('active-safe');
+        btnSetUnsafe.classList.remove('active-unsafe');
+
+        if (currentData.user_decision === 'safe') {
+            btnSetSafe.classList.add('active-safe');
+        } else if (currentData.user_decision === 'unsafe') {
+            btnSetUnsafe.classList.add('active-unsafe');
+        }
+    }
+
+    window.__setDecision = function(decision) {
+        if (currentBatchResults.length === 0) return;
+        const currentData = currentBatchResults[currentIndex];
+        if (!currentData) return;
+
+        currentData.user_decision = decision;
+        renderDecisionButtons();
+        renderReviewSummary();
+
+        // 更新 safety badge 顯示
+        if (decision === 'safe') {
+            safetyBadge.textContent = '可公開 (Safe)';
+            safetyBadge.className = 'status-badge status-safe';
+        } else {
+            safetyBadge.textContent = '不可公開 (Unsafe)';
+            safetyBadge.className = 'status-badge status-unsafe';
+        }
+
+        // 顯示覆寫標記
+        const overrideEl = document.getElementById('override-indicator');
+        if (currentData.user_decision !== currentData.ai_decision) {
+            if (!overrideEl) {
+                const badge = document.createElement('span');
+                badge.id = 'override-indicator';
+                badge.className = 'override-badge';
+                badge.textContent = '🔄 已覆寫';
+                safetyBadge.parentElement.appendChild(badge);
+            }
+        } else {
+            if (overrideEl) overrideEl.remove();
+        }
+
+        showToast(`已將此圖設為 ${decision === 'safe' ? '✅ Safe' : '❌ Unsafe'}`);
+    };
+
+    function renderReviewSummary() {
+        if (currentBatchResults.length === 0) return;
+
+        let safeC = 0, unsafeC = 0;
+        let html = '';
+
+        currentBatchResults.forEach((item, idx) => {
+            const isSafe = item.user_decision === 'safe';
+            const isOverride = item.user_decision !== item.ai_decision;
+            if (isSafe) safeC++; else unsafeC++;
+
+            const fileName = item.file_name || item.file || `圖片 ${idx + 1}`;
+            const currentClass = idx === currentIndex ? ' current' : '';
+
+            html += `<div class="review-item${currentClass}" data-idx="${idx}">
+                <span class="review-item-index">#${idx + 1}</span>
+                <span class="review-item-name" title="${fileName}">${fileName}</span>
+                ${isOverride ? '<span class="review-item-override">🔄</span>' : ''}
+                <span class="review-item-badge ${isSafe ? 'safe' : 'unsafe'}">${isSafe ? 'Safe' : 'Unsafe'}</span>
+            </div>`;
+        });
+
+        reviewList.innerHTML = html;
+        reviewSafeCount.textContent = `Safe: ${safeC}`;
+        reviewUnsafeCount.textContent = `Unsafe: ${unsafeC}`;
+
+        // 點擊跳轉
+        reviewList.querySelectorAll('.review-item').forEach(el => {
+            el.addEventListener('click', () => {
+                const idx = parseInt(el.dataset.idx);
+                currentIndex = idx;
+                renderBatchViewer();
+                highlightCurrentInSummary();
+            });
+        });
+    }
+
+    function highlightCurrentInSummary() {
+        reviewList.querySelectorAll('.review-item').forEach((el, idx) => {
+            el.classList.toggle('current', idx === currentIndex);
+        });
+        // Scroll current item into view
+        const currentEl = reviewList.querySelector('.review-item.current');
+        if (currentEl) {
+            currentEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }
+
+    window.__finalizeReview = async function() {
+        if (currentBatchResults.length === 0) {
+            showToast('沒有可歸檔的結果', 'error');
+            return;
+        }
+
+        // 檢查是本地模式還是雲端模式
+        if (batchMode === 'local') {
+            // 本地模式：使用既有的 organize_batch API，但帶上 user_decision
+            const safe = safeFolder.value.trim();
+            const unsafe = unsafeFolder.value.trim();
+            if (!safe || !unsafe) {
+                showToast('請填寫安全與不安全的分流資料夾路徑', 'error');
+                return;
+            }
+
+            // 依 user_decision 覆寫 is_safe_for_public
+            const adjusted = currentBatchResults.map(r => ({
+                ...r,
+                is_safe_for_public: r.user_decision === 'safe'
+            }));
+
+            finalizeBtn.disabled = true;
+            finalizeBtn.textContent = '⏳ 歸檔中...';
+
+            try {
+                const res = await fetch('/organize_batch/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        results: adjusted,
+                        safe_folder: safe,
+                        unsafe_folder: unsafe
+                    })
+                });
+                if (!res.ok) throw new Error('歸檔失敗');
+                const data = await res.json();
+                showToast(data.message);
+            } catch (e) {
+                showToast(e.message, 'error');
+            } finally {
+                finalizeBtn.disabled = false;
+                finalizeBtn.textContent = '🚀 確認並批次歸檔';
+            }
+        } else {
+            // 雲端模式：使用新的 finalize_review API
+            const targetId = driveTargetId.value.trim();
+            if (!targetId) {
+                showToast('請填寫 Drive 目標資料夾 ID 才能歸檔', 'error');
+                return;
+            }
+
+            const decisions = currentBatchResults.map(r => ({
+                file_name: r.file_name || r.file,
+                drive_id: r.drive_id || r.result?.drive_id,
+                user_decision: r.user_decision
+            }));
+
+            finalizeBtn.disabled = true;
+            finalizeBtn.textContent = '⏳ 歸檔中...';
+
+            try {
+                const res = await fetch('/finalize_review/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        decisions: decisions,
+                        target_folder_id: targetId
+                    })
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || '歸檔失敗');
+                }
+                const data = await res.json();
+                showToast(`✅ ${data.message}`);
+            } catch (e) {
+                showToast(e.message, 'error');
+            } finally {
+                finalizeBtn.disabled = false;
+                finalizeBtn.textContent = '🚀 確認並批次歸檔';
+            }
+        }
+    };
 
     // === Organize Action ===
     organizeBtn.addEventListener('click', async () => {

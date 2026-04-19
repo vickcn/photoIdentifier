@@ -307,30 +307,7 @@ async def batch_process_drive_stream(folder_id: str, credentials, target_folder_
                     timeout=float(REQUEST_TIMEOUT)
                 )
 
-                # 上傳歸檔
-                output_link = None
-                target_id = safe_target_id if analysis.is_safe_for_public else unsafe_target_id
-
-                if target_id:
-                    def upload():
-                        from google.oauth2.credentials import Credentials
-                        local_creds = Credentials(token=credentials.token)
-                        archive_service = build("drive", "v3", credentials=local_creds, cache_discovery=False)
-                        file_metadata = {"name": f"annotated_{file_name}", "parents": [target_id]}
-                        media = MediaIoBaseUpload(io.BytesIO(drawn_bytes), mimetype="image/jpeg", resumable=True)
-                        return archive_service.files().create(body=file_metadata, media_body=media, fields="id, webViewLink").execute()
-
-                    try:
-                        # 上傳也加上 timeout，防止 Drive API 掛住
-                        created_file = await asyncio.wait_for(
-                            asyncio.to_thread(upload),
-                            timeout=float(REQUEST_TIMEOUT)
-                        )
-                        output_link = created_file.get("webViewLink")
-                    except asyncio.TimeoutError:
-                        print(f"[TIMEOUT] Upload timed out for {file_name}, skipping archive.")
-                    except Exception as upload_err:
-                        print(f"[ERROR] Upload failed for {file_name}: {upload_err}")
+                # 注意：不再自動上傳歸檔，歸檔交由 /finalize_review/ 處理
 
                 # 轉 B64 供前端預覽 (縮圖一下避免 SSE 封包過大)
                 from PIL import Image
@@ -357,10 +334,10 @@ async def batch_process_drive_stream(folder_id: str, credentials, target_folder_
                     "index": index + 1,
                     "total": total,
                     "file_name": file_name,
+                    "drive_id": file_id,
                     "result": analysis.model_dump(),
                     "drawn_image_b64": preview_b64,
                     "original_image_b64": orig_b64,
-                    "output_link": output_link
                 }
             except Exception as e:
                 print(f"[ERROR] Stream failed for {file_name}: {repr(e)}")
