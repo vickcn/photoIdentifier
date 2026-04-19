@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,12 +8,15 @@
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Inter:wght@400;600&display=swap"
+        rel="stylesheet">
     <link rel="stylesheet" href="/static/app.css">
     <!-- Google API & Identity Services for Picker -->
     <script src="https://apis.google.com/js/api.js" async defer></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
+
 <body>
     <div class="app-container">
         <!-- Header -->
@@ -114,8 +118,8 @@
                 <!-- Loading Overlay -->
                 <div id="loading-overlay" class="loading-overlay hidden">
                     <div class="spinner"></div>
-                    <p id="loading-text">正在用 AI 魔法深度辨識中...</p>
-                    
+                    <p id="loading-text">正在用 AI 深度辨識中...</p>
+
                     <!-- 新增進度條區域 -->
                     <div class="progress-container">
                         <div class="progress-info">
@@ -157,7 +161,7 @@
                         <span class="page-indicator" id="page-indicator">1 / 1</span>
                         <button class="nav-btn" id="next-btn">▶</button>
                     </div>
-                    
+
                     <div class="viewer-images">
                         <div class="image-box">
                             <div class="image-label">原圖</div>
@@ -176,7 +180,7 @@
                             <h3 id="file-name-display">--</h3>
                         </div>
                         <p class="reason-text" id="moderation-reason">等待分析...</p>
-                        
+
                         <div class="stats-grid">
                             <div class="stat-card">
                                 <span class="stat-label">發現人臉</span>
@@ -196,10 +200,11 @@
             </section>
         </main>
     </div>
-    
+
     <!-- Notification Toast -->
     <div id="toast" class="toast hidden"></div>
 
     <script src="/static/app.js"></script>
 </body>
+
 </html>
