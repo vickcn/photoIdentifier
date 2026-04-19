@@ -77,6 +77,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Escape') toggleFullscreen(false);
     });
 
+    // Sync CSS class if user exits via ESC (native browser trigger)
+    document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement) {
+            splitViewer.classList.remove('fullscreen-mode');
+            document.body.style.overflow = '';
+        }
+    });
+    document.addEventListener('webkitfullscreenchange', () => {
+        if (!document.webkitFullscreenElement) {
+            splitViewer.classList.remove('fullscreen-mode');
+            document.body.style.overflow = '';
+        }
+    });
+
     // State
     let currentBatchResults = [];
     let currentIndex = 0;
@@ -94,15 +108,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // === Helpers ===
     function toggleFullscreen(force) {
-        if (force === true) {
+        const isCurrentlyFS = splitViewer.classList.contains('fullscreen-mode');
+        const shouldBeFS = (force !== undefined) ? force : !isCurrentlyFS;
+
+        if (shouldBeFS) {
             splitViewer.classList.add('fullscreen-mode');
             document.body.style.overflow = 'hidden';
-        } else if (force === false) {
+            
+            // Try to enter native browser fullscreen if possible
+            try {
+                if (splitViewer.requestFullscreen) {
+                    splitViewer.requestFullscreen();
+                } else if (splitViewer.webkitRequestFullscreen) {
+                    splitViewer.webkitRequestFullscreen();
+                }
+            } catch (err) {
+                console.warn("Native fullscreen failed:", err);
+            }
+        } else {
             splitViewer.classList.remove('fullscreen-mode');
             document.body.style.overflow = '';
-        } else {
-            const isNowFS = splitViewer.classList.toggle('fullscreen-mode');
-            document.body.style.overflow = isNowFS ? 'hidden' : '';
+            
+            // Exit native browser fullscreen if we are in it
+            try {
+                if (document.fullscreenElement || document.webkitFullscreenElement) {
+                    if (document.exitFullscreen) {
+                        document.exitFullscreen();
+                    } else if (document.webkitExitFullscreen) {
+                        document.webkitExitFullscreen();
+                    }
+                }
+            } catch (err) {
+                console.warn("Native exit fullscreen failed:", err);
+            }
         }
     }
 
