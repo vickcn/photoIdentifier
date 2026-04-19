@@ -1,4 +1,5 @@
 import os
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 import secrets
 from typing import Optional, Protocol, Sequence
 from pathlib import Path

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Response, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.concurrency import run_in_threadpool
@@ -68,16 +68,28 @@ templates = Jinja2Templates(directory="template")
 app.add_middleware(
     SessionMiddleware, 
     secret_key=os.environ.get("SESSION_SECRET", "photo-identifier-local-secret"),
-    max_age=3600 * 24 * 7 # 7 days
+    max_age=3600 * 24 * 7,
+    same_site="lax",
+    https_only=False
 )
 
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
 from src.google_auth import get_auth_url, exchange_code_for_token, load_user_credentials
-from photoIdentifier import process_and_visualize_photo, batch_process_folder, batch_process_drive
+from photoIdentifier import process_and_visualize_photo, batch_process_folder, batch_process_drive, batch_process_drive_stream
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     return templates.TemplateResponse(request=request, name="index.html", context={})
+
+@app.get("/api/config")
+async def get_frontend_config():
+    """提供前端啟動 Google Picker 所需的公開 ID (不含 Secret)"""
+    client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+    return {
+        "google_client_id": client_id,
+        "google_api_key": os.environ.get("GOOGLE_API_KEY", ""),
+        "google_app_id": client_id.split("-")[0] if "-" in client_id else ""
+    }
 
 @app.get("/local_file/")
 async def get_local_file(path: str):
@@ -203,7 +215,7 @@ class DriveBatchRequest(BaseModel):
 
 @app.post("/batch_drive/")
 async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
-    """雲端硬碟批量處理入口"""
+    """雲端硬碟批量處理入口 (舊 - 一次性回傳)"""
     user_key = request.session.get("user_key")
     if not user_key:
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
@@ -231,6 +243,38 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
         if "找不到使用者憑證" in str(e):
              raise HTTPException(status_code=401, detail="Google 授權已失效，請重新連結。")
         raise HTTPException(status_code=500, detail=f"雲端批量處理失敗: {str(e)}")
+
+@app.post("/batch_drive_stream/")
+async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request):
+    """雲端硬碟批量處理入口 (新 - 串流即時回傳進度)"""
+    user_key = request.session.get("user_key")
+    if not user_key:
+        raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
+
+    try:
+        creds = load_user_credentials(user_key)
+        
+        async def event_generator():
+            try:
+                # 這裡調用剛才在 photoIdentifier.py 寫好的產生器
+                async for chunk in batch_process_drive_stream(
+                    folder_id=req.folder_id,
+                    credentials=creds,
+                    target_folder_id=req.target_folder_id,
+                    concurrency=req.concurrency
+                ):
+                    # 每一筆結果都轉成 JSON 並加上換行符號推播出去
+                    yield json.dumps(chunk, ensure_ascii=False) + "\n"
+            except Exception as inner_e:
+                yield json.dumps({"status": "error", "error": f"串流中斷: {str(inner_e)}"}, ensure_ascii=False) + "\n"
+
+        return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+    except Exception as e:
+        logger.exception("Drive batch stream error: %s", e)
+        if "找不到使用者憑證" in str(e):
+             raise HTTPException(status_code=401, detail="Google 授權已失效，請重新連結。")
+        raise HTTPException(status_code=500, detail=f"啟動串流處理失敗: {str(e)}")
 
 
 @app.get("/auth/google")

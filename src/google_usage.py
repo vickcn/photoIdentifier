@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import httpx
 import logging
 from pathlib import Path
@@ -46,24 +47,32 @@ async def call_gemini_vision_api(prompt: str, b64_image: str, mime_type: str = "
         }
     }
 
+    import asyncio
     timeout = httpx.Timeout(REQUEST_TIMEOUT)
     
-    for attempt in range(2):  # 最多重試 1 次
+    max_retries = 4
+    for attempt in range(max_retries):
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(VERTEX_URL, json=payload)
+                if resp.status_code == 429:
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt * 2)  # Exponential backoff: 2s, 4s, 8s...
+                        continue
+                    else:
+                        raise Exception("HTTP 429: 配額不足或速率限制")
                 if resp.status_code != 200:
                     raise Exception(f"HTTP {resp.status_code}")
                 resp_data = resp.json()
                 break
         except httpx.TimeoutException:
-            if attempt == 0:
+            if attempt < max_retries - 1:
                 continue
             raise
 
     try:
         return resp_data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError):
+    except (KeyError, IndexError, UnboundLocalError):
         raise ValueError("模型回傳格式非預期")
 
 
@@ -142,8 +151,15 @@ async def analyze_brand_strap_image(b64_image: str, content_type: str) -> PhotoA
         raise HTTPException(status_code=502, detail="模型未回傳內容")
         
     try:
-        result_json = json.loads(response_text)
+        # 強制清理 Markdown 或者雜訊 (抓出第一個 { 到最後一個 })
+        cleaned_text = response_text.strip()
+        match = re.search(r'\{.*\}', cleaned_text, re.DOTALL)
+        if match:
+            cleaned_text = match.group(0)
+            
+        result_json = json.loads(cleaned_text)
     except json.JSONDecodeError as e:
+        logger.error("JSON 解析失敗，原始回傳內容:\n%s", response_text)
         raise HTTPException(status_code=502, detail="模型回傳非 JSON 格式") from e
         
     if not isinstance(result_json, dict):

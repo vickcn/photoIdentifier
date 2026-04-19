@@ -16,6 +16,19 @@ def draw_bboxes_on_image(
     draw = ImageDraw.Draw(image)
     width, height = image.size
 
+    # 動態計算字體大小 (約圖片高度的 3%)
+    font_size = max(20, int(height * 0.03))
+    try:
+        # 優先嘗試載入 TrueType 字體以支援縮放 (macOS 路徑)
+        from PIL import ImageFont
+        font = ImageFont.truetype("/Library/Fonts/Arial.ttf", font_size)
+    except:
+        try:
+            # Linux (Vercel/Docker) 常用路徑
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+        except:
+            font = ImageFont.load_default()
+
     def draw_box(bbox, label, outline_color):
         if not bbox or len(bbox) != 4:
             return
@@ -24,8 +37,14 @@ def draw_bboxes_on_image(
         xmin = int(xmin_norm / 1000.0 * width)
         ymax = int(ymax_norm / 1000.0 * height)
         xmax = int(xmax_norm / 1000.0 * width)
-        draw.rectangle([xmin, ymin, xmax, ymax], outline=outline_color, width=5)
-        draw.text((xmin, max(0, ymin - 15)), label, fill=outline_color)
+        
+        # 畫框
+        draw.rectangle([xmin, ymin, xmax, ymax], outline=outline_color, width=max(3, int(width/300)))
+        
+        # 畫文字背景並寫字
+        text_bbox = draw.textbbox((xmin, ymin), label, font=font)
+        draw.rectangle([text_bbox[0], text_bbox[1]-5, text_bbox[2]+10, text_bbox[3]+5], fill=outline_color)
+        draw.text((xmin, ymin - (text_bbox[3]-text_bbox[1]) - 5), label, fill="white", font=font)
 
     # 1. 繪製所有人臉 (紅框)
     for i, bbox in enumerate(face_bboxes):

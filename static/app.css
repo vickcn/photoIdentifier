@@ -154,8 +154,36 @@ body {
 }
 
 .input-group label {
-    font-size: 0.9rem;
-    color: var(--text-secondary);
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+
+.input-with-button {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.input-with-button input {
+    flex: 1;
+}
+
+.inline-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 0 0.75rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    white-space: nowrap;
+    transition: all 0.3s ease;
+}
+
+.inline-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: var(--primary-light);
 }
 
 .input-group input {
@@ -481,3 +509,73 @@ button:disabled {
 .organize-area.hidden {
     display: none !important;
 }
+
+/* === Progress Bar Styles === */
+.progress-container {
+    width: 100%;
+    margin: 20px 0;
+    text-align: center;
+    max-width: 400px;
+}
+
+.progress-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #fff;
+}
+
+.progress-track {
+    width: 100%;
+    height: 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 5px;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #6366f1 0%, #a855f7 100%);
+    box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
+    transition: width 0.3s ease;
+}
+
+.batch-stats-summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 15px;
+    margin-top: 20px;
+    width: 100%;
+    max-width: 500px;
+}
+
+.stat-item {
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    text-align: center;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.stat-item .label {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.stat-item .value {
+    font-size: 1.4rem;
+    font-weight: 700;
+}
+
+.stat-item.success .value { color: var(--success-color); }
+.stat-item.failed .value { color: var(--danger-color); }
+.stat-item.pending .value { color: #ffd740; }

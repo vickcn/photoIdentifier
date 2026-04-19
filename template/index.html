@@ -9,6 +9,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/app.css">
+    <!-- Google API & Identity Services for Picker -->
+    <script src="https://apis.google.com/js/api.js" async defer></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
     <div class="app-container">
@@ -70,12 +73,18 @@
                             <p class="status-msg">請先連結帳號以讀取雲端檔案</p>
                         </div>
                         <div class="input-group">
-                            <label for="drive-folder-id">Google Drive 資料夾 ID</label>
-                            <input type="text" id="drive-folder-id" placeholder="請貼上雲端資料夾網址中的 ID">
+                            <label for="drive-folder-id">Google Drive 來源資料夾</label>
+                            <div class="input-with-button">
+                                <input type="text" id="drive-folder-id" placeholder="請貼上 ID 或點擊右側瀏覽">
+                                <button id="btn-browse-source" class="inline-btn" title="從雲端硬碟挑選">📂 瀏覽</button>
+                            </div>
                         </div>
                         <div class="input-group">
-                            <label for="drive-target-id">結果存放到雲端資料夾 ID (選填)</label>
-                            <input type="text" id="drive-target-id" placeholder="留空則僅顯示於網頁">
+                            <label for="drive-target-id">結果存放到雲端資料夾 (選填)</label>
+                            <div class="input-with-button">
+                                <input type="text" id="drive-target-id" placeholder="留空則僅顯示於網頁">
+                                <button id="btn-browse-target" class="inline-btn" title="從雲端硬碟挑選">📂 瀏覽</button>
+                            </div>
                         </div>
                     </div>
                     <div class="input-group row-group">
@@ -106,6 +115,33 @@
                 <div id="loading-overlay" class="loading-overlay hidden">
                     <div class="spinner"></div>
                     <p id="loading-text">正在用 AI 魔法深度辨識中...</p>
+                    
+                    <!-- 新增進度條區域 -->
+                    <div class="progress-container">
+                        <div class="progress-info">
+                            <span id="progress-percent">0%</span>
+                            <span id="progress-count">0 / 0</span>
+                        </div>
+                        <div class="progress-track">
+                            <div id="progress-fill" class="progress-fill"></div>
+                        </div>
+                    </div>
+
+                    <!-- 即時統計摘要 -->
+                    <div class="batch-stats-summary">
+                        <div class="stat-item success">
+                            <span class="label">已成功</span>
+                            <strong id="stream-success-count" class="value">0</strong>
+                        </div>
+                        <div class="stat-item failed">
+                            <span class="label">失敗</span>
+                            <strong id="stream-failed-count" class="value">0</strong>
+                        </div>
+                        <div class="stat-item pending">
+                            <span class="label">剩餘</span>
+                            <strong id="stream-pending-count" class="value">0</strong>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Empty State -->

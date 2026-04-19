@@ -212,6 +212,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 
+    // === DOM Progress Elements ===
+    const progressFill = document.getElementById('progress-fill');
+    const progressPercent = document.getElementById('progress-percent');
+    const progressCount = document.getElementById('progress-count');
+    const streamSuccessEl = document.getElementById('stream-success-count');
+    const streamFailedEl = document.getElementById('stream-failed-count');
+    const streamPendingEl = document.getElementById('stream-pending-count');
+
+    function updateProgressUI(current, total, success, failed) {
+        if (total === 0) return;
+        const percent = Math.round((current / total) * 100);
+        progressFill.style.width = percent + '%';
+        progressPercent.textContent = percent + '%';
+        progressCount.textContent = `${current} / ${total}`;
+        streamSuccessEl.textContent = success;
+        streamFailedEl.textContent = failed;
+        streamPendingEl.textContent = total - current;
+    }
+
     // === Batch Mode Handling ===
     analyzeBatchBtn.addEventListener('click', async () => {
         const source = document.querySelector('input[name="batch-source"]:checked').value;
@@ -239,7 +258,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast('請填寫 Google Drive 資料夾 ID', 'error');
                 return;
             }
-            endpoint = '/batch_drive/';
+            endpoint = '/batch_drive_stream/'; // 切換到串流 API
             body = {
                 folder_id: fId,
                 target_folder_id: tId || null,
@@ -247,40 +266,86 @@ document.addEventListener('DOMContentLoaded', () => {
             };
         }
 
+        // Reset and Show Progress UI
+        updateProgressUI(0, 0, 0, 0);
+        currentBatchResults = [];
         showLoading(true);
-        document.getElementById('loading-text').textContent = '正在批量辨識中，請稍候...';
+        document.getElementById('loading-text').textContent = '正在啟動批量辨識引擎...';
 
         try {
-            const res = await fetch(endpoint, {
+            const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             });
 
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.detail || '批量辨識失敗');
-            }
-            
-            const data = await res.json();
-            currentBatchResults = data.results.filter(r => r.status === 'ok'); 
-            
-            if (currentBatchResults.length === 0) {
-                showToast('該資料夾內沒有成功辨識的圖片', 'error');
-                return;
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.detail || '批量辨識啟動失敗');
             }
 
-            showToast(`批量完成！成功：${data.success}，失敗：${data.failed}`);
+            // 處理串流結果
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let successCount = 0;
+            let failedCount = 0;
+            let totalImages = 0;
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                // 將二進位數據轉為文字
+                buffer += decoder.decode(value, { stream: true });
+                
+                // NDJSON 處理：根據換行符號切割每一行完整的 JSON
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // 未完成的行留到下次處理
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const data = JSON.parse(line);
+                        
+                        // 進度與結果處理
+                        if (data.status === 'ok') {
+                            successCount++;
+                            totalImages = data.total;
+                            currentBatchResults.push(data); // 立即加入結果清單
+                            
+                            // 若是第一張完成的圖，立刻打開檢視器讓使用者看結果
+                            if (currentBatchResults.length === 1) {
+                                emptyState.classList.add('hidden');
+                                splitViewer.classList.remove('hidden');
+                                currentIndex = 0;
+                                renderBatchViewer();
+                            } else {
+                                // 更新分頁指示器
+                                updatePageIndicator();
+                            }
+                        } else if (data.status === 'error') {
+                            failedCount++;
+                            totalImages = data.total || totalImages;
+                            showToast(`${data.file_name} 辨識出錯`, 'error');
+                        }
+
+                        // 更新 UI 進度
+                        updateProgressUI(successCount + failedCount, totalImages, successCount, failedCount);
+                        
+                    } catch (err) {
+                        console.error('JSON parsing data error:', line, err);
+                    }
+                }
+            }
+
+            showToast(`批量處理完成！成功：${successCount}，失敗：${failedCount}`);
             
-            // 雲端模式下，分類整理按鈕目前無效（已在雲端處理），可以隱藏
             if (source === 'local') {
                 organizeArea.classList.remove('hidden');
             } else {
                 organizeArea.classList.add('hidden');
             }
-            
-            currentIndex = 0;
-            renderBatchViewer();
 
         } catch (e) {
             showToast(e.message, 'error');
@@ -289,6 +354,12 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('loading-text').textContent = '正在用 AI 魔法深度辨識中...';
         }
     });
+
+    function updatePageIndicator() {
+        if (currentBatchResults.length > 0) {
+            pageIndicator.textContent = `${currentIndex + 1} / ${currentBatchResults.length}`;
+        }
+    }
 
     function renderBatchViewer() {
         if (currentBatchResults.length === 0) return;
@@ -300,27 +371,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
         pageIndicator.textContent = `${currentIndex + 1} / ${currentBatchResults.length}`;
         
-        if (currentData.output_b64) {
-            // Google Drive Mode: use base64 (since we don't have a local path)
-            // Note: In real app, we might want to fetch original from drive too, 
-            // for now, let's assume original is also provided or we use a placeholder
-            originalImg.src = 'https://placehold.co/600x400?text=Origin+ID:+' + currentData.drive_id;
-            annotatedImg.src = 'data:image/jpeg;base64,' + currentData.output_b64;
+        // 判斷是否為雲端模式或本地模式的串流數據
+        const isStream = !!currentData.drawn_image_b64;
+
+        if (isStream) {
+            // Streaming / Drive Mode
+            if (currentData.original_image_b64) {
+                originalImg.src = 'data:image/jpeg;base64,' + currentData.original_image_b64;
+            } else {
+                originalImg.src = 'https://placehold.co/600x400?text=Processing+Drive+File';
+            }
+            annotatedImg.src = 'data:image/jpeg;base64,' + currentData.drawn_image_b64;
+            
+            // 輔助 UI: 更新統計數據
+            const analysis = currentData.result; 
+            updateStatsUI(currentData.file_name, analysis);
         } else {
-            // Local Mode
+            // Local File Mode (Non-Stream)
             originalImg.src = `/local_file/?path=${encodeURIComponent(currentData.original_path)}`;
             annotatedImg.src = `/local_file/?path=${encodeURIComponent(currentData.output)}`;
+            
+            const fakeAnalysis = {
+                is_safe_for_public: currentData.is_safe_for_public,
+                moderation_reason: currentData.moderation_reason,
+                face_bboxes: new Array(currentData.face_count),
+                strap_bboxes: currentData.has_brand_strap ? [1] : [],
+                strap_color: currentData.strap_color
+            };
+            updateStatsUI(currentData.file, fakeAnalysis);
         }
-
-        // Fake analysis object for UI function
-        const fakeAnalysis = {
-            is_safe_for_public: currentData.is_safe_for_public,
-            moderation_reason: currentData.moderation_reason,
-            face_bboxes: new Array(currentData.face_count),
-            strap_bboxes: currentData.has_brand_strap ? [1] : [],
-            strap_color: currentData.strap_color
-        };
-        updateStatsUI(currentData.file, fakeAnalysis);
     }
 
     // Check for auth success in URL
@@ -389,4 +468,108 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // === Google Picker Integration ===
+    let pickerApiLoaded = false;
+    let oauthToken = null;
+    let config = null;
+
+    // Fetch config on load
+    async function fetchConfig() {
+        try {
+            const res = await fetch('/api/config');
+            config = await res.json();
+            console.log("Config loaded:", !!config.google_client_id);
+        } catch (e) {
+            console.error("Failed to fetch config", e);
+        }
+    }
+    fetchConfig();
+
+    // Callback from GAPI
+    window.onPickerApiLoad = () => {
+        pickerApiLoaded = true;
+    };
+
+    const btnBrowseSource = document.getElementById('btn-browse-source');
+    const btnBrowseTarget = document.getElementById('btn-browse-target');
+
+    [btnBrowseSource, btnBrowseTarget].forEach(btn => {
+        btn.addEventListener('click', () => {
+            const targetInputId = btn.id === 'btn-browse-source' ? 'drive-folder-id' : 'drive-target-id';
+            handleAuthClick(targetInputId);
+        });
+    });
+
+    function handleAuthClick(targetId) {
+        if (!config || !config.google_client_id) {
+            showToast('伺服器未設定 Google Client ID', 'error');
+            return;
+        }
+
+        const tokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: config.google_client_id,
+            scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file',
+            callback: async (response) => {
+                if (response.error !== undefined) {
+                    throw (response);
+                }
+                oauthToken = response.access_token;
+                createPicker(targetId);
+            },
+        });
+
+        if (oauthToken === null) {
+            tokenClient.requestAccessToken({ prompt: 'consent' });
+        } else {
+            tokenClient.requestAccessToken({ prompt: '' });
+        }
+    }
+
+    function createPicker(targetId) {
+        if (pickerApiLoaded && oauthToken) {
+            const view = new google.picker.DocsView(google.picker.ViewId.DOCS);
+            view.setIncludeFolders(true);
+            view.setSelectFolderEnabled(true);
+
+            const picker = new google.picker.PickerBuilder()
+                .enableFeature(google.picker.Feature.NAV_HIDDEN)
+                .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+                .setAppId(config.google_app_id)
+                .setOAuthToken(oauthToken)
+                .addView(view)
+                .setDeveloperKey(config.google_api_key)
+                .setCallback((data) => pickerCallback(data, targetId))
+                .build();
+            picker.setVisible(true);
+        }
+    }
+
+    function pickerCallback(data, targetId) {
+        if (data.action === google.picker.Action.PICKED) {
+            const folder = data.docs[0];
+            const input = document.getElementById(targetId);
+            if (input) {
+                input.value = folder.id;
+                showToast(`已選取資料夾：${folder.name}`);
+            }
+        }
+    }
+
+    // Initialize GAPI
+    function loadPicker() {
+        gapi.load('picker', { 'callback': () => { pickerApiLoaded = true; } });
+    }
+    
+    // Check if script is already ready
+    if (window.gapi) {
+        loadPicker();
+    } else {
+        // Wait for script to load (added in index.html)
+        const checkGapi = setInterval(() => {
+            if (window.gapi) {
+                loadPicker();
+                clearInterval(checkGapi);
+            }
+        }, 500);
+    }
 });

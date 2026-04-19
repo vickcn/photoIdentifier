@@ -5,7 +5,8 @@
       "src": "main.py",
       "use": "@vercel/python",
       "config": {
-        "maxDuration": 600
+        "maxDuration": 600,
+        "runtime": "python3.12"
       }
     }
   ],
