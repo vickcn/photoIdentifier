@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智慧圖片審核系統</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="glass-header">
+            <h1>智慧圖片審核系統 <span>名牌特化版</span></h1>
+            <p>全自動人臉與名牌帶偵測，智能安全過濾</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Controls Panel -->
+            <section class="controls-panel glass-panel">
+                <div class="tabs">
+                    <button class="tab-btn active" data-target="single">單圖測試</button>
+                    <button class="tab-btn" data-target="batch">批量處理</button>
+                </div>
+
+                <!-- Single Mode -->
+                <div id="single-mode" class="mode-content active">
+                    <div class="upload-area" id="drop-zone">
+                        <input type="file" id="file-input" accept="image/jpeg, image/png, image/webp" hidden>
+                        <div class="upload-icon">📸</div>
+                        <p>點擊或拖曳圖片至此處上傳</p>
+                        <span class="sub-text">支援 JPG, PNG, WEBP (最大 25MB)</span>
+                    </div>
+                    <button id="analyze-single-btn" class="primary-btn" disabled>開始辨識單圖</button>
+                </div>
+
+                <!-- Batch Mode -->
+                <div id="batch-mode" class="mode-content">
+                    <div class="source-selector">
+                        <label class="radio-tab">
+                            <input type="radio" name="batch-source" value="local" checked>
+                            <span>💻 本機</span>
+                        </label>
+                        <label class="radio-tab">
+                            <input type="radio" name="batch-source" value="drive">
+                            <span>☁️ Google Drive</span>
+                        </label>
+                    </div>
+
+                    <!-- Local Batch Inputs -->
+                    <div id="local-batch-inputs">
+                        <div class="input-group">
+                            <label for="batch-input-folder">來源資料夾 (絕對路徑)</label>
+                            <input type="text" id="batch-input-folder" placeholder="例如：/Users/.../data">
+                        </div>
+                        <div class="input-group">
+                            <label for="batch-output-folder">標註圖存放路徑 (絕對路徑)</label>
+                            <input type="text" id="batch-output-folder" placeholder="例如：/Users/.../tmp/batch_out">
+                        </div>
+                    </div>
+
+                    <!-- Drive Batch Inputs (Hidden by default) -->
+                    <div id="drive-batch-inputs" class="hidden">
+                        <div class="drive-auth-status">
+                            <button id="google-login-btn" class="secondary-btn">🔑 連結 Google Drive 帳號</button>
+                            <p class="status-msg">請先連結帳號以讀取雲端檔案</p>
+                        </div>
+                        <div class="input-group">
+                            <label for="drive-folder-id">Google Drive 資料夾 ID</label>
+                            <input type="text" id="drive-folder-id" placeholder="請貼上雲端資料夾網址中的 ID">
+                        </div>
+                        <div class="input-group">
+                            <label for="drive-target-id">結果存放到雲端資料夾 ID (選填)</label>
+                            <input type="text" id="drive-target-id" placeholder="留空則僅顯示於網頁">
+                        </div>
+                    </div>
+                    <div class="input-group row-group">
+                        <label for="batch-concurrency">並行數量</label>
+                        <input type="number" id="batch-concurrency" value="3" min="1" max="10">
+                    </div>
+                    <button id="analyze-batch-btn" class="primary-btn">開始批量辨識</button>
+
+                    <!-- Batch Organize Area -->
+                    <div id="organize-area" class="organize-area hidden">
+                        <h3>依結果分類整理原始圖片</h3>
+                        <div class="input-group">
+                            <label for="safe-folder">可公開存放資料夾 (Safe)</label>
+                            <input type="text" id="safe-folder" placeholder="例如：/Users/.../safe_images">
+                        </div>
+                        <div class="input-group">
+                            <label for="unsafe-folder">不可公開存放資料夾 (Unsafe)</label>
+                            <input type="text" id="unsafe-folder" placeholder="例如：/Users/.../unsafe_images">
+                        </div>
+                        <button id="organize-btn" class="secondary-btn">複製檔案並歸檔</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Viewer Panel -->
+            <section class="viewer-panel glass-panel">
+                <!-- Loading Overlay -->
+                <div id="loading-overlay" class="loading-overlay hidden">
+                    <div class="spinner"></div>
+                    <p id="loading-text">正在用 AI 魔法深度辨識中...</p>
+                </div>
+
+                <!-- Empty State -->
+                <div id="empty-state" class="empty-state">
+                    <div class="placeholder-icon">👁️</div>
+                    <p>尚未載入圖片，請從左側上傳或指定批量資料夾</p>
+                </div>
+
+                <!-- Split Viewer -->
+                <div id="split-viewer" class="split-viewer hidden">
+                    <div class="viewer-nav">
+                        <button class="nav-btn" id="prev-btn">◀</button>
+                        <span class="page-indicator" id="page-indicator">1 / 1</span>
+                        <button class="nav-btn" id="next-btn">▶</button>
+                    </div>
+                    
+                    <div class="viewer-images">
+                        <div class="image-box">
+                            <div class="image-label">原圖</div>
+                            <img id="original-img" src="" alt="原始圖片">
+                        </div>
+                        <div class="image-box">
+                            <div class="image-label">AI 標註圖</div>
+                            <img id="annotated-img" src="" alt="後製標註圖片">
+                        </div>
+                    </div>
+
+                    <!-- AI Result Details -->
+                    <div class="result-details">
+                        <div class="result-header">
+                            <div class="status-badge" id="safety-badge">安全性未定</div>
+                            <h3 id="file-name-display">--</h3>
+                        </div>
+                        <p class="reason-text" id="moderation-reason">等待分析...</p>
+                        
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <span class="stat-label">發現人臉</span>
+                                <strong class="stat-value" id="face-count">0</strong>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">發現名牌</span>
+                                <strong class="stat-value" id="strap-count">0</strong>
+                            </div>
+                            <div class="stat-card">
+                                <span class="stat-label">帶子顏色</span>
+                                <strong class="stat-value" id="strap-color">無</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+    
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

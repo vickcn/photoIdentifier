@@ -1,0 +1,226 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.*workspace
+*.env*
+**.secr
+**.secr**
+data*/
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+
+*.ttc
+*.ttf
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Qdrant 訓練器特定
+exports/
+*.pkl
+!examples/*.json
+logs/
+temp/
+uploads/
+
+# 快照檔案
+*.snapshot
+*.backup
+*.bak*
+*.bat
+*.bak*/
+
+*.txt
+.cursor*/
+log*.txt
+log*/
+issues*/
+output*/
+sds_studio*/
+storage*/
+source*/
+
+
+# 設定檔案
+config.ini
+settings.json
+
+# 日誌檔案
+*.log
+logs/
+
+# 暫存檔案
+memo*
+*.tmp*
+*old*
+env*
+tmp*/
+*test*
+*try*
+*copy*
+example*/
+temp*/
+.tmp/
+clustering_plots
+models
+*.png
+*.jpg
+*.svg
+*.sh
+*.bat
+*.zsh
+*.iss
+*.mov
+*.mp4
+
+# 資料庫檔案
+*.db
+*.sqlite
+*.sqlite3
+
+# 快取檔案
+.cache/
+cache/
+
+# 測試覆蓋率
+.coverage
+htmlcov/
+
+# 虛擬環境
+venv/
+*env*/
+.venv/
+*.env*/ 
+
+config*
+command*
+
+report_20250902*
+
+*.ppt*
+*.xlsx
+*.xls
+*.doc*
+*.pdf*
+
+*tmp*
+
+!template
+!config.json
+!requirements.txt
+# Next.js & Node
+node_modules/
+.next/
+out/
+build/
+
+# Secrets
+.secrets/
+.vercel
