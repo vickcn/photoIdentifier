@@ -333,6 +333,19 @@ def google_auth_callback(request: Request, code: str, state: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/auth/access_token")
+def get_access_token(request: Request):
+    """回傳目前 session 使用者的 OAuth access token，供前端 Picker 使用。"""
+    user_key = request.session.get("user_key")
+    if not user_key:
+        raise HTTPException(status_code=401, detail="尚未登入")
+    try:
+        creds = load_user_credentials(user_key)
+        return {"access_token": creds.token}
+    except Exception:
+        raise HTTPException(status_code=401, detail="尚未授權或憑證已失效")
+
+
 class OrganizeRequest(BaseModel):
     results: list[dict]
     safe_folder: str

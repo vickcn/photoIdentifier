@@ -274,14 +274,18 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.addEventListener('click', () => {
             tabBtns.forEach(b => b.classList.remove('active'));
             modeContents.forEach(c => c.classList.remove('active'));
-            
+
             btn.classList.add('active');
             document.getElementById(`${btn.dataset.target}-mode`).classList.add('active');
-            
-            // Reset viewer
-            splitViewer.classList.add('hidden');
-            emptyState.classList.remove('hidden');
-            currentBatchResults = [];
+
+            if (btn.dataset.target === 'batch' && currentBatchResults.length > 0) {
+                // 切回批量頁時，恢復之前的批量總覽
+                showBatchOverview();
+            } else {
+                splitViewer.classList.add('hidden');
+                emptyState.classList.remove('hidden');
+                document.getElementById('batch-overview').classList.add('hidden');
+            }
         });
     });
 
@@ -729,6 +733,8 @@ document.addEventListener('DOMContentLoaded', () => {
         tabBtns[1].click();
         document.querySelector('input[value="drive"]').checked = true;
         document.querySelector('input[value="drive"]').dispatchEvent(new Event('change'));
+        // 同步伺服器端 OAuth token，讓「瀏覽」按鈕不需再次授權
+        tryFetchServerToken();
     }
 
     prevBtn.addEventListener('click', () => {
@@ -1005,6 +1011,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // 若已有 token（由伺服器端 OAuth 同步或先前 Picker 授權取得），直接開啟 Picker
+        if (oauthToken) {
+            createPicker(targetId);
+            return;
+        }
+
         const tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: config.google_client_id,
             scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file',
@@ -1017,12 +1029,19 @@ document.addEventListener('DOMContentLoaded', () => {
             },
         });
 
-        if (oauthToken === null) {
-            tokenClient.requestAccessToken({ prompt: 'consent' });
-        } else {
-            tokenClient.requestAccessToken({ prompt: '' });
-        }
+        tokenClient.requestAccessToken({ prompt: 'consent' });
     }
+
+    async function tryFetchServerToken() {
+        try {
+            const r = await fetch('/auth/access_token');
+            if (r.ok) {
+                const data = await r.json();
+                if (data.access_token) oauthToken = data.access_token;
+            }
+        } catch (e) { /* 未登入時靜默忽略 */ }
+    }
+    tryFetchServerToken();
 
     function createPicker(targetId) {
         if (pickerApiLoaded && oauthToken) {
