@@ -148,18 +148,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // === Color Rules ===
     const DEFAULT_COLOR_SWATCHES = [
-        { name: "藍色",   keywords: ["藍"],        hex: "#1E56D6", rgb: [30,  86,  214], safe: true  },
-        { name: "深藍色", keywords: ["深藍","navy"],hex: "#003087", rgb: [0,   48,  135], safe: true  },
-        { name: "青色",   keywords: ["青"],         hex: "#00C0C0", rgb: [0,   192, 192], safe: false },
-        { name: "紅色",   keywords: ["紅"],         hex: "#DC2626", rgb: [220, 38,  38],  safe: false },
-        { name: "橙色",   keywords: ["橙","橘"],    hex: "#EA580C", rgb: [234, 88,  12],  safe: false },
-        { name: "黃色",   keywords: ["黃"],         hex: "#D97706", rgb: [217, 119, 6],   safe: false },
-        { name: "綠色",   keywords: ["綠"],         hex: "#16A34A", rgb: [22,  163, 74],  safe: false },
-        { name: "紫色",   keywords: ["紫"],         hex: "#7C3AED", rgb: [124, 58,  237], safe: false },
-        { name: "粉色",   keywords: ["粉","桃"],    hex: "#EC4899", rgb: [236, 72,  153], safe: false },
-        { name: "黑色",   keywords: ["黑"],         hex: "#1A1A1A", rgb: [26,  26,  26],  safe: false },
-        { name: "白色",   keywords: ["白"],         hex: "#F0F0F0", rgb: [240, 240, 240], safe: false },
-        { name: "灰色",   keywords: ["灰"],         hex: "#6B7280", rgb: [107, 114, 128], safe: false },
+        { name: "藍色",   keywords: ["藍"],          hex: "#1E56D6", rgb: [30,  86,  214], safe: true  },
+        { name: "深藍色", keywords: ["深藍","navy"],  hex: "#003087", rgb: [0,   48,  135], safe: true  },
+        { name: "青色",   keywords: ["青"],           hex: "#00C0C0", rgb: [0,   192, 192], safe: false },
+        { name: "紅色",   keywords: ["紅"],           hex: "#DC2626", rgb: [220, 38,  38],  safe: true  },
+        { name: "橙色",   keywords: ["橙","橘"],      hex: "#EA580C", rgb: [234, 88,  12],  safe: true  },
+        { name: "黃色",   keywords: ["黃"],           hex: "#D97706", rgb: [217, 119, 6],   safe: true  },
+        { name: "深綠色", keywords: ["深綠"],         hex: "#1A4731", rgb: [26,  71,  49],  safe: false },
+        { name: "綠色",   keywords: ["綠"],           hex: "#16A34A", rgb: [22,  163, 74],  safe: true  },
+        { name: "紫色",   keywords: ["紫"],           hex: "#7C3AED", rgb: [124, 58,  237], safe: true  },
+        { name: "粉色",   keywords: ["粉","桃"],      hex: "#EC4899", rgb: [236, 72,  153], safe: true  },
+        { name: "黑色",   keywords: ["黑"],           hex: "#1A1A1A", rgb: [26,  26,  26],  safe: true  },
+        { name: "白色",   keywords: ["白"],           hex: "#F0F0F0", rgb: [240, 240, 240], safe: true  },
+        { name: "灰色",   keywords: ["灰"],           hex: "#6B7280", rgb: [107, 114, 128], safe: true  },
     ];
 
     let colorSwatches = JSON.parse(localStorage.getItem('colorSwatches') || 'null') || DEFAULT_COLOR_SWATCHES.map(s => ({...s}));
