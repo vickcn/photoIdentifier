@@ -10,6 +10,9 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
 DEFAULT_SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
     "https://www.googleapis.com/auth/drive", # 需要完整的 Drive 權限以列出檔案並有可能移動檔案
 ]
 

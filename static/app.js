@@ -2,7 +2,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // === DOM Elements ===
     const tabBtns = document.querySelectorAll('.tab-btn');
     const modeContents = document.querySelectorAll('.mode-content');
-    
+
     // Single Mode Elements
     const dropZone = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const localBatchInputs = document.getElementById('local-batch-inputs');
     const driveBatchInputs = document.getElementById('drive-batch-inputs');
     const googleLoginBtn = document.getElementById('google-login-btn');
-    
+
     const inputFolder = document.getElementById('batch-input-folder');
     const batchConcurrency = document.getElementById('batch-concurrency');
     const analyzeBatchBtn = document.getElementById('analyze-batch-btn');
@@ -44,6 +44,31 @@ document.addEventListener('DOMContentLoaded', () => {
         // 這裡導向後端的 OAuth 入口 (預計實作為 /auth/google)
         window.location.href = '/auth/google';
     });
+
+    async function checkLoginStatus() {
+        try {
+            const res = await fetch('/api/user/me');
+            const data = await res.json();
+
+            const guestArea = document.getElementById('drive-guest-area');
+            const userArea = document.getElementById('drive-user-area');
+
+            if (data.logged_in) {
+                guestArea.classList.add('hidden');
+                userArea.classList.remove('hidden');
+                document.getElementById('user-avatar').src = data.picture || '';
+                document.getElementById('user-name').textContent = data.name || '已登入';
+                document.getElementById('user-email').textContent = data.email || '';
+            } else {
+                guestArea.classList.remove('hidden');
+                userArea.classList.add('hidden');
+            }
+        } catch (err) {
+            console.warn("Failed to check login status:", err);
+        }
+    }
+
+    checkLoginStatus();
 
     // Viewer Elements
     const splitViewer = document.getElementById('split-viewer');
@@ -124,7 +149,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.__refreshTempFolders = () => refreshTempFolders(inputFolder.value.trim());
 
-    window.__clearSelectedTempFolder = async function() {
+    window.__clearSelectedTempFolder = async function () {
         const inputDir = inputFolder.value.trim();
         const folderName = tempFolderSelect.value;
         if (!inputDir || !folderName) return;
@@ -148,22 +173,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // === Color Rules ===
     const DEFAULT_COLOR_SWATCHES = [
-        { name: "藍色",   keywords: ["藍"],          hex: "#1E56D6", rgb: [30,  86,  214], safe: true  },
-        { name: "深藍色", keywords: ["深藍","navy"],  hex: "#003087", rgb: [0,   48,  135], safe: true  },
-        { name: "青色",   keywords: ["青"],           hex: "#00C0C0", rgb: [0,   192, 192], safe: false },
-        { name: "紅色",   keywords: ["紅"],           hex: "#DC2626", rgb: [220, 38,  38],  safe: true  },
-        { name: "橙色",   keywords: ["橙","橘"],      hex: "#EA580C", rgb: [234, 88,  12],  safe: true  },
-        { name: "黃色",   keywords: ["黃"],           hex: "#D97706", rgb: [217, 119, 6],   safe: true  },
-        { name: "深綠色", keywords: ["深綠"],         hex: "#1A4731", rgb: [26,  71,  49],  safe: false },
-        { name: "綠色",   keywords: ["綠"],           hex: "#16A34A", rgb: [22,  163, 74],  safe: true  },
-        { name: "紫色",   keywords: ["紫"],           hex: "#7C3AED", rgb: [124, 58,  237], safe: true  },
-        { name: "粉色",   keywords: ["粉","桃"],      hex: "#EC4899", rgb: [236, 72,  153], safe: true  },
-        { name: "黑色",   keywords: ["黑"],           hex: "#1A1A1A", rgb: [26,  26,  26],  safe: true  },
-        { name: "白色",   keywords: ["白"],           hex: "#F0F0F0", rgb: [240, 240, 240], safe: true  },
-        { name: "灰色",   keywords: ["灰"],           hex: "#6B7280", rgb: [107, 114, 128], safe: true  },
+        { name: "藍色", keywords: ["藍"], hex: "#1E56D6", rgb: [30, 86, 214], safe: true },
+        { name: "深藍色", keywords: ["深藍", "navy"], hex: "#003087", rgb: [0, 48, 135], safe: true },
+        { name: "青色", keywords: ["青"], hex: "#00C0C0", rgb: [0, 192, 192], safe: false },
+        { name: "紅色", keywords: ["紅"], hex: "#DC2626", rgb: [220, 38, 38], safe: true },
+        { name: "橙色", keywords: ["橙", "橘"], hex: "#EA580C", rgb: [234, 88, 12], safe: true },
+        { name: "黃色", keywords: ["黃"], hex: "#D97706", rgb: [217, 119, 6], safe: true },
+        { name: "深綠色", keywords: ["深綠"], hex: "#1A4731", rgb: [26, 71, 49], safe: false },
+        { name: "綠色", keywords: ["綠"], hex: "#16A34A", rgb: [22, 163, 74], safe: true },
+        { name: "紫色", keywords: ["紫"], hex: "#7C3AED", rgb: [124, 58, 237], safe: true },
+        { name: "粉色", keywords: ["粉", "桃"], hex: "#EC4899", rgb: [236, 72, 153], safe: true },
+        { name: "黑色", keywords: ["黑"], hex: "#1A1A1A", rgb: [26, 26, 26], safe: true },
+        { name: "白色", keywords: ["白"], hex: "#F0F0F0", rgb: [240, 240, 240], safe: true },
+        { name: "灰色", keywords: ["灰"], hex: "#6B7280", rgb: [107, 114, 128], safe: true },
     ];
 
-    let colorSwatches = JSON.parse(localStorage.getItem('colorSwatches') || 'null') || DEFAULT_COLOR_SWATCHES.map(s => ({...s}));
+    let colorSwatches = JSON.parse(localStorage.getItem('colorSwatches') || 'null') || DEFAULT_COLOR_SWATCHES.map(s => ({ ...s }));
 
     function saveColorSwatches() {
         localStorage.setItem('colorSwatches', JSON.stringify(colorSwatches));
@@ -190,7 +215,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    window.__toggleColorRules = function() {
+    window.__toggleColorRules = function () {
         const body = document.getElementById('color-rules-body');
         const arrow = document.getElementById('color-rules-arrow');
         const collapsed = body.classList.toggle('hidden');
@@ -198,8 +223,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!collapsed) renderColorSwatches();
     };
 
-    window.__resetColorRules = function() {
-        colorSwatches = DEFAULT_COLOR_SWATCHES.map(s => ({...s}));
+    window.__resetColorRules = function () {
+        colorSwatches = DEFAULT_COLOR_SWATCHES.map(s => ({ ...s }));
         saveColorSwatches();
         renderColorSwatches();
     };
@@ -222,7 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (shouldBeFS) {
             splitViewer.classList.add('fullscreen-mode');
             document.body.style.overflow = 'hidden';
-            
+
             // Try to enter native browser fullscreen if possible
             try {
                 if (splitViewer.requestFullscreen) {
@@ -255,7 +280,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Expose for HTML onclick attributes
     window.__toggleFullscreen = () => toggleFullscreen();
-    window.__exitFullscreen   = () => toggleFullscreen(false);
+    window.__exitFullscreen = () => toggleFullscreen(false);
 
     // === Fullscreen Zoom + Pan ===
     let zoomScale = 1;
@@ -272,7 +297,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function clampPan() {
         if (zoomScale <= 1) { panX = 0; panY = 0; return; }
-        const maxX = viewerImages.offsetWidth  * (zoomScale - 1) / 2;
+        const maxX = viewerImages.offsetWidth * (zoomScale - 1) / 2;
         const maxY = viewerImages.offsetHeight * (zoomScale - 1) / 2;
         panX = Math.min(Math.max(panX, -maxX), maxX);
         panY = Math.min(Math.max(panY, -maxY), maxY);
@@ -476,10 +501,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const data = await res.json();
-            
+
             // set annotated image
             annotatedImg.src = 'data:image/jpeg;base64,' + data.drawn_image_b64;
-            
+
             // update stats
             updateStatsUI(singleSelectedFile.name, data.analysis);
             showToast('分析完成！');
@@ -493,7 +518,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateStatsUI(filename, analysis) {
         fileNameDisplay.textContent = filename;
-        
+
         if (analysis.is_safe_for_public) {
             safetyBadge.textContent = '可公開 (Safe)';
             safetyBadge.className = 'status-badge status-safe';
@@ -533,7 +558,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const source = document.querySelector('input[name="batch-source"]:checked').value;
         batchMode = source;
         const currentConcurrency = parseInt(batchConcurrency.value) || 3;
-        
+
         let endpoint = '/batch/';
         let body = {};
 
@@ -603,7 +628,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // 將二進位數據轉為文字
                 buffer += decoder.decode(value, { stream: true });
-                
+
                 // NDJSON 處理：根據換行符號切割每一行完整的 JSON
                 const lines = buffer.split('\n');
                 buffer = lines.pop(); // 未完成的行留到下次處理
@@ -612,7 +637,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!line.trim()) continue;
                     try {
                         const data = JSON.parse(line);
-                        
+
                         // 進度與結果處理
                         if (data.status === 'ok') {
                             // Drive 串流模式：每行一筆 NDJSON
@@ -645,7 +670,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         // 更新 UI 進度
                         updateProgressUI(successCount + failedCount, totalImages, successCount, failedCount);
-                        
+
                     } catch (err) {
                         console.error('JSON parsing data error:', line, err);
                     }
@@ -669,7 +694,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(e.message, 'error');
         } finally {
             showLoading(false);
-            document.getElementById('loading-text').textContent = '正在用 AI 魔法深度辨識中...';
+            document.getElementById('loading-text').textContent = '正在用 AI 深度辨識中...';
         }
     });
 
@@ -681,9 +706,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderBatchViewer() {
         if (currentBatchResults.length === 0) return;
-        
+
         const currentData = currentBatchResults[currentIndex];
-        
+
         emptyState.classList.add('hidden');
         splitViewer.classList.remove('hidden');
 
@@ -691,7 +716,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 更新裁決按鈕狀態
         renderDecisionButtons();
-        
+
         // 判斷是否為雲端模式或本地模式的串流數據
         const isStream = !!currentData.drawn_image_b64;
 
@@ -703,15 +728,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 originalImg.src = 'https://placehold.co/600x400?text=Processing+Drive+File';
             }
             annotatedImg.src = 'data:image/jpeg;base64,' + currentData.drawn_image_b64;
-            
+
             // 輔助 UI: 更新統計數據
-            const analysis = currentData.result; 
+            const analysis = currentData.result;
             updateStatsUI(currentData.file_name, analysis);
         } else {
             // Local File Mode (Non-Stream)
             originalImg.src = `/local_file/?path=${encodeURIComponent(currentData.original_path)}`;
             annotatedImg.src = `/local_file/?path=${encodeURIComponent(currentData.output)}`;
-            
+
             const fakeAnalysis = {
                 is_safe_for_public: currentData.is_safe_for_public,
                 moderation_reason: currentData.moderation_reason,
@@ -819,7 +844,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderBatchViewer();
     }
 
-    window.__backToOverview = function() {
+    window.__backToOverview = function () {
         batchOverviewActive = true;
         splitViewer.classList.add('hidden');
         decisionButtons.style.display = 'none';
@@ -828,7 +853,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderBatchOverview();
     };
 
-    window.__setOverviewMode = function(mode) {
+    window.__setOverviewMode = function (mode) {
         batchOverviewMode = mode;
         localStorage.setItem('batchOverviewMode', mode);
         renderBatchOverview();
@@ -880,7 +905,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    window.__setDecision = function(decision) {
+    window.__setDecision = function (decision) {
         if (currentBatchResults.length === 0) return;
         const currentData = currentBatchResults[currentIndex];
         if (!currentData) return;
@@ -962,7 +987,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    window.__finalizeReview = async function() {
+    window.__finalizeReview = async function () {
         if (currentBatchResults.length === 0) {
             showToast('沒有可歸檔的結果', 'error');
             return;
@@ -1064,10 +1089,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
             });
 
-            if(!res.ok) throw new Error('分類複製失敗');
+            if (!res.ok) throw new Error('分類複製失敗');
             const data = await res.json();
-            
-            if(data.errors && data.errors.length > 0) {
+
+            if (data.errors && data.errors.length > 0) {
                 console.error(data.errors);
                 showToast(`部分失敗，請檢查 Console。成功移動：${data.moved} 個檔案`, 'error');
             } else {
@@ -1186,7 +1211,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function loadPicker() {
         gapi.load('picker', { 'callback': () => { pickerApiLoaded = true; } });
     }
-    
+
     // Check if script is already ready
     if (window.gapi) {
         loadPicker();

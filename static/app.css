@@ -506,6 +506,62 @@ button:disabled {
     margin-bottom: 1rem;
 }
 
+/* Mini User Profile */
+.user-profile-mini {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    text-align: left;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.user-avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: 2px solid var(--accent-color);
+    background: #333;
+}
+
+.user-info-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+.user-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: #fff;
+}
+
+.user-email {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.logout-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.logout-btn:hover {
+    background: var(--danger-color);
+    transform: scale(1.1);
+}
+
 .status-msg {
     font-size: 0.8rem;
     color: var(--text-secondary);
@@ -585,12 +641,6 @@ button:disabled {
 .stat-item.success .value { color: var(--success-color); }
 .stat-item.failed .value { color: var(--danger-color); }
 .stat-item.pending .value { color: #ffd740; }
-
-
-    flex-direction: column;
-    gap: 1.5rem;
-    animation: fadeIn 0.3s ease;
-}
 
 .split-viewer.fullscreen-mode .viewer-images {
     flex: 1;

@@ -79,9 +79,19 @@
 
                     <!-- Drive Batch Inputs (Hidden by default) -->
                     <div id="drive-batch-inputs" class="hidden">
-                        <div class="drive-auth-status">
-                            <button id="google-login-btn" class="secondary-btn">🔑 連結 Google Drive 帳號</button>
-                            <p class="status-msg">請先連結帳號以讀取雲端檔案</p>
+                        <div class="drive-auth-status" id="drive-auth-status">
+                            <div id="drive-guest-area">
+                                <button id="google-login-btn" class="secondary-btn">🔑 連結 Google Drive 帳號</button>
+                                <p class="status-msg">請先連結帳號以讀取雲端檔案</p>
+                            </div>
+                            <div id="drive-user-area" class="user-profile-mini hidden">
+                                <img id="user-avatar" src="" alt="Avatar" class="user-avatar">
+                                <div class="user-info-text">
+                                    <span id="user-name" class="user-name">載入中...</span>
+                                    <span id="user-email" class="user-email"></span>
+                                </div>
+                                <button id="google-logout-btn" class="logout-btn" onclick="location.href='/auth/logout'" title="登出並清除授權">🚪</button>
+                            </div>
                         </div>
                         <div class="input-group">
                             <label for="drive-folder-id">Google Drive 來源資料夾</label>

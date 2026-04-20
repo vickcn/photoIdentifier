@@ -125,21 +125,32 @@ def get_drive_credentials(request: Request):
     creds = None
     try:
         creds = load_user_credentials(user_key)
-    except RuntimeError:
-        pass
+    except Exception as e:
+        logger.warning(f"本地憑證載入失敗，嘗試從 session 重建: {e}")
+        creds = None
 
     if creds is None:
         creds = _load_creds_from_session(request)
         if creds is None:
             raise HTTPException(status_code=401, detail="Google 授權已失效，請重新連結。")
+        
         if creds.expired and creds.refresh_token:
             try:
                 creds.refresh(GoogleRequest())
-            except Exception:
-                raise HTTPException(status_code=401, detail="Google 授權已失效，請重新連結。")
-        token_store.save(user_key, creds)
+            except Exception as e:
+                logger.error(f"憑證刷新失敗: {e}")
+                raise HTTPException(status_code=401, detail="Google 授權已過期且無法自動刷新，請重新登入。")
+        
+        try:
+            token_store.save(user_key, creds)
+        except Exception:
+            pass # 可能是唯讀環境，不影響本次執行
 
-    _save_creds_to_session(request, creds)
+    try:
+        _save_creds_to_session(request, creds)
+    except Exception:
+        pass
+        
     return creds
 
 @app.get("/", response_class=HTMLResponse)
@@ -155,6 +166,37 @@ async def get_frontend_config():
         "google_api_key": os.environ.get("GOOGLE_API_KEY", ""),
         "google_app_id": client_id.split("-")[0] if "-" in client_id else ""
     }
+
+@app.get("/api/user/me")
+async def get_current_user(request: Request):
+    """取得目前登入的 Google 帳號資訊"""
+    try:
+        creds = get_drive_credentials(request)
+    except Exception:
+        # 任何原因導致無法取得憑證都視為未登入
+        return {"logged_in": False}
+    
+    from googleapiclient.discovery import build
+    try:
+        # 使用 oauth2 service 取得使用者資訊
+        service = build("oauth2", "v2", credentials=creds, cache_discovery=False)
+        userinfo = service.userinfo().get().execute()
+        return {
+            "logged_in": True,
+            "email": userinfo.get("email"),
+            "name": userinfo.get("name"),
+            "picture": userinfo.get("picture")
+        }
+    except Exception as e:
+        logger.error(f"取得使用者資訊失敗: {e}")
+        # 如果憑證還在但 API 呼叫失敗，通常也是授權有問題
+        return {"logged_in": False, "error": str(e)}
+
+@app.get("/auth/logout")
+async def google_logout(request: Request):
+    """清除 Google 登入 Session"""
+    request.session.clear()
+    return RedirectResponse(url="/")
 
 @app.get("/local_file/")
 async def get_local_file(path: str):
