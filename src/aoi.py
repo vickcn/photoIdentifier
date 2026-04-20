@@ -16,8 +16,8 @@ def draw_bboxes_on_image(
     draw = ImageDraw.Draw(image)
     width, height = image.size
 
-    # 動態計算字體大小 (約圖片高度的 3%)
-    font_size = max(20, int(height * 0.03))
+    # 動態計算字體大小 (約圖片高度的 5%)
+    font_size = max(28, int(height * 0.05))
     try:
         # 優先嘗試載入 TrueType 字體以支援縮放 (macOS 路徑)
         from PIL import ImageFont
