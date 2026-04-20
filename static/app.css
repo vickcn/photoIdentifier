@@ -1034,6 +1034,15 @@ button:disabled {
     display: none;
 }
 
+/* 縮放時顯示抓取游標提示可拖曳 */
+.split-viewer.fullscreen-mode.zoomed .image-box {
+    cursor: grab;
+}
+.split-viewer.fullscreen-mode.panning .image-box,
+.split-viewer.fullscreen-mode.zoomed .image-box:active {
+    cursor: grabbing;
+}
+
 /* === Mobile fullscreen: 直式比對排列 === */
 @media (max-width: 768px) {
     .split-viewer.fullscreen-mode {
