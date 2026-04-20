@@ -651,8 +651,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             totalImages = data.total;
                             const result = data.result || data;
                             const aiStatus = result.moderation_status || (result.is_safe_for_public ? 'public' : 'private');
-                            data.user_decision = aiStatus;
-                            data.ai_decision = aiStatus;
+                            const aiDecision = aiStatus === 'public' ? 'safe' : aiStatus === 'pending' ? 'pending' : 'unsafe';
+                            data.user_decision = aiDecision;
+                            data.ai_decision = aiDecision;
                             currentBatchResults.push(data);
                         } else if (data.status === 'error') {
                             failedCount++;
@@ -665,8 +666,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             data.results.forEach(item => {
                                 if (item.status === 'ok') {
                                     const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
-                                    item.user_decision = aiStatus;
-                                    item.ai_decision = aiStatus;
+                                    const aiDecision = aiStatus === 'public' ? 'safe' : aiStatus === 'pending' ? 'pending' : 'unsafe';
+                                    item.user_decision = aiDecision;
+                                    item.ai_decision = aiDecision;
                                     currentBatchResults.push(item);
                                     successCount++;
                                 } else {
