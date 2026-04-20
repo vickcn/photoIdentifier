@@ -78,19 +78,19 @@ async def call_gemini_vision_api(prompt: str, b64_image: str, mime_type: str = "
 
 # ---------------- 顏色規則預設值 ----------------
 DEFAULT_COLOR_RULES: list[dict] = [
-    {"name": "藍色",   "keywords": ["藍"],          "hex": "#1E56D6", "rgb": [30,  86,  214], "safe": True},
-    {"name": "深藍色", "keywords": ["深藍", "navy"], "hex": "#003087", "rgb": [0,   48,  135], "safe": True},
-    {"name": "青色",   "keywords": ["青"],           "hex": "#00C0C0", "rgb": [0,   192, 192], "safe": False},
-    {"name": "紅色",   "keywords": ["紅"],           "hex": "#DC2626", "rgb": [220, 38,  38],  "safe": True},
-    {"name": "橙色",   "keywords": ["橙", "橘"],     "hex": "#EA580C", "rgb": [234, 88,  12],  "safe": True},
-    {"name": "黃色",   "keywords": ["黃"],           "hex": "#D97706", "rgb": [217, 119, 6],   "safe": True},
-    {"name": "深綠色", "keywords": ["深綠"],         "hex": "#1A4731", "rgb": [26,  71,  49],  "safe": False},
-    {"name": "綠色",   "keywords": ["綠"],           "hex": "#16A34A", "rgb": [22,  163, 74],  "safe": True},
-    {"name": "紫色",   "keywords": ["紫"],           "hex": "#7C3AED", "rgb": [124, 58,  237], "safe": True},
-    {"name": "粉色",   "keywords": ["粉", "桃"],     "hex": "#EC4899", "rgb": [236, 72,  153], "safe": True},
-    {"name": "黑色",   "keywords": ["黑"],           "hex": "#1A1A1A", "rgb": [26,  26,  26],  "safe": True},
-    {"name": "白色",   "keywords": ["白"],           "hex": "#F0F0F0", "rgb": [240, 240, 240], "safe": True},
-    {"name": "灰色",   "keywords": ["灰"],           "hex": "#6B7280", "rgb": [107, 114, 128], "safe": True},
+    {"name": "藍色",   "keywords": ["藍", "blue"],          "hex": "#1E56D6", "rgb": [30,  86,  214], "safe": True},
+    {"name": "深藍色", "keywords": ["深藍", "navy", "dark blue"], "hex": "#003087", "rgb": [0,   48,  135], "safe": True},
+    {"name": "青色",   "keywords": ["青", "cyan"],           "hex": "#00C0C0", "rgb": [0,   192, 192], "safe": False},
+    {"name": "紅色",   "keywords": ["紅", "red"],           "hex": "#DC2626", "rgb": [220, 38,  38],  "safe": True},
+    {"name": "橙色",   "keywords": ["橙", "橘", "orange"],     "hex": "#EA580C", "rgb": [234, 88,  12],  "safe": True},
+    {"name": "黃色",   "keywords": ["黃", "yellow"],           "hex": "#D97706", "rgb": [217, 119, 6],   "safe": True},
+    {"name": "深綠色", "keywords": ["深綠", "dark green"],         "hex": "#1A4731", "rgb": [26,  71,  49],  "safe": False},
+    {"name": "綠色",   "keywords": ["綠", "green"],           "hex": "#16A34A", "rgb": [22,  163, 74],  "safe": True},
+    {"name": "紫色",   "keywords": ["紫", "purple"],           "hex": "#7C3AED", "rgb": [124, 58,  237], "safe": True},
+    {"name": "粉色",   "keywords": ["粉", "桃", "pink"],     "hex": "#EC4899", "rgb": [236, 72,  153], "safe": True},
+    {"name": "黑色",   "keywords": ["黑", "black"],           "hex": "#1A1A1A", "rgb": [26,  26,  26],  "safe": True},
+    {"name": "白色",   "keywords": ["白", "white"],           "hex": "#F0F0F0", "rgb": [240, 240, 240], "safe": True},
+    {"name": "灰色",   "keywords": ["灰", "gray", "grey"],           "hex": "#6B7280", "rgb": [107, 114, 128], "safe": True},
 ]
 
 # ---------------- 業務邏輯層 (Business Logic) ----------------
