@@ -121,15 +121,6 @@ def map_google_api_error_to_http(status_code: int, error_text: str) -> HTTPExcep
     return HTTPException(status_code=502, detail=f"API 呼叫失敗 ({status_code})")
 
 
-def _parse_json_response(response_text: str) -> dict:
-    """清理並解析 LLM 回傳的 JSON 文字"""
-    cleaned = response_text.strip()
-    match = re.search(r'\{.*\}', cleaned, re.DOTALL)
-    if match:
-        cleaned = match.group(0)
-    return json.loads(cleaned)
-
-
 def _dedup_bboxes(bboxes: list, confidences: list) -> tuple[list, list]:
     """過濾重複的 BBox，防止 AI 幻覺"""
     seen: set = set()
@@ -143,33 +134,18 @@ def _dedup_bboxes(bboxes: list, confidences: list) -> tuple[list, list]:
     return new_bboxes, new_confs
 
 
-async def _call_api_safe(prompt: str, b64_image: str, content_type: str) -> str:
-    """呼叫 Gemini API 並統一處理連線錯誤"""
-    try:
-        return await call_gemini_vision_api(prompt, b64_image, content_type)
-    except ValueError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception as e:
-        if "HTTP 404" in str(e):
-            raise map_google_api_error_to_http(404, str(e))
-        if "HTTP 403" in str(e):
-            raise map_google_api_error_to_http(403, str(e))
-        if isinstance(e, (httpx.HTTPError, httpx.TimeoutException)):
-            logger.exception("Google API connection error: %s", e)
-            raise HTTPException(status_code=502, detail="無法連線至 Google API") from e
-        logger.exception("Unexpected error: %s", e)
-        raise map_google_api_error_to_http(502, str(e))
-
-
-async def _step1_check_unsafe_strap(
-    b64_image: str, content_type: str, color_rules: list
-) -> dict:
+async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rules: list | None = None) -> PhotoAnalysisResult:
     """
-    第一步：偵測人臉、帶子，並判斷帶子是否為不可公開顏色。
-    回傳包含 face/strap bbox 與 has_unsafe_strap 的 dict。
+    單次 LLM 呼叫取得所有偵測結果，再由系統邏輯分三段 if 判定：
+      1. 有不可公開帶子 → private
+      2. 有小孩未配戴名牌 → pending（待人員判定）
+      3. 否則 → public
     """
-    unsafe_names = "、".join(r["name"] for r in color_rules if not r.get("safe"))
+    if color_rules is None:
+        color_rules = DEFAULT_COLOR_RULES
+
     safe_names   = "、".join(r["name"] for r in color_rules if r.get("safe"))
+    unsafe_names = "、".join(r["name"] for r in color_rules if not r.get("safe"))
     color_ref_lines = "\n".join(
         f"   - {r['name']} (RGB: {r['rgb'][0]}, {r['rgb'][1]}, {r['rgb'][2]}, {r['hex']})"
         for r in color_rules
@@ -178,8 +154,7 @@ async def _step1_check_unsafe_strap(
     prompt = f"""
     你是一個專業的圖片審核系統。請分析這張圖片，並回傳純 JSON 格式的結果，不要任何 markdown 標記。
 
-    【第一步：偵測人臉與帶子，並判斷帶子顏色是否違規】
-
+    【辨識目標】：
     1. 偵測圖片中「所有」清晰可見的人臉（⚠️最多列出前 5 個最清晰的人臉）：
        - bbox: [ymin, xmin, ymax, xmax]，以 0 到 1000 的整數表示
        - confidence: 0.0 到 1.0 的信心度浮點數
@@ -196,6 +171,11 @@ async def _step1_check_unsafe_strap(
        - 可公開顏色：「{safe_names}」→ has_unsafe_strap = false
        - 無帶子 → has_unsafe_strap = false
 
+    5. 判斷圖片中是否有「小孩（兒童、未成年）」且這些人「沒有配戴名牌」：
+       - 所有小孩都有配戴名牌 → has_children_without_badge = false
+       - 至少一名小孩沒有配戴名牌 → has_children_without_badge = true
+       - 圖片中沒有小孩 → has_children_without_badge = false
+
     【必須輸出的 JSON 欄位】：
     - "has_face" (boolean)
     - "face_bboxes" (二維整數陣列，無人臉則為 [])
@@ -205,37 +185,60 @@ async def _step1_check_unsafe_strap(
     - "strap_confidences" (浮點數陣列，與 strap_bboxes 一一對應，無帶子則為 [])
     - "strap_color" (string 或 null)
     - "has_unsafe_strap" (boolean)
+    - "has_children_without_badge" (boolean)
     - "moderation_reason" (string): 判定原因
     """
 
-    response_text = await _call_api_safe(prompt, b64_image, content_type)
+    try:
+        response_text = await call_gemini_vision_api(prompt, b64_image, content_type)
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        if "HTTP 404" in str(e):
+            raise map_google_api_error_to_http(404, str(e))
+        if "HTTP 403" in str(e):
+            raise map_google_api_error_to_http(403, str(e))
+        if isinstance(e, (httpx.HTTPError, httpx.TimeoutException)):
+            logger.exception("Google API connection error: %s", e)
+            raise HTTPException(status_code=502, detail="無法連線至 Google API") from e
+        logger.exception("Unexpected error: %s", e)
+        raise map_google_api_error_to_http(502, str(e))
+
     if not response_text:
-        raise HTTPException(status_code=502, detail="模型未回傳內容（步驟一）")
+        raise HTTPException(status_code=502, detail="模型未回傳內容")
 
     try:
-        result = _parse_json_response(response_text)
+        cleaned = response_text.strip()
+        match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+        if match:
+            cleaned = match.group(0)
+        result_json = json.loads(cleaned)
     except json.JSONDecodeError:
-        logger.error("步驟一 JSON 解析失敗，原始回傳：\n%s", response_text)
-        result = {
+        logger.error("JSON 解析失敗，原始回傳內容:\n%s", response_text)
+        logger.warning("解析破裂，啟用預設空白結果回傳")
+        result_json = {
             "has_face": False, "face_bboxes": [], "face_confidences": [],
             "has_brand_strap": False, "strap_bboxes": [], "strap_confidences": [],
-            "strap_color": None, "has_unsafe_strap": True,
-            "moderation_reason": "AI 模組產生無效格式，系統強制阻擋公布。"
+            "strap_color": None, "has_unsafe_strap": True, "has_children_without_badge": False,
+            "moderation_reason": "AI 模組產生無效格式（可能為物件過多），系統強制阻擋公布。"
         }
 
+    if not isinstance(result_json, dict):
+        raise HTTPException(status_code=502, detail="模型回傳內容格式錯誤")
+
     # 去重 bbox
-    if isinstance(result.get("face_bboxes"), list) and isinstance(result.get("face_confidences"), list):
-        result["face_bboxes"], result["face_confidences"] = _dedup_bboxes(
-            result["face_bboxes"], result["face_confidences"]
+    if isinstance(result_json.get("face_bboxes"), list) and isinstance(result_json.get("face_confidences"), list):
+        result_json["face_bboxes"], result_json["face_confidences"] = _dedup_bboxes(
+            result_json["face_bboxes"], result_json["face_confidences"]
         )
-    if isinstance(result.get("strap_bboxes"), list) and isinstance(result.get("strap_confidences"), list):
-        result["strap_bboxes"], result["strap_confidences"] = _dedup_bboxes(
-            result["strap_bboxes"], result["strap_confidences"]
+    if isinstance(result_json.get("strap_bboxes"), list) and isinstance(result_json.get("strap_confidences"), list):
+        result_json["strap_bboxes"], result_json["strap_confidences"] = _dedup_bboxes(
+            result_json["strap_bboxes"], result_json["strap_confidences"]
         )
 
-    # 【雙重保險】以 color_rules 強制覆寫帶子安全判定
-    if result.get("has_brand_strap") and color_rules:
-        color = result.get("strap_color") or ""
+    # 【雙重保險】以 color_rules 強制覆寫帶子安全判定（避免 AI 偶發幻覺）
+    if result_json.get("has_brand_strap") and color_rules:
+        color = result_json.get("strap_color") or ""
         unsafe_hit = next(
             (r for r in color_rules if not r.get("safe") and any(kw in color for kw in r.get("keywords", []))),
             None
@@ -245,104 +248,37 @@ async def _step1_check_unsafe_strap(
             None
         )
         if unsafe_hit:
-            result["has_unsafe_strap"] = True
-            result["moderation_reason"] = f"系統覆寫：帶子為{unsafe_hit['name']}，禁止公開"
+            result_json["has_unsafe_strap"] = True
+            result_json["moderation_reason"] = f"系統覆寫：帶子為{unsafe_hit['name']}，禁止公開"
         elif safe_hit:
-            result["has_unsafe_strap"] = False
-            result["moderation_reason"] = f"系統覆寫：帶子為{safe_hit['name']}，允許公開"
+            result_json["has_unsafe_strap"] = False
 
-    return result
+    # ── 三段 if 判定 ──
+    has_unsafe_strap = bool(result_json.get("has_unsafe_strap", False))
+    has_children_issue = bool(result_json.get("has_children_without_badge", False))
 
+    if has_unsafe_strap:
+        moderation_status: Literal["public", "private", "pending"] = "private"
+        is_safe = False
+        reason = result_json.get("moderation_reason", "帶子顏色不可公開")
+    elif has_children_issue:
+        moderation_status = "pending"
+        is_safe = False
+        reason = result_json.get("moderation_reason", "圖片中有小孩未配戴名牌，需人員確認")
+    else:
+        moderation_status = "public"
+        is_safe = True
+        reason = result_json.get("moderation_reason", "系統判定：可公開")
 
-async def _step2_check_children_without_badge(b64_image: str, content_type: str) -> tuple[bool, str]:
-    """
-    第二步：判斷圖片中是否有小孩未配戴名牌（識別證）。
-    回傳 (has_children_without_badge, moderation_reason)。
-    """
-    prompt = """
-    你是一個專業的圖片審核系統。請分析這張圖片，並回傳純 JSON 格式的結果，不要任何 markdown 標記。
-
-    【第二步：檢查是否有小孩未配戴名牌】
-
-    請判斷圖片中是否有看起來像小孩（兒童、未成年）的人物，且這些人物「沒有」配戴名牌（識別證、掛牌、strap/lanyard）。
-
-    判斷依據：
-    - 若圖片中的小孩「全部」都有配戴名牌 → has_children_without_badge = false
-    - 若圖片中「至少一名」小孩沒有配戴名牌 → has_children_without_badge = true
-    - 若圖片中沒有小孩 → has_children_without_badge = false
-
-    【必須輸出的 JSON 欄位】：
-    - "has_children_without_badge" (boolean)
-    - "moderation_reason" (string): 判定原因，請說明圖片中小孩的狀況
-    """
-
-    response_text = await _call_api_safe(prompt, b64_image, content_type)
-    if not response_text:
-        raise HTTPException(status_code=502, detail="模型未回傳內容（步驟二）")
-
-    try:
-        result = _parse_json_response(response_text)
-        return bool(result.get("has_children_without_badge", False)), str(result.get("moderation_reason", ""))
-    except json.JSONDecodeError:
-        logger.error("步驟二 JSON 解析失敗，原始回傳：\n%s", response_text)
-        # 解析失敗時保守處理，標記為待人員判定
-        return True, "AI 模組產生無效格式（步驟二），系統標記為待人員判定。"
-
-
-async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rules: list | None = None) -> PhotoAnalysisResult:
-    """
-    分三個階段判定照片是否可公開：
-      1. LLM 判斷是否有不可公開的帶子 → 是則系統判定 private
-      2. LLM 判斷是否有小孩未配戴名牌 → 是則系統判定 pending（待人員判定）
-      3. 否則系統判定 public
-    """
-    if color_rules is None:
-        color_rules = DEFAULT_COLOR_RULES
-
-    # ── 步驟一：偵測帶子是否違規 ──
-    step1 = await _step1_check_unsafe_strap(b64_image, content_type, color_rules)
-
-    if step1.get("has_unsafe_strap"):
-        return PhotoAnalysisResult(
-            has_face=bool(step1.get("has_face", False)),
-            face_bboxes=step1.get("face_bboxes", []),
-            face_confidences=step1.get("face_confidences", []),
-            has_brand_strap=bool(step1.get("has_brand_strap", False)),
-            strap_bboxes=step1.get("strap_bboxes", []),
-            strap_confidences=step1.get("strap_confidences", []),
-            strap_color=step1.get("strap_color"),
-            is_safe_for_public=False,
-            moderation_status="private",
-            moderation_reason=step1.get("moderation_reason", "帶子顏色不可公開"),
-        )
-
-    # ── 步驟二：檢查是否有小孩未配戴名牌 ──
-    has_children_issue, reason2 = await _step2_check_children_without_badge(b64_image, content_type)
-
-    if has_children_issue:
-        return PhotoAnalysisResult(
-            has_face=bool(step1.get("has_face", False)),
-            face_bboxes=step1.get("face_bboxes", []),
-            face_confidences=step1.get("face_confidences", []),
-            has_brand_strap=bool(step1.get("has_brand_strap", False)),
-            strap_bboxes=step1.get("strap_bboxes", []),
-            strap_confidences=step1.get("strap_confidences", []),
-            strap_color=step1.get("strap_color"),
-            is_safe_for_public=False,
-            moderation_status="pending",
-            moderation_reason=reason2 or "圖片中有小孩未配戴名牌，需人員確認",
-        )
-
-    # ── 步驟三：系統判定可公開 ──
     return PhotoAnalysisResult(
-        has_face=bool(step1.get("has_face", False)),
-        face_bboxes=step1.get("face_bboxes", []),
-        face_confidences=step1.get("face_confidences", []),
-        has_brand_strap=bool(step1.get("has_brand_strap", False)),
-        strap_bboxes=step1.get("strap_bboxes", []),
-        strap_confidences=step1.get("strap_confidences", []),
-        strap_color=step1.get("strap_color"),
-        is_safe_for_public=True,
-        moderation_status="public",
-        moderation_reason=step1.get("moderation_reason", "系統判定：可公開"),
+        has_face=bool(result_json.get("has_face", False)),
+        face_bboxes=result_json.get("face_bboxes", []),
+        face_confidences=result_json.get("face_confidences", []),
+        has_brand_strap=bool(result_json.get("has_brand_strap", False)),
+        strap_bboxes=result_json.get("strap_bboxes", []),
+        strap_confidences=result_json.get("strap_confidences", []),
+        strap_color=result_json.get("strap_color"),
+        is_safe_for_public=is_safe,
+        moderation_status=moderation_status,
+        moderation_reason=reason,
     )

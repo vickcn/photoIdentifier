@@ -366,6 +366,7 @@ button:disabled {
 
 .status-safe { background: rgba(16, 185, 129, 0.2); color: var(--success-color); border: 1px solid var(--success-color); }
 .status-unsafe { background: rgba(239, 68, 68, 0.2); color: var(--danger-color); border: 1px solid var(--danger-color); }
+.status-pending { background: rgba(251, 191, 36, 0.2); color: #fbbf24; border: 1px solid #fbbf24; }
 
 .reason-text {
     color: var(--text-secondary);
@@ -747,6 +748,13 @@ button:disabled {
     box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
 }
 
+.decision-btn.active-pending {
+    background: rgba(251, 191, 36, 0.15);
+    border-color: #fbbf24;
+    color: #fbbf24;
+    box-shadow: 0 0 20px rgba(251, 191, 36, 0.15);
+}
+
 /* Override Badge */
 .override-badge {
     display: inline-flex;
@@ -884,6 +892,11 @@ button:disabled {
 .review-item-badge.unsafe {
     background: rgba(239, 68, 68, 0.15);
     color: var(--danger-color);
+}
+
+.review-item-badge.pending {
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
 }
 
 .review-item-override {
@@ -1190,6 +1203,12 @@ button:disabled {
     border: 1px solid rgba(239, 68, 68, 0.4);
 }
 
+.ov-pending {
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.4);
+}
+
 .view-mode-toggle {
     display: flex;
     gap: 0.4rem;
@@ -1284,6 +1303,11 @@ button:disabled {
 .thumb-badge.unsafe {
     background: rgba(239, 68, 68, 0.85);
     color: #fff;
+}
+
+.thumb-badge.pending {
+    background: rgba(251, 191, 36, 0.85);
+    color: #000;
 }
 
 .thumb-override {
@@ -1386,6 +1410,12 @@ button:disabled {
     background: rgba(239, 68, 68, 0.15);
     color: var(--danger-color);
     border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.list-row-badge.pending {
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(251, 191, 36, 0.4);
 }
 
 .overview-footer {

@@ -145,6 +145,10 @@
                             <label for="unsafe-folder">不可公開存放資料夾 (Unsafe)</label>
                             <input type="text" id="unsafe-folder" placeholder="例如：/Users/.../unsafe_images">
                         </div>
+                        <div class="input-group">
+                            <label for="pending-folder">待人員判定資料夾 (Pending)</label>
+                            <input type="text" id="pending-folder" placeholder="例如：/Users/.../pending_images">
+                        </div>
                         <button id="organize-btn" class="secondary-btn">複製檔案並歸檔</button>
                     </div>
                 </div>
@@ -198,6 +202,7 @@
                             <span class="ov-total">共 <strong id="ov-total">0</strong> 張</span>
                             <span class="ov-badge ov-safe">Safe: <strong id="ov-safe">0</strong></span>
                             <span class="ov-badge ov-unsafe">Unsafe: <strong id="ov-unsafe">0</strong></span>
+                            <span class="ov-badge ov-pending">Pending: <strong id="ov-pending">0</strong></span>
                         </div>
                         <div class="view-mode-toggle">
                             <button id="btn-view-thumbnail" class="view-mode-btn active" onclick="window.__setOverviewMode('thumbnail')" title="縮圖顯示">⊞ 縮圖</button>
@@ -266,6 +271,9 @@
                             <button class="decision-btn" id="btn-set-safe" onclick="window.__setDecision('safe')">
                                 ✅ 設為 Safe
                             </button>
+                            <button class="decision-btn" id="btn-set-pending" onclick="window.__setDecision('pending')">
+                                ⏳ 待人員判定
+                            </button>
                             <button class="decision-btn" id="btn-set-unsafe" onclick="window.__setDecision('unsafe')">
                                 ❌ 設為 Unsafe
                             </button>
@@ -279,6 +287,7 @@
                         <h3>📋 裁決清單</h3>
                         <div class="review-counts">
                             <span class="safe-count" id="review-safe-count">Safe: 0</span>
+                            <span class="pending-count" id="review-pending-count">Pending: 0</span>
                             <span class="unsafe-count" id="review-unsafe-count">Unsafe: 0</span>
                         </div>
                     </div>

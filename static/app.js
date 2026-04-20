@@ -232,10 +232,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Review Elements
     const decisionButtons = document.getElementById('decision-buttons');
     const btnSetSafe = document.getElementById('btn-set-safe');
+    const btnSetPending = document.getElementById('btn-set-pending');
     const btnSetUnsafe = document.getElementById('btn-set-unsafe');
     const reviewSummary = document.getElementById('review-summary');
     const reviewList = document.getElementById('review-list');
     const reviewSafeCount = document.getElementById('review-safe-count');
+    const reviewPendingCount = document.getElementById('review-pending-count');
     const reviewUnsafeCount = document.getElementById('review-unsafe-count');
     const finalizeBtn = document.getElementById('finalize-btn');
 
@@ -519,9 +521,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateStatsUI(filename, analysis) {
         fileNameDisplay.textContent = filename;
 
-        if (analysis.is_safe_for_public) {
+        const status = analysis.moderation_status || (analysis.is_safe_for_public ? 'public' : 'private');
+        if (status === 'public') {
             safetyBadge.textContent = '可公開 (Safe)';
             safetyBadge.className = 'status-badge status-safe';
+        } else if (status === 'pending') {
+            safetyBadge.textContent = '待人員判定 (Pending)';
+            safetyBadge.className = 'status-badge status-pending';
         } else {
             safetyBadge.textContent = '不可公開 (Unsafe)';
             safetyBadge.className = 'status-badge status-unsafe';
@@ -643,9 +649,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             // Drive 串流模式：每行一筆 NDJSON
                             successCount++;
                             totalImages = data.total;
-                            const aiSafe = data.result ? data.result.is_safe_for_public : data.is_safe_for_public;
-                            data.user_decision = aiSafe ? 'safe' : 'unsafe';
-                            data.ai_decision = data.user_decision;
+                            const result = data.result || data;
+                            const aiStatus = result.moderation_status || (result.is_safe_for_public ? 'public' : 'private');
+                            data.user_decision = aiStatus;
+                            data.ai_decision = aiStatus;
                             currentBatchResults.push(data);
                         } else if (data.status === 'error') {
                             failedCount++;
@@ -657,8 +664,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (data.temp_folder) currentTempFolder = data.temp_folder;
                             data.results.forEach(item => {
                                 if (item.status === 'ok') {
-                                    item.user_decision = item.is_safe_for_public ? 'safe' : 'unsafe';
-                                    item.ai_decision = item.user_decision;
+                                    const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
+                                    item.user_decision = aiStatus;
+                                    item.ai_decision = aiStatus;
                                     currentBatchResults.push(item);
                                     successCount++;
                                 } else {
@@ -738,6 +746,7 @@ document.addEventListener('DOMContentLoaded', () => {
             annotatedImg.src = `/local_file/?path=${encodeURIComponent(currentData.output)}`;
 
             const fakeAnalysis = {
+                moderation_status: currentData.moderation_status,
                 is_safe_for_public: currentData.is_safe_for_public,
                 moderation_reason: currentData.moderation_reason,
                 face_bboxes: new Array(currentData.face_count),
@@ -762,13 +771,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderBatchOverview() {
-        let safeC = 0, unsafeC = 0;
+        let safeC = 0, unsafeC = 0, pendingC = 0;
         currentBatchResults.forEach(r => {
-            if (r.user_decision === 'safe') safeC++; else unsafeC++;
+            if (r.user_decision === 'safe') safeC++;
+            else if (r.user_decision === 'pending') pendingC++;
+            else unsafeC++;
         });
         document.getElementById('ov-total').textContent = currentBatchResults.length;
         document.getElementById('ov-safe').textContent = safeC;
         document.getElementById('ov-unsafe').textContent = unsafeC;
+        document.getElementById('ov-pending').textContent = pendingC;
 
         document.getElementById('btn-view-thumbnail').classList.toggle('active', batchOverviewMode === 'thumbnail');
         document.getElementById('btn-view-list').classList.toggle('active', batchOverviewMode === 'list');
@@ -791,14 +803,16 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderThumbnailGrid(container) {
         let html = '<div class="thumbnail-grid">';
         currentBatchResults.forEach((item, idx) => {
-            const isSafe = item.user_decision === 'safe';
+            const decision = item.user_decision || 'private';
             const isOverride = item.user_decision !== item.ai_decision;
             const fileName = item.file_name || item.file || `圖片 ${idx + 1}`;
             const src = getItemImgSrc(item);
+            const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
+            const badgeText = decision === 'safe' ? 'Safe' : decision === 'pending' ? 'Pending' : 'Unsafe';
             html += `<div class="thumbnail-item" data-idx="${idx}" title="${fileName}">
                 <img src="${src}" alt="${fileName}" loading="lazy">
                 <div class="thumbnail-overlay">
-                    <span class="thumb-badge ${isSafe ? 'safe' : 'unsafe'}">${isSafe ? 'Safe' : 'Unsafe'}</span>
+                    <span class="thumb-badge ${badgeClass}">${badgeText}</span>
                 </div>
                 ${isOverride ? '<span class="thumb-override">🔄</span>' : ''}
                 <div class="thumbnail-name">${fileName}</div>
@@ -814,16 +828,18 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderOverviewList(container) {
         let html = '<div class="overview-list">';
         currentBatchResults.forEach((item, idx) => {
-            const isSafe = item.user_decision === 'safe';
+            const decision = item.user_decision || 'private';
             const isOverride = item.user_decision !== item.ai_decision;
             const fileName = item.file_name || item.file || `圖片 ${idx + 1}`;
             const src = getItemImgSrc(item);
+            const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
+            const badgeText = decision === 'safe' ? 'Safe' : decision === 'pending' ? 'Pending' : 'Unsafe';
             html += `<div class="overview-list-row" data-idx="${idx}">
                 <span class="list-row-num">#${idx + 1}</span>
                 <img class="list-row-thumb" src="${src}" alt="${fileName}" loading="lazy">
                 <span class="list-row-name" title="${fileName}">${fileName}</span>
                 ${isOverride ? '<span class="list-row-override">🔄</span>' : ''}
-                <span class="list-row-badge ${isSafe ? 'safe' : 'unsafe'}">${isSafe ? 'Safe' : 'Unsafe'}</span>
+                <span class="list-row-badge ${badgeClass}">${badgeText}</span>
             </div>`;
         });
         html += '</div>';
@@ -894,13 +910,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const currentData = currentBatchResults[currentIndex];
         if (!currentData) return;
 
-        // Reset button states
         btnSetSafe.classList.remove('active-safe');
+        btnSetPending.classList.remove('active-pending');
         btnSetUnsafe.classList.remove('active-unsafe');
 
         if (currentData.user_decision === 'safe') {
             btnSetSafe.classList.add('active-safe');
-        } else if (currentData.user_decision === 'unsafe') {
+        } else if (currentData.user_decision === 'pending') {
+            btnSetPending.classList.add('active-pending');
+        } else {
             btnSetUnsafe.classList.add('active-unsafe');
         }
     }
@@ -913,16 +931,17 @@ document.addEventListener('DOMContentLoaded', () => {
         currentData.user_decision = decision;
         renderDecisionButtons();
 
-        // 更新 safety badge 顯示
         if (decision === 'safe') {
             safetyBadge.textContent = '可公開 (Safe)';
             safetyBadge.className = 'status-badge status-safe';
+        } else if (decision === 'pending') {
+            safetyBadge.textContent = '待人員判定 (Pending)';
+            safetyBadge.className = 'status-badge status-pending';
         } else {
             safetyBadge.textContent = '不可公開 (Unsafe)';
             safetyBadge.className = 'status-badge status-unsafe';
         }
 
-        // 顯示覆寫標記
         const overrideEl = document.getElementById('override-indicator');
         if (currentData.user_decision !== currentData.ai_decision) {
             if (!overrideEl) {
@@ -936,33 +955,39 @@ document.addEventListener('DOMContentLoaded', () => {
             if (overrideEl) overrideEl.remove();
         }
 
-        showToast(`已將此圖設為 ${decision === 'safe' ? '✅ Safe' : '❌ Unsafe'}`);
+        const toastText = decision === 'safe' ? '✅ Safe' : decision === 'pending' ? '⏳ Pending' : '❌ Unsafe';
+        showToast(`已將此圖設為 ${toastText}`);
     };
 
     function renderReviewSummary() {
         if (currentBatchResults.length === 0) return;
 
-        let safeC = 0, unsafeC = 0;
+        let safeC = 0, unsafeC = 0, pendingC = 0;
         let html = '';
 
         currentBatchResults.forEach((item, idx) => {
-            const isSafe = item.user_decision === 'safe';
+            const decision = item.user_decision || 'private';
             const isOverride = item.user_decision !== item.ai_decision;
-            if (isSafe) safeC++; else unsafeC++;
+            if (decision === 'safe') safeC++;
+            else if (decision === 'pending') pendingC++;
+            else unsafeC++;
 
             const fileName = item.file_name || item.file || `圖片 ${idx + 1}`;
             const currentClass = idx === currentIndex ? ' current' : '';
+            const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
+            const badgeText = decision === 'safe' ? 'Safe' : decision === 'pending' ? 'Pending' : 'Unsafe';
 
             html += `<div class="review-item${currentClass}" data-idx="${idx}">
                 <span class="review-item-index">#${idx + 1}</span>
                 <span class="review-item-name" title="${fileName}">${fileName}</span>
                 ${isOverride ? '<span class="review-item-override">🔄</span>' : ''}
-                <span class="review-item-badge ${isSafe ? 'safe' : 'unsafe'}">${isSafe ? 'Safe' : 'Unsafe'}</span>
+                <span class="review-item-badge ${badgeClass}">${badgeText}</span>
             </div>`;
         });
 
         reviewList.innerHTML = html;
         reviewSafeCount.textContent = `Safe: ${safeC}`;
+        reviewPendingCount.textContent = `Pending: ${pendingC}`;
         reviewUnsafeCount.textContent = `Unsafe: ${unsafeC}`;
 
         // 點擊跳轉
@@ -1006,6 +1031,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (batchMode === 'local') {
             const safe = safeFolder.value.trim();
             const unsafe = unsafeFolder.value.trim();
+            const pending = document.getElementById('pending-folder').value.trim();
             if (!safe || !unsafe) {
                 showToast('請填寫安全與不安全的分流資料夾路徑', 'error');
                 return;
@@ -1013,6 +1039,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const adjusted = currentBatchResults.map(r => ({
                 ...r,
+                moderation_status: r.user_decision,
                 is_safe_for_public: r.user_decision === 'safe'
             }));
 
@@ -1021,7 +1048,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const res = await fetch('/organize_batch/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ results: adjusted, safe_folder: safe, unsafe_folder: unsafe })
+                    body: JSON.stringify({
+                        results: adjusted,
+                        safe_folder: safe,
+                        unsafe_folder: unsafe,
+                        pending_folder: pending || null
+                    })
                 });
                 if (!res.ok) throw new Error('歸檔失敗');
                 const data = await res.json();
