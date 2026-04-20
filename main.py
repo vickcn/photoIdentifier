@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Response, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -154,7 +154,10 @@ async def visualize_photo(file: UploadFile = File(...)):
 
 
 @app.post("/analyze_with_image/")
-async def analyze_with_image(file: UploadFile = File(...)):
+async def analyze_with_image(
+    file: UploadFile = File(...),
+    color_rules_json: Optional[str] = Form(None),
+):
     """專門給單圖 UI 使用，回傳 JSON 結果，且夾帶畫好框的 base64 圖片供前端立即渲染"""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="請上傳圖片檔案")
@@ -164,10 +167,12 @@ async def analyze_with_image(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="圖片內容為空")
         if len(image_bytes) > MAX_UPLOAD_SIZE_BYTES:
             raise HTTPException(status_code=413, detail="圖片大小超過限制")
-        
-        analysis_result, drawn_image_bytes = await process_and_visualize_photo(image_bytes, file.content_type)
+
+        color_rules = json.loads(color_rules_json) if color_rules_json else None
+        analysis_result, drawn_image_bytes = await process_and_visualize_photo(
+            image_bytes, file.content_type, color_rules=color_rules
+        )
         drawn_b64 = base64.b64encode(drawn_image_bytes).decode('utf-8')
-        
         return {
             "analysis": analysis_result.model_dump(),
             "drawn_image_b64": drawn_b64
@@ -179,20 +184,25 @@ async def analyze_with_image(file: UploadFile = File(...)):
 
 class BatchRequest(BaseModel):
     input_folder: str
-    output_folder: str
     concurrency: int = 3
+    color_rules: Optional[list] = None
 
 @app.post("/batch/")
 async def batch_visualize(req: BatchRequest):
+    from datetime import datetime
     input_path = Path(req.input_folder)
     if not input_path.exists() or not input_path.is_dir():
         raise HTTPException(status_code=400, detail=f"資料夾不存在：{req.input_folder}")
 
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    temp_folder = str(input_path / f"review_temp_{ts}")
+
     try:
         results = await batch_process_folder(
             input_dir=req.input_folder,
-            output_dir=req.output_folder,
+            output_dir=temp_folder,
             concurrency=req.concurrency,
+            color_rules=req.color_rules,
         )
         ok = [r for r in results if r["status"] == "ok"]
         err = [r for r in results if r["status"] == "error"]
@@ -200,7 +210,7 @@ async def batch_visualize(req: BatchRequest):
             "total": len(results),
             "success": len(ok),
             "failed": len(err),
-            "output_folder": req.output_folder,
+            "temp_folder": temp_folder,
             "results": results,
         }
     except Exception as e:
@@ -212,6 +222,7 @@ class DriveBatchRequest(BaseModel):
     folder_id: str
     target_folder_id: Optional[str] = None
     concurrency: int = 3
+    color_rules: Optional[list] = None
 
 @app.post("/batch_drive/")
 async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
@@ -261,7 +272,8 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                     folder_id=req.folder_id,
                     credentials=creds,
                     target_folder_id=req.target_folder_id,
-                    concurrency=req.concurrency
+                    concurrency=req.concurrency,
+                    color_rules=req.color_rules,
                 ):
                     # 每一筆結果都轉成 JSON 並加上換行符號推播出去
                     yield json.dumps(chunk, ensure_ascii=False) + "\n"
@@ -321,6 +333,19 @@ def google_auth_callback(request: Request, code: str, state: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/auth/access_token")
+def get_access_token(request: Request):
+    """回傳目前 session 使用者的 OAuth access token，供前端 Picker 使用。"""
+    user_key = request.session.get("user_key")
+    if not user_key:
+        raise HTTPException(status_code=401, detail="尚未登入")
+    try:
+        creds = load_user_credentials(user_key)
+        return {"access_token": creds.token}
+    except Exception:
+        raise HTTPException(status_code=401, detail="尚未授權或憑證已失效")
+
+
 class OrganizeRequest(BaseModel):
     results: list[dict]
     safe_folder: str
@@ -366,6 +391,41 @@ async def organize_batch(req: OrganizeRequest):
     }
 
 
+@app.get("/review_temp_folders/")
+async def list_review_temp_folders(input_folder: str):
+    input_path = Path(input_folder)
+    if not input_path.exists() or not input_path.is_dir():
+        raise HTTPException(status_code=400, detail="資料夾不存在")
+    folders = []
+    for d in sorted(input_path.iterdir(), reverse=True):
+        if d.is_dir() and d.name.startswith("review_temp_"):
+            size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+            folders.append({
+                "name": d.name,
+                "path": str(d),
+                "size_mb": round(size / 1024 / 1024, 2),
+            })
+    return {"folders": folders}
+
+
+class DeleteTempFolderRequest(BaseModel):
+    input_folder: str
+    folder_name: str
+
+@app.post("/delete_review_temp/")
+async def delete_review_temp(req: DeleteTempFolderRequest):
+    if not req.folder_name.startswith("review_temp_"):
+        raise HTTPException(status_code=400, detail="只能刪除 review_temp_ 開頭的資料夾")
+    folder_path = Path(req.input_folder) / req.folder_name
+    if not folder_path.exists():
+        raise HTTPException(status_code=404, detail="暫存資料夾不存在")
+    try:
+        shutil.rmtree(folder_path)
+        return {"message": f"已刪除：{req.folder_name}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"刪除失敗：{e}") from e
+
+
 class FinalizeReviewRequest(BaseModel):
     decisions: list[dict]  # [{file_name, drive_id, user_decision: "safe"|"unsafe"}, ...]
     target_folder_id: str
@@ -400,7 +460,7 @@ async def finalize_review(req: FinalizeReviewRequest, request: Request):
         safe_folder_id = await run_in_threadpool(get_or_create_subfolder, "Safe_Results", req.target_folder_id)
         unsafe_folder_id = await run_in_threadpool(get_or_create_subfolder, "Unsafe_Results", req.target_folder_id)
 
-        moved_count = 0
+        copied_count = 0
         errors = []
 
         for item in req.decisions:
@@ -415,28 +475,21 @@ async def finalize_review(req: FinalizeReviewRequest, request: Request):
             target_parent = safe_folder_id if decision == "safe" else unsafe_folder_id
 
             try:
-                # 取得檔案目前的 parents
-                file_info = await run_in_threadpool(
-                    lambda: drive_service.files().get(fileId=file_id, fields="parents").execute()
-                )
-                current_parents = ",".join(file_info.get("parents", []))
-
-                # 移動檔案：移除舊 parent，加入新 parent
+                # 複製檔案到目標資料夾（原檔留在原處）
                 await run_in_threadpool(
-                    lambda fid=file_id, tp=target_parent, cp=current_parents: drive_service.files().update(
+                    lambda fid=file_id, tp=target_parent, fn=file_name: drive_service.files().copy(
                         fileId=fid,
-                        addParents=tp,
-                        removeParents=cp,
-                        fields="id, parents"
+                        body={"name": fn, "parents": [tp]},
+                        fields="id"
                     ).execute()
                 )
-                moved_count += 1
+                copied_count += 1
             except Exception as e:
                 errors.append(f"{file_name}: {str(e)}")
 
         return {
-            "message": f"成功歸檔 {moved_count} 個檔案到 Drive。",
-            "moved": moved_count,
+            "message": f"成功複製歸檔 {copied_count} 個檔案到 Drive。",
+            "moved": copied_count,
             "errors": errors
         }
 

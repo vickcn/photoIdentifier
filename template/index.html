@@ -64,9 +64,16 @@
                             <label for="batch-input-folder">來源資料夾 (絕對路徑)</label>
                             <input type="text" id="batch-input-folder" placeholder="例如：/Users/.../data">
                         </div>
-                        <div class="input-group">
-                            <label for="batch-output-folder">標註圖存放路徑 (絕對路徑)</label>
-                            <input type="text" id="batch-output-folder" placeholder="例如：/Users/.../tmp/batch_out">
+                        <!-- Temp folder management (shown when review_temp_* folders exist) -->
+                        <div id="temp-folder-mgmt" class="temp-folder-mgmt hidden">
+                            <div class="temp-mgmt-header">
+                                <span class="temp-mgmt-label">📁 標註暫存資料夾</span>
+                                <button class="icon-btn" id="btn-refresh-temp" onclick="window.__refreshTempFolders()" title="重新整理列表">↻</button>
+                            </div>
+                            <div class="temp-select-row">
+                                <select id="temp-folder-select" class="temp-select"></select>
+                                <button class="danger-btn" id="btn-clear-temp" onclick="window.__clearSelectedTempFolder()">清空</button>
+                            </div>
                         </div>
                     </div>
 
@@ -95,6 +102,26 @@
                         <label for="batch-concurrency">並行數量</label>
                         <input type="number" id="batch-concurrency" value="3" min="1" max="10">
                     </div>
+
+                    <!-- Color Rules Panel -->
+                    <div class="color-rules-panel">
+                        <button class="color-rules-toggle" id="btn-toggle-color-rules" onclick="window.__toggleColorRules()">
+                            <span>帶子顏色規則</span>
+                            <span class="color-rules-arrow" id="color-rules-arrow">▼</span>
+                        </button>
+                        <div class="color-rules-body hidden" id="color-rules-body">
+                            <div class="color-legend">
+                                <span class="legend-item safe-legend">可公開</span>
+                                <span class="legend-item unsafe-legend">不可公開</span>
+                                <button class="color-rules-reset" onclick="window.__resetColorRules()">還原預設</button>
+                            </div>
+                            <div class="color-swatches-grid" id="color-swatches-grid">
+                                <!-- Rendered by JS -->
+                            </div>
+                            <p class="color-rules-hint">點擊色票切換「可 / 不可公開」</p>
+                        </div>
+                    </div>
+
                     <button id="analyze-batch-btn" class="primary-btn">開始批量辨識</button>
 
                     <!-- Batch Organize Area -->
@@ -154,6 +181,27 @@
                     <p>尚未載入圖片，請從左側上傳或指定批量資料夾</p>
                 </div>
 
+                <!-- Batch Overview (shown after all images processed) -->
+                <div id="batch-overview" class="batch-overview hidden">
+                    <div class="overview-header">
+                        <div class="overview-stats">
+                            <span class="ov-total">共 <strong id="ov-total">0</strong> 張</span>
+                            <span class="ov-badge ov-safe">Safe: <strong id="ov-safe">0</strong></span>
+                            <span class="ov-badge ov-unsafe">Unsafe: <strong id="ov-unsafe">0</strong></span>
+                        </div>
+                        <div class="view-mode-toggle">
+                            <button id="btn-view-thumbnail" class="view-mode-btn active" onclick="window.__setOverviewMode('thumbnail')" title="縮圖顯示">⊞ 縮圖</button>
+                            <button id="btn-view-list" class="view-mode-btn" onclick="window.__setOverviewMode('list')" title="列表顯示">☰ 列表</button>
+                        </div>
+                    </div>
+                    <div id="overview-content" class="overview-content"></div>
+                    <div class="overview-footer">
+                        <button class="finalize-btn" id="overview-finalize-btn" onclick="window.__finalizeReview()">
+                            🚀 確認並批次歸檔
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Viewer + Review Side-by-Side Wrapper -->
                 <div id="viewer-review-wrapper" class="viewer-review-wrapper">
 
@@ -163,6 +211,7 @@
                     <button class="fs-close-btn" id="fs-close-btn" onclick="window.__exitFullscreen()" title="離開全螢幕">✕ 離開全螢幕</button>
 
                     <div class="viewer-nav" id="viewer-nav">
+                        <button class="back-to-overview-btn hidden" id="back-to-overview-btn" onclick="window.__backToOverview()">← 返回總覽</button>
                         <button class="nav-btn" id="prev-btn">◀</button>
                         <span class="page-indicator" id="page-indicator">1 / 1</span>
                         <button class="nav-btn" id="next-btn">▶</button>
