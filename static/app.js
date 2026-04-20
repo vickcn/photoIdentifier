@@ -396,6 +396,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         
                         // 進度與結果處理
                         if (data.status === 'ok') {
+                            // Drive 串流模式：每行一筆 NDJSON
                             successCount++;
                             totalImages = data.total;
                             const aiSafe = data.result ? data.result.is_safe_for_public : data.is_safe_for_public;
@@ -405,7 +406,21 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else if (data.status === 'error') {
                             failedCount++;
                             totalImages = data.total || totalImages;
-                            showToast(`${data.file_name} 辨識出錯`, 'error');
+                            showToast(`${data.file_name || data.file} 辨識出錯`, 'error');
+                        } else if (data.results && Array.isArray(data.results)) {
+                            // 本機批次模式：一次性完整 JSON 回應
+                            totalImages = data.total || data.results.length;
+                            data.results.forEach(item => {
+                                if (item.status === 'ok') {
+                                    item.user_decision = item.is_safe_for_public ? 'safe' : 'unsafe';
+                                    item.ai_decision = item.user_decision;
+                                    currentBatchResults.push(item);
+                                    successCount++;
+                                } else {
+                                    failedCount++;
+                                    showToast(`${item.file} 辨識出錯`, 'error');
+                                }
+                            });
                         }
 
                         // 更新 UI 進度
