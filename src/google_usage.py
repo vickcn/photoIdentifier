@@ -171,10 +171,16 @@ async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rul
        - 可公開顏色：「{safe_names}」→ has_unsafe_strap = false
        - 無帶子 → has_unsafe_strap = false
 
-    5. 判斷圖片中是否有「小孩（兒童、未成年）」且這些人「沒有配戴名牌」：
-       - 所有小孩都有配戴名牌 → has_children_without_badge = false
-       - 至少一名小孩沒有配戴名牌 → has_children_without_badge = true
-       - 圖片中沒有小孩 → has_children_without_badge = false
+    5. 逐一確認圖片中每一名「小孩（兒童、未成年）」：
+       請判斷每個小孩「自己身上」是否有掛著名牌帶子（lanyard/strap 繞過頸部/肩膀）。
+
+       ⚠️ 重要判斷原則：
+       - 只有帶子明顯掛在「該小孩自身」頸部或肩膀上才算配戴
+       - 不可把鄰近其他人的帶子算作這個小孩的帶子
+       - 若有任何一名小孩「沒有在自己身上」看到名牌帶子 → has_children_without_badge = true
+       - 若所有小孩都明確有自己的名牌帶子 → has_children_without_badge = false
+       - 圖中沒有小孩 → has_children_without_badge = false
+       - ⚠️ 寧可標記為待確認（true），不可漏判
 
     【必須輸出的 JSON 欄位】：
     - "has_face" (boolean)
