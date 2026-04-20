@@ -1390,3 +1390,151 @@ button:disabled {
     background: rgba(239, 68, 68, 0.25);
 }
 
+/* === Color Rules Panel === */
+.color-rules-panel {
+    border: 1px solid var(--glass-border);
+    border-radius: 0.65rem;
+    overflow: hidden;
+}
+
+.color-rules-toggle {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.04);
+    border: none;
+    color: var(--text-secondary);
+    padding: 0.55rem 0.85rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    font-size: 0.82rem;
+    transition: background 0.15s;
+}
+
+.color-rules-toggle:hover {
+    background: rgba(99, 102, 241, 0.1);
+    color: var(--text-primary);
+}
+
+.color-rules-arrow {
+    font-size: 0.7rem;
+    opacity: 0.6;
+}
+
+.color-rules-body {
+    padding: 0.75rem;
+    border-top: 1px solid var(--glass-border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.color-legend {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    font-size: 0.72rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 2rem;
+}
+
+.safe-legend {
+    background: rgba(99, 102, 241, 0.2);
+    color: var(--accent-color);
+    border: 1px solid rgba(99, 102, 241, 0.5);
+}
+
+.unsafe-legend {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger-color);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.color-rules-reset {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 2rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.color-rules-reset:hover {
+    border-color: var(--accent-color);
+    color: var(--text-primary);
+}
+
+.color-swatches-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.45rem;
+}
+
+.color-swatch {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.35rem 0.25rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all 0.15s;
+    background: rgba(255,255,255,0.03);
+}
+
+.color-swatch:hover {
+    background: rgba(255,255,255,0.07);
+    transform: translateY(-1px);
+}
+
+.swatch-safe {
+    border-color: rgba(99, 102, 241, 0.6);
+}
+
+.swatch-unsafe {
+    border-color: rgba(239, 68, 68, 0.35);
+}
+
+.swatch-color {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(255,255,255,0.15);
+    flex-shrink: 0;
+}
+
+.swatch-name {
+    font-size: 0.65rem;
+    color: var(--text-primary);
+    text-align: center;
+    line-height: 1.2;
+}
+
+.swatch-status {
+    font-size: 0.6rem;
+    color: var(--text-secondary);
+}
+
+.swatch-safe .swatch-status {
+    color: var(--accent-color);
+}
+
+.swatch-unsafe .swatch-status {
+    color: var(--danger-color);
+}
+
+.color-rules-hint {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    text-align: center;
+    opacity: 0.7;
+}
+

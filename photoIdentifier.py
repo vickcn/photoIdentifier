@@ -40,18 +40,16 @@ def resize_image_if_needed(image_bytes: bytes, max_size: int = 1600) -> bytes:
     img.save(out, format="JPEG", quality=85)
     return out.getvalue()
 
-async def process_and_visualize_photo(image_bytes: bytes, content_type: str = "image/jpeg") -> Tuple[PhotoAnalysisResult, bytes]:
+async def process_and_visualize_photo(image_bytes: bytes, content_type: str = "image/jpeg", color_rules: list | None = None) -> Tuple[PhotoAnalysisResult, bytes]:
     """
     整合 google_usage 跟 aoi 模組：
     1. 縮圖處理（防止 HTTP 400 並加速）
     2. 將圖片送往 Google Vertex AI 進行邏輯判斷與物件偵測
     3. 解析出 bbox 座標後，將邊界框畫上圖片
     """
-    # 預先縮圖優化
     processed_image_bytes = resize_image_if_needed(image_bytes)
-    
     b64_image = base64.b64encode(processed_image_bytes).decode('utf-8')
-    analysis_result = await analyze_brand_strap_image(b64_image, content_type)
+    analysis_result = await analyze_brand_strap_image(b64_image, content_type, color_rules=color_rules)
     
     drawn_image_bytes = draw_bboxes_on_image(
         image_bytes=processed_image_bytes,
@@ -68,6 +66,7 @@ async def batch_process_folder(
     input_dir: str,
     output_dir: str,
     concurrency: int = 3,
+    color_rules: list | None = None,
 ) -> list[dict]:
     """
     批量掃描資料夾內所有圖檔，並行辨識後將後製圖存至 output_dir
@@ -88,8 +87,7 @@ async def batch_process_folder(
             try:
                 image_bytes = file.read_bytes()
                 mime_type = mimetypes.guess_type(str(file))[0] or "image/jpeg"
-                result, drawn_bytes = await process_and_visualize_photo(image_bytes, mime_type)
-                
+                result, drawn_bytes = await process_and_visualize_photo(image_bytes, mime_type, color_rules=color_rules)
                 out_file = output_path / f"annotated_{file.name}"
                 out_file.write_bytes(drawn_bytes)
                 
@@ -243,7 +241,7 @@ async def batch_process_drive(
     results = await asyncio.gather(*tasks)
     return results
 
-async def batch_process_drive_stream(folder_id: str, credentials, target_folder_id: str = None, concurrency: int = 3):
+async def batch_process_drive_stream(folder_id: str, credentials, target_folder_id: str = None, concurrency: int = 3, color_rules: list | None = None):
     """
     與 batch_process_drive 類似，但這是一個 Async Generator，會逐一 yield 每張圖的結果。
     用於實現即時進度條推送。
@@ -303,7 +301,7 @@ async def batch_process_drive_stream(folder_id: str, credentials, target_folder_
 
                 # 辨識 (使用 config.json 中設定的 timeout，防止 AI API 掛住)
                 analysis, drawn_bytes = await asyncio.wait_for(
-                    process_and_visualize_photo(image_bytes, mime_type),
+                    process_and_visualize_photo(image_bytes, mime_type, color_rules=color_rules),
                     timeout=float(REQUEST_TIMEOUT)
                 )
 

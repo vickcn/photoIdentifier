@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Response, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -154,7 +154,10 @@ async def visualize_photo(file: UploadFile = File(...)):
 
 
 @app.post("/analyze_with_image/")
-async def analyze_with_image(file: UploadFile = File(...)):
+async def analyze_with_image(
+    file: UploadFile = File(...),
+    color_rules_json: Optional[str] = Form(None),
+):
     """專門給單圖 UI 使用，回傳 JSON 結果，且夾帶畫好框的 base64 圖片供前端立即渲染"""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="請上傳圖片檔案")
@@ -164,10 +167,12 @@ async def analyze_with_image(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="圖片內容為空")
         if len(image_bytes) > MAX_UPLOAD_SIZE_BYTES:
             raise HTTPException(status_code=413, detail="圖片大小超過限制")
-        
-        analysis_result, drawn_image_bytes = await process_and_visualize_photo(image_bytes, file.content_type)
+
+        color_rules = json.loads(color_rules_json) if color_rules_json else None
+        analysis_result, drawn_image_bytes = await process_and_visualize_photo(
+            image_bytes, file.content_type, color_rules=color_rules
+        )
         drawn_b64 = base64.b64encode(drawn_image_bytes).decode('utf-8')
-        
         return {
             "analysis": analysis_result.model_dump(),
             "drawn_image_b64": drawn_b64
@@ -180,6 +185,7 @@ async def analyze_with_image(file: UploadFile = File(...)):
 class BatchRequest(BaseModel):
     input_folder: str
     concurrency: int = 3
+    color_rules: Optional[list] = None
 
 @app.post("/batch/")
 async def batch_visualize(req: BatchRequest):
@@ -196,6 +202,7 @@ async def batch_visualize(req: BatchRequest):
             input_dir=req.input_folder,
             output_dir=temp_folder,
             concurrency=req.concurrency,
+            color_rules=req.color_rules,
         )
         ok = [r for r in results if r["status"] == "ok"]
         err = [r for r in results if r["status"] == "error"]
@@ -215,6 +222,7 @@ class DriveBatchRequest(BaseModel):
     folder_id: str
     target_folder_id: Optional[str] = None
     concurrency: int = 3
+    color_rules: Optional[list] = None
 
 @app.post("/batch_drive/")
 async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
@@ -264,7 +272,8 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                     folder_id=req.folder_id,
                     credentials=creds,
                     target_folder_id=req.target_folder_id,
-                    concurrency=req.concurrency
+                    concurrency=req.concurrency,
+                    color_rules=req.color_rules,
                 ):
                     # 每一筆結果都轉成 JSON 並加上換行符號推播出去
                     yield json.dumps(chunk, ensure_ascii=False) + "\n"

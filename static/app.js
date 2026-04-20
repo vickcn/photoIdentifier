@@ -146,6 +146,63 @@ document.addEventListener('DOMContentLoaded', () => {
     // Refresh when user leaves input folder field
     inputFolder.addEventListener('blur', () => refreshTempFolders(inputFolder.value.trim()));
 
+    // === Color Rules ===
+    const DEFAULT_COLOR_SWATCHES = [
+        { name: "藍色",   keywords: ["藍"],        hex: "#1E56D6", rgb: [30,  86,  214], safe: true  },
+        { name: "深藍色", keywords: ["深藍","navy"],hex: "#003087", rgb: [0,   48,  135], safe: true  },
+        { name: "青色",   keywords: ["青"],         hex: "#00C0C0", rgb: [0,   192, 192], safe: false },
+        { name: "紅色",   keywords: ["紅"],         hex: "#DC2626", rgb: [220, 38,  38],  safe: false },
+        { name: "橙色",   keywords: ["橙","橘"],    hex: "#EA580C", rgb: [234, 88,  12],  safe: false },
+        { name: "黃色",   keywords: ["黃"],         hex: "#D97706", rgb: [217, 119, 6],   safe: false },
+        { name: "綠色",   keywords: ["綠"],         hex: "#16A34A", rgb: [22,  163, 74],  safe: false },
+        { name: "紫色",   keywords: ["紫"],         hex: "#7C3AED", rgb: [124, 58,  237], safe: false },
+        { name: "粉色",   keywords: ["粉","桃"],    hex: "#EC4899", rgb: [236, 72,  153], safe: false },
+        { name: "黑色",   keywords: ["黑"],         hex: "#1A1A1A", rgb: [26,  26,  26],  safe: false },
+        { name: "白色",   keywords: ["白"],         hex: "#F0F0F0", rgb: [240, 240, 240], safe: false },
+        { name: "灰色",   keywords: ["灰"],         hex: "#6B7280", rgb: [107, 114, 128], safe: false },
+    ];
+
+    let colorSwatches = JSON.parse(localStorage.getItem('colorSwatches') || 'null') || DEFAULT_COLOR_SWATCHES.map(s => ({...s}));
+
+    function saveColorSwatches() {
+        localStorage.setItem('colorSwatches', JSON.stringify(colorSwatches));
+    }
+
+    function renderColorSwatches() {
+        const grid = document.getElementById('color-swatches-grid');
+        if (!grid) return;
+        grid.innerHTML = colorSwatches.map((s, idx) => `
+            <div class="color-swatch ${s.safe ? 'swatch-safe' : 'swatch-unsafe'}" data-idx="${idx}"
+                 title="${s.name}\n${s.hex}\nRGB(${s.rgb.join(', ')})">
+                <div class="swatch-color" style="background:${s.hex}"></div>
+                <span class="swatch-name">${s.name}</span>
+                <span class="swatch-status">${s.safe ? '可公開' : '不可'}</span>
+            </div>`
+        ).join('');
+        grid.querySelectorAll('.color-swatch').forEach(el => {
+            el.addEventListener('click', () => {
+                const idx = parseInt(el.dataset.idx);
+                colorSwatches[idx].safe = !colorSwatches[idx].safe;
+                saveColorSwatches();
+                renderColorSwatches();
+            });
+        });
+    }
+
+    window.__toggleColorRules = function() {
+        const body = document.getElementById('color-rules-body');
+        const arrow = document.getElementById('color-rules-arrow');
+        const collapsed = body.classList.toggle('hidden');
+        arrow.textContent = collapsed ? '▼' : '▲';
+        if (!collapsed) renderColorSwatches();
+    };
+
+    window.__resetColorRules = function() {
+        colorSwatches = DEFAULT_COLOR_SWATCHES.map(s => ({...s}));
+        saveColorSwatches();
+        renderColorSwatches();
+    };
+
     // Review Elements
     const decisionButtons = document.getElementById('decision-buttons');
     const btnSetSafe = document.getElementById('btn-set-safe');
@@ -292,6 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
         showLoading(true);
         const formData = new FormData();
         formData.append('file', singleSelectedFile);
+        formData.append('color_rules_json', JSON.stringify(colorSwatches));
 
         try {
             const res = await fetch('/analyze_with_image/', {
@@ -374,7 +432,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             body = {
                 input_folder: inputDir,
-                concurrency: currentConcurrency
+                concurrency: currentConcurrency,
+                color_rules: colorSwatches,
             };
         } else {
             const fId = driveFolderId.value.trim();
@@ -387,7 +446,8 @@ document.addEventListener('DOMContentLoaded', () => {
             body = {
                 folder_id: fId,
                 target_folder_id: tId || null,
-                concurrency: currentConcurrency
+                concurrency: currentConcurrency,
+                color_rules: colorSwatches,
             };
         }
 

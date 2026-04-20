@@ -102,6 +102,26 @@
                         <label for="batch-concurrency">並行數量</label>
                         <input type="number" id="batch-concurrency" value="3" min="1" max="10">
                     </div>
+
+                    <!-- Color Rules Panel -->
+                    <div class="color-rules-panel">
+                        <button class="color-rules-toggle" id="btn-toggle-color-rules" onclick="window.__toggleColorRules()">
+                            <span>帶子顏色規則</span>
+                            <span class="color-rules-arrow" id="color-rules-arrow">▼</span>
+                        </button>
+                        <div class="color-rules-body hidden" id="color-rules-body">
+                            <div class="color-legend">
+                                <span class="legend-item safe-legend">可公開</span>
+                                <span class="legend-item unsafe-legend">不可公開</span>
+                                <button class="color-rules-reset" onclick="window.__resetColorRules()">還原預設</button>
+                            </div>
+                            <div class="color-swatches-grid" id="color-swatches-grid">
+                                <!-- Rendered by JS -->
+                            </div>
+                            <p class="color-rules-hint">點擊色票切換「可 / 不可公開」</p>
+                        </div>
+                    </div>
+
                     <button id="analyze-batch-btn" class="primary-btn">開始批量辨識</button>
 
                     <!-- Batch Organize Area -->
