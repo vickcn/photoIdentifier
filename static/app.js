@@ -234,9 +234,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn("Native fullscreen failed:", err);
             }
         } else {
+            resetZoom();
             splitViewer.classList.remove('fullscreen-mode');
             document.body.style.overflow = '';
-            
+
             // Exit native browser fullscreen if we are in it
             try {
                 if (document.fullscreenElement || document.webkitFullscreenElement) {
@@ -255,6 +256,54 @@ document.addEventListener('DOMContentLoaded', () => {
     // Expose for HTML onclick attributes
     window.__toggleFullscreen = () => toggleFullscreen();
     window.__exitFullscreen   = () => toggleFullscreen(false);
+
+    // === Fullscreen Zoom (wheel + pinch-to-zoom) ===
+    let zoomScale = 1;
+    const ZOOM_MIN = 1, ZOOM_MAX = 5;
+
+    function applyZoom() {
+        viewerImages.style.transformOrigin = 'center center';
+        viewerImages.style.transform = zoomScale > 1 ? `scale(${zoomScale.toFixed(3)})` : '';
+        splitViewer.classList.toggle('zoomed', zoomScale > 1);
+    }
+
+    function resetZoom() {
+        zoomScale = 1;
+        applyZoom();
+    }
+
+    // Desktop: mouse wheel zoom
+    viewerImages.addEventListener('wheel', (e) => {
+        if (!splitViewer.classList.contains('fullscreen-mode')) return;
+        e.preventDefault();
+        zoomScale = Math.min(Math.max(zoomScale * (e.deltaY < 0 ? 1.15 : 1 / 1.15), ZOOM_MIN), ZOOM_MAX);
+        applyZoom();
+    }, { passive: false });
+
+    // Mobile: pinch-to-zoom
+    let pinchStartDist = null, pinchStartScale = 1;
+
+    function getPinchDist(touches) {
+        const dx = touches[0].clientX - touches[1].clientX;
+        const dy = touches[0].clientY - touches[1].clientY;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    viewerImages.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 2) {
+            pinchStartDist = getPinchDist(e.touches);
+            pinchStartScale = zoomScale;
+        }
+    }, { passive: true });
+
+    viewerImages.addEventListener('touchmove', (e) => {
+        if (e.touches.length !== 2 || pinchStartDist === null) return;
+        e.preventDefault();
+        zoomScale = Math.min(Math.max(pinchStartScale * getPinchDist(e.touches) / pinchStartDist, ZOOM_MIN), ZOOM_MAX);
+        applyZoom();
+    }, { passive: false });
+
+    viewerImages.addEventListener('touchend', () => { pinchStartDist = null; }, { passive: true });
 
     function showToast(msg, type = 'success') {
         toastEl.textContent = msg;

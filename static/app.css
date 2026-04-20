@@ -1029,6 +1029,55 @@ button:disabled {
     transform: scale(1.05);
 }
 
+/* 縮放時隱藏詳情面板，避免被放大的圖片遮住 */
+.split-viewer.fullscreen-mode.zoomed .result-details {
+    display: none;
+}
+
+/* === Mobile fullscreen: 直式比對排列 === */
+@media (max-width: 768px) {
+    .split-viewer.fullscreen-mode {
+        padding: 55px 8px 60px !important;
+    }
+
+    .split-viewer.fullscreen-mode .viewer-images {
+        flex-direction: column;
+        gap: 0.75rem;
+        align-items: stretch;
+        justify-content: center;
+        max-height: calc(100vh - 115px);
+    }
+
+    .split-viewer.fullscreen-mode .image-box {
+        flex: 1;
+        height: auto;
+        min-height: 0;
+    }
+
+    .split-viewer.fullscreen-mode .image-box img {
+        max-height: 42vh;
+        width: 100%;
+        object-fit: contain;
+    }
+
+    /* 手機全螢幕隱藏詳情，留空間給圖片 */
+    .split-viewer.fullscreen-mode .result-details {
+        display: none;
+    }
+
+    .split-viewer.fullscreen-mode .viewer-nav {
+        bottom: 0.4rem;
+        padding: 0.4rem 1rem;
+    }
+
+    .fs-close-btn {
+        padding: 0.5rem 1rem;
+        font-size: 0.85rem;
+        top: 0.75rem;
+        right: 0.75rem;
+    }
+}
+
 /* === Batch Overview === */
 .batch-overview {
     width: 100%;
