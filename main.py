@@ -460,6 +460,7 @@ class OrganizeRequest(BaseModel):
     results: list[dict]
     safe_folder: str
     unsafe_folder: str
+    pending_folder: Optional[str] = None  # 待人員判定資料夾（選填）
 
 @app.post("/organize_batch/")
 async def organize_batch(req: OrganizeRequest):
@@ -468,25 +469,37 @@ async def organize_batch(req: OrganizeRequest):
     safe_path.mkdir(parents=True, exist_ok=True)
     unsafe_path.mkdir(parents=True, exist_ok=True)
 
+    pending_path: Optional[Path] = None
+    if req.pending_folder:
+        pending_path = Path(req.pending_folder)
+        pending_path.mkdir(parents=True, exist_ok=True)
+
     moved_count = 0
     errors = []
-    
+
     for res in req.results:
         if res.get("status") != "ok":
             continue
-            
+
         orig_path = res.get("original_path")
-        is_safe = res.get("is_safe_for_public")
-        
         if not orig_path:
             continue
-            
+
         src = Path(orig_path)
         if not src.exists():
             errors.append(f"Source file missing: {src}")
             continue
 
-        dest_dir = safe_path if is_safe else unsafe_path
+        moderation_status = res.get("moderation_status", "")
+        is_safe = res.get("is_safe_for_public")
+
+        if moderation_status == "public" or (not moderation_status and is_safe):
+            dest_dir = safe_path
+        elif moderation_status == "pending" and pending_path:
+            dest_dir = pending_path
+        else:
+            dest_dir = unsafe_path
+
         dest = dest_dir / src.name
         try:
             shutil.copy2(src, dest)
@@ -569,6 +582,7 @@ async def finalize_review(req: FinalizeReviewRequest, request: Request):
 
         safe_folder_id = await run_in_threadpool(get_or_create_subfolder, "Safe_Results", req.target_folder_id)
         unsafe_folder_id = await run_in_threadpool(get_or_create_subfolder, "Unsafe_Results", req.target_folder_id)
+        pending_folder_id = await run_in_threadpool(get_or_create_subfolder, "Pending_Results", req.target_folder_id)
 
         copied_count = 0
         errors = []
@@ -582,7 +596,12 @@ async def finalize_review(req: FinalizeReviewRequest, request: Request):
                 errors.append(f"{file_name}: 缺少 drive_id")
                 continue
 
-            target_parent = safe_folder_id if decision == "safe" else unsafe_folder_id
+            if decision == "safe":
+                target_parent = safe_folder_id
+            elif decision == "pending":
+                target_parent = pending_folder_id
+            else:
+                target_parent = unsafe_folder_id
 
             try:
                 # 複製檔案到目標資料夾（原檔留在原處）
