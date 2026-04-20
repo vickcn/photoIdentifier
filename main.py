@@ -74,8 +74,73 @@ app.add_middleware(
 )
 
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
-from src.google_auth import get_auth_url, exchange_code_for_token, load_user_credentials
+from src.google_auth import get_auth_url, exchange_code_for_token, load_user_credentials, token_store, DEFAULT_SCOPES
 from photoIdentifier import process_and_visualize_photo, batch_process_folder, batch_process_drive, batch_process_drive_stream
+
+
+# ---------------------------------------------------------------------------
+# Vercel /tmp 是 instance-local 的，不跨請求共享。
+# 解法：OAuth credentials 同時備份在加密的 session cookie，
+#       load 時先嘗試 /tmp，若失效再從 session 重建。
+# ---------------------------------------------------------------------------
+
+def _save_creds_to_session(request: Request, creds) -> None:
+    """把 credentials 序列化後存入 session（去除 client_secret，從 env 補回）。"""
+    import json as _json
+    data = _json.loads(creds.to_json())
+    data.pop("client_secret", None)
+    data.pop("client_id", None)
+    request.session["drive_credentials"] = data
+
+
+def _load_creds_from_session(request: Request):
+    """從 session 重建 Credentials；失敗回傳 None。"""
+    from google.oauth2.credentials import Credentials as _Creds
+    data = request.session.get("drive_credentials")
+    if not data:
+        return None
+    data = dict(data)
+    data["client_id"]     = os.environ.get("GOOGLE_CLIENT_ID", "")
+    data["client_secret"] = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    try:
+        return _Creds.from_authorized_user_info(data, scopes=DEFAULT_SCOPES)
+    except Exception:
+        return None
+
+
+def get_drive_credentials(request: Request):
+    """
+    取得 Drive OAuth credentials：
+    1. 先嘗試本機 /tmp（本地開發 / 同 instance 命中快取）
+    2. /tmp 找不到時從 session 重建（Vercel 跨 instance 情境）
+    3. 重建後寫回 /tmp 供同 instance 後續請求使用
+    4. 每次成功都將最新狀態同步回 session
+    """
+    from google.auth.transport.requests import Request as GoogleRequest
+
+    user_key = request.session.get("user_key")
+    if not user_key:
+        raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
+
+    creds = None
+    try:
+        creds = load_user_credentials(user_key)
+    except RuntimeError:
+        pass
+
+    if creds is None:
+        creds = _load_creds_from_session(request)
+        if creds is None:
+            raise HTTPException(status_code=401, detail="Google 授權已失效，請重新連結。")
+        if creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(GoogleRequest())
+            except Exception:
+                raise HTTPException(status_code=401, detail="Google 授權已失效，請重新連結。")
+        token_store.save(user_key, creds)
+
+    _save_creds_to_session(request, creds)
+    return creds
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -232,7 +297,7 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
     
     try:
-        creds = load_user_credentials(user_key)
+        creds = get_drive_credentials(request)
         results = await batch_process_drive(
             folder_id=req.folder_id,
             credentials=creds,
@@ -263,8 +328,8 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
 
     try:
-        creds = load_user_credentials(user_key)
-        
+        creds = get_drive_credentials(request)
+
         async def event_generator():
             try:
                 # 這裡調用剛才在 photoIdentifier.py 寫好的產生器
@@ -321,11 +386,14 @@ def google_auth_callback(request: Request, code: str, state: str):
             
         code_verifier = request.session.get("oauth_code_verifier")
         
-        exchange_code_for_token(code=code, user_key=user_key, state=state, code_verifier=code_verifier)
-        
+        creds = exchange_code_for_token(code=code, user_key=user_key, state=state, code_verifier=code_verifier)
+
+        # 同步備份到 session，供 Vercel /tmp 失效時使用
+        _save_creds_to_session(request, creds)
+
         request.session.pop("oauth_state", None)
         request.session.pop("oauth_code_verifier", None)
-        
+
         # 授權成功後，導向回前端並帶上成功標記
         return RedirectResponse(url="/?auth=success")
     except Exception as e:
@@ -340,7 +408,7 @@ def get_access_token(request: Request):
     if not user_key:
         raise HTTPException(status_code=401, detail="尚未登入")
     try:
-        creds = load_user_credentials(user_key)
+        creds = get_drive_credentials(request)
         return {"access_token": creds.token}
     except Exception:
         raise HTTPException(status_code=401, detail="尚未授權或憑證已失效")
@@ -438,7 +506,7 @@ async def finalize_review(req: FinalizeReviewRequest, request: Request):
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
 
     try:
-        creds = load_user_credentials(user_key)
+        creds = get_drive_credentials(request)
         from googleapiclient.discovery import build as gbuild
         drive_service = gbuild("drive", "v3", credentials=creds, cache_discovery=False)
 
