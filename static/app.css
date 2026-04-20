@@ -1029,3 +1029,282 @@ button:disabled {
     transform: scale(1.05);
 }
 
+/* === Batch Overview === */
+.batch-overview {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.overview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--glass-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+    border-radius: 1rem;
+    padding: 0.875rem 1.25rem;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.overview-stats {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.overview-stats strong {
+    color: var(--text-primary);
+}
+
+.ov-badge {
+    padding: 0.25rem 0.65rem;
+    border-radius: 2rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.ov-safe {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--success-color);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.ov-unsafe {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger-color);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.view-mode-toggle {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.view-mode-btn {
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+    padding: 0.35rem 0.85rem;
+    border-radius: 2rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.view-mode-btn:hover {
+    border-color: var(--accent-color);
+    color: var(--text-primary);
+}
+
+.view-mode-btn.active {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+    color: #fff;
+}
+
+.overview-content {
+    min-height: 200px;
+    max-height: calc(100vh - 280px);
+    overflow-y: auto;
+}
+
+/* Thumbnail grid view */
+.thumbnail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.75rem;
+    padding: 0.25rem;
+}
+
+.thumbnail-item {
+    position: relative;
+    cursor: pointer;
+    border-radius: 0.75rem;
+    overflow: hidden;
+    border: 2px solid transparent;
+    background: var(--glass-bg);
+    transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+    aspect-ratio: 1 / 1;
+}
+
+.thumbnail-item:hover {
+    transform: translateY(-3px);
+    border-color: var(--accent-color);
+    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.3);
+}
+
+.thumbnail-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.thumbnail-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 0.4rem 0.5rem;
+    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem;
+}
+
+.thumb-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 0.15rem 0.4rem;
+    border-radius: 2rem;
+    letter-spacing: 0.03em;
+}
+
+.thumb-badge.safe {
+    background: rgba(16, 185, 129, 0.85);
+    color: #fff;
+}
+
+.thumb-badge.unsafe {
+    background: rgba(239, 68, 68, 0.85);
+    color: #fff;
+}
+
+.thumb-override {
+    font-size: 0.7rem;
+    position: absolute;
+    top: 0.35rem;
+    right: 0.35rem;
+    background: rgba(0,0,0,0.5);
+    border-radius: 50%;
+    padding: 0.1rem 0.2rem;
+    line-height: 1;
+}
+
+.thumbnail-name {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    font-size: 0.65rem;
+    color: rgba(255,255,255,0.85);
+    padding: 1.4rem 0.5rem 0.3rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+}
+
+/* List view */
+.overview-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.25rem;
+}
+
+.overview-list-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.85rem;
+    border-radius: 0.65rem;
+    cursor: pointer;
+    border: 1px solid var(--glass-border);
+    background: var(--glass-bg);
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.overview-list-row:hover {
+    background: rgba(99, 102, 241, 0.1);
+    border-color: var(--accent-color);
+}
+
+.list-row-num {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    min-width: 2.5rem;
+    text-align: right;
+}
+
+.list-row-thumb {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 0.4rem;
+    flex-shrink: 0;
+}
+
+.list-row-name {
+    flex: 1;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.list-row-override {
+    font-size: 0.8rem;
+    flex-shrink: 0;
+}
+
+.list-row-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.2rem 0.5rem;
+    border-radius: 2rem;
+    flex-shrink: 0;
+    letter-spacing: 0.03em;
+}
+
+.list-row-badge.safe {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--success-color);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.list-row-badge.unsafe {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger-color);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.overview-footer {
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--glass-border);
+}
+
+/* Back to overview button inside split-viewer */
+.back-to-overview-btn {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+    padding: 0.35rem 0.85rem;
+    border-radius: 2rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.back-to-overview-btn:hover {
+    border-color: var(--accent-color);
+    color: var(--text-primary);
+}
+
+/* Hide back button when in fullscreen */
+.split-viewer.fullscreen-mode .back-to-overview-btn {
+    display: none;
+}
+

@@ -154,6 +154,27 @@
                     <p>尚未載入圖片，請從左側上傳或指定批量資料夾</p>
                 </div>
 
+                <!-- Batch Overview (shown after all images processed) -->
+                <div id="batch-overview" class="batch-overview hidden">
+                    <div class="overview-header">
+                        <div class="overview-stats">
+                            <span class="ov-total">共 <strong id="ov-total">0</strong> 張</span>
+                            <span class="ov-badge ov-safe">Safe: <strong id="ov-safe">0</strong></span>
+                            <span class="ov-badge ov-unsafe">Unsafe: <strong id="ov-unsafe">0</strong></span>
+                        </div>
+                        <div class="view-mode-toggle">
+                            <button id="btn-view-thumbnail" class="view-mode-btn active" onclick="window.__setOverviewMode('thumbnail')" title="縮圖顯示">⊞ 縮圖</button>
+                            <button id="btn-view-list" class="view-mode-btn" onclick="window.__setOverviewMode('list')" title="列表顯示">☰ 列表</button>
+                        </div>
+                    </div>
+                    <div id="overview-content" class="overview-content"></div>
+                    <div class="overview-footer">
+                        <button class="finalize-btn" id="overview-finalize-btn" onclick="window.__finalizeReview()">
+                            🚀 確認並批次歸檔
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Viewer + Review Side-by-Side Wrapper -->
                 <div id="viewer-review-wrapper" class="viewer-review-wrapper">
 
@@ -163,6 +184,7 @@
                     <button class="fs-close-btn" id="fs-close-btn" onclick="window.__exitFullscreen()" title="離開全螢幕">✕ 離開全螢幕</button>
 
                     <div class="viewer-nav" id="viewer-nav">
+                        <button class="back-to-overview-btn hidden" id="back-to-overview-btn" onclick="window.__backToOverview()">← 返回總覽</button>
                         <button class="nav-btn" id="prev-btn">◀</button>
                         <span class="page-indicator" id="page-indicator">1 / 1</span>
                         <button class="nav-btn" id="next-btn">▶</button>
