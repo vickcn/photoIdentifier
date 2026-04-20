@@ -447,7 +447,7 @@ async def finalize_review(req: FinalizeReviewRequest, request: Request):
         safe_folder_id = await run_in_threadpool(get_or_create_subfolder, "Safe_Results", req.target_folder_id)
         unsafe_folder_id = await run_in_threadpool(get_or_create_subfolder, "Unsafe_Results", req.target_folder_id)
 
-        moved_count = 0
+        copied_count = 0
         errors = []
 
         for item in req.decisions:
@@ -462,28 +462,21 @@ async def finalize_review(req: FinalizeReviewRequest, request: Request):
             target_parent = safe_folder_id if decision == "safe" else unsafe_folder_id
 
             try:
-                # 取得檔案目前的 parents
-                file_info = await run_in_threadpool(
-                    lambda: drive_service.files().get(fileId=file_id, fields="parents").execute()
-                )
-                current_parents = ",".join(file_info.get("parents", []))
-
-                # 移動檔案：移除舊 parent，加入新 parent
+                # 複製檔案到目標資料夾（原檔留在原處）
                 await run_in_threadpool(
-                    lambda fid=file_id, tp=target_parent, cp=current_parents: drive_service.files().update(
+                    lambda fid=file_id, tp=target_parent, fn=file_name: drive_service.files().copy(
                         fileId=fid,
-                        addParents=tp,
-                        removeParents=cp,
-                        fields="id, parents"
+                        body={"name": fn, "parents": [tp]},
+                        fields="id"
                     ).execute()
                 )
-                moved_count += 1
+                copied_count += 1
             except Exception as e:
                 errors.append(f"{file_name}: {str(e)}")
 
         return {
-            "message": f"成功歸檔 {moved_count} 個檔案到 Drive。",
-            "moved": moved_count,
+            "message": f"成功複製歸檔 {copied_count} 個檔案到 Drive。",
+            "moved": copied_count,
             "errors": errors
         }
 
