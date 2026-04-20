@@ -64,9 +64,16 @@
                             <label for="batch-input-folder">來源資料夾 (絕對路徑)</label>
                             <input type="text" id="batch-input-folder" placeholder="例如：/Users/.../data">
                         </div>
-                        <div class="input-group">
-                            <label for="batch-output-folder">標註圖存放路徑 (絕對路徑)</label>
-                            <input type="text" id="batch-output-folder" placeholder="例如：/Users/.../tmp/batch_out">
+                        <!-- Temp folder management (shown when review_temp_* folders exist) -->
+                        <div id="temp-folder-mgmt" class="temp-folder-mgmt hidden">
+                            <div class="temp-mgmt-header">
+                                <span class="temp-mgmt-label">📁 標註暫存資料夾</span>
+                                <button class="icon-btn" id="btn-refresh-temp" onclick="window.__refreshTempFolders()" title="重新整理列表">↻</button>
+                            </div>
+                            <div class="temp-select-row">
+                                <select id="temp-folder-select" class="temp-select"></select>
+                                <button class="danger-btn" id="btn-clear-temp" onclick="window.__clearSelectedTempFolder()">清空</button>
+                            </div>
                         </div>
                     </div>
 

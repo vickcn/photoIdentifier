@@ -16,7 +16,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const googleLoginBtn = document.getElementById('google-login-btn');
     
     const inputFolder = document.getElementById('batch-input-folder');
-    const outputFolder = document.getElementById('batch-output-folder');
     const batchConcurrency = document.getElementById('batch-concurrency');
     const analyzeBatchBtn = document.getElementById('analyze-batch-btn');
     const organizeArea = document.getElementById('organize-area');
@@ -97,6 +96,55 @@ document.addEventListener('DOMContentLoaded', () => {
     let batchMode = null; // 'local' | 'drive'
     let batchOverviewActive = false;
     let batchOverviewMode = localStorage.getItem('batchOverviewMode') || 'thumbnail';
+    let currentTempFolder = null;
+
+    // === Temp Folder Management ===
+    const tempFolderMgmt = document.getElementById('temp-folder-mgmt');
+    const tempFolderSelect = document.getElementById('temp-folder-select');
+
+    async function refreshTempFolders(inputDir) {
+        if (!inputDir) return;
+        try {
+            const res = await fetch(`/review_temp_folders/?input_folder=${encodeURIComponent(inputDir)}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const folders = data.folders || [];
+            if (folders.length === 0) {
+                tempFolderMgmt.classList.add('hidden');
+                return;
+            }
+            tempFolderSelect.innerHTML = folders.map(f =>
+                `<option value="${f.name}">${f.name}  (${f.size_mb} MB)</option>`
+            ).join('');
+            tempFolderMgmt.classList.remove('hidden');
+        } catch (e) {
+            console.warn('Failed to load temp folders', e);
+        }
+    }
+
+    window.__refreshTempFolders = () => refreshTempFolders(inputFolder.value.trim());
+
+    window.__clearSelectedTempFolder = async function() {
+        const inputDir = inputFolder.value.trim();
+        const folderName = tempFolderSelect.value;
+        if (!inputDir || !folderName) return;
+        if (!confirm(`確定要刪除暫存資料夾「${folderName}」嗎？`)) return;
+        try {
+            const res = await fetch('/delete_review_temp/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ input_folder: inputDir, folder_name: folderName })
+            });
+            if (!res.ok) throw new Error((await res.json()).detail);
+            showToast('暫存資料夾已刪除');
+            refreshTempFolders(inputDir);
+        } catch (e) {
+            showToast(e.message, 'error');
+        }
+    };
+
+    // Refresh when user leaves input folder field
+    inputFolder.addEventListener('blur', () => refreshTempFolders(inputFolder.value.trim()));
 
     // Review Elements
     const decisionButtons = document.getElementById('decision-buttons');
@@ -320,14 +368,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (source === 'local') {
             const inputDir = inputFolder.value.trim();
-            const outputDir = outputFolder.value.trim();
-            if (!inputDir || !outputDir) {
-                showToast('請填寫來源與輸出資料夾路徑', 'error');
+            if (!inputDir) {
+                showToast('請填寫來源資料夾路徑', 'error');
                 return;
             }
             body = {
                 input_folder: inputDir,
-                output_folder: outputDir,
                 concurrency: currentConcurrency
             };
         } else {
@@ -410,6 +456,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else if (data.results && Array.isArray(data.results)) {
                             // 本機批次模式：一次性完整 JSON 回應
                             totalImages = data.total || data.results.length;
+                            if (data.temp_folder) currentTempFolder = data.temp_folder;
                             data.results.forEach(item => {
                                 if (item.status === 'ok') {
                                     item.user_decision = item.is_safe_for_public ? 'safe' : 'unsafe';
@@ -436,6 +483,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (source === 'local') {
                 organizeArea.classList.remove('hidden');
+                refreshTempFolders(inputFolder.value.trim());
             } else {
                 organizeArea.classList.add('hidden');
             }

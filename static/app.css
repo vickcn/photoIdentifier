@@ -1308,3 +1308,85 @@ button:disabled {
     display: none;
 }
 
+/* === Temp Folder Management === */
+.temp-folder-mgmt {
+    margin-top: 0.5rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    border-radius: 0.65rem;
+    padding: 0.6rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.temp-mgmt-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.temp-mgmt-label {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+.icon-btn {
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+    width: 1.8rem;
+    height: 1.8rem;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    padding: 0;
+}
+
+.icon-btn:hover {
+    border-color: var(--accent-color);
+    color: var(--text-primary);
+}
+
+.temp-select-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.temp-select {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: var(--text-primary);
+    padding: 0.3rem 0.5rem;
+    border-radius: 0.4rem;
+    font-size: 0.78rem;
+    min-width: 0;
+}
+
+.temp-select option {
+    background: #1e1b4b;
+    color: var(--text-primary);
+}
+
+.danger-btn {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: var(--danger-color);
+    padding: 0.3rem 0.7rem;
+    border-radius: 0.4rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+}
+
+.danger-btn:hover {
+    background: rgba(239, 68, 68, 0.25);
+}
+

@@ -179,19 +179,22 @@ async def analyze_with_image(file: UploadFile = File(...)):
 
 class BatchRequest(BaseModel):
     input_folder: str
-    output_folder: str
     concurrency: int = 3
 
 @app.post("/batch/")
 async def batch_visualize(req: BatchRequest):
+    from datetime import datetime
     input_path = Path(req.input_folder)
     if not input_path.exists() or not input_path.is_dir():
         raise HTTPException(status_code=400, detail=f"資料夾不存在：{req.input_folder}")
 
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    temp_folder = str(input_path / f"review_temp_{ts}")
+
     try:
         results = await batch_process_folder(
             input_dir=req.input_folder,
-            output_dir=req.output_folder,
+            output_dir=temp_folder,
             concurrency=req.concurrency,
         )
         ok = [r for r in results if r["status"] == "ok"]
@@ -200,7 +203,7 @@ async def batch_visualize(req: BatchRequest):
             "total": len(results),
             "success": len(ok),
             "failed": len(err),
-            "output_folder": req.output_folder,
+            "temp_folder": temp_folder,
             "results": results,
         }
     except Exception as e:
@@ -364,6 +367,41 @@ async def organize_batch(req: OrganizeRequest):
         "moved": moved_count,
         "errors": errors
     }
+
+
+@app.get("/review_temp_folders/")
+async def list_review_temp_folders(input_folder: str):
+    input_path = Path(input_folder)
+    if not input_path.exists() or not input_path.is_dir():
+        raise HTTPException(status_code=400, detail="資料夾不存在")
+    folders = []
+    for d in sorted(input_path.iterdir(), reverse=True):
+        if d.is_dir() and d.name.startswith("review_temp_"):
+            size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+            folders.append({
+                "name": d.name,
+                "path": str(d),
+                "size_mb": round(size / 1024 / 1024, 2),
+            })
+    return {"folders": folders}
+
+
+class DeleteTempFolderRequest(BaseModel):
+    input_folder: str
+    folder_name: str
+
+@app.post("/delete_review_temp/")
+async def delete_review_temp(req: DeleteTempFolderRequest):
+    if not req.folder_name.startswith("review_temp_"):
+        raise HTTPException(status_code=400, detail="只能刪除 review_temp_ 開頭的資料夾")
+    folder_path = Path(req.input_folder) / req.folder_name
+    if not folder_path.exists():
+        raise HTTPException(status_code=404, detail="暫存資料夾不存在")
+    try:
+        shutil.rmtree(folder_path)
+        return {"message": f"已刪除：{req.folder_name}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"刪除失敗：{e}") from e
 
 
 class FinalizeReviewRequest(BaseModel):
