@@ -793,6 +793,19 @@ document.addEventListener('DOMContentLoaded', () => {
             updateStatsUI(currentData.file, fakeAnalysis);
         }
 
+        // 用 user_decision 覆寫 status badge（確保顯示的是用戶目前有效決定）
+        const ud = currentData.user_decision;
+        if (ud === 'safe') {
+            safetyBadge.textContent = '可公開 (Safe)';
+            safetyBadge.className = 'status-badge status-safe';
+        } else if (ud === 'pending') {
+            safetyBadge.textContent = '待人員判定 (Pending)';
+            safetyBadge.className = 'status-badge status-pending';
+        } else if (ud === 'unsafe') {
+            safetyBadge.textContent = '不可公開 (Unsafe)';
+            safetyBadge.className = 'status-badge status-unsafe';
+        }
+
         updateOverrideIndicator(currentData);
     }
 
