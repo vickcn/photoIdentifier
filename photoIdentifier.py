@@ -90,7 +90,9 @@ async def batch_process_folder(
                 result, drawn_bytes = await process_and_visualize_photo(image_bytes, mime_type, color_rules=color_rules)
                 out_file = output_path / f"annotated_{file.name}"
                 out_file.write_bytes(drawn_bytes)
-                
+
+                ai_decision = "safe" if result.moderation_status == "public" else "unsafe" if result.moderation_status == "private" else "pending"
+
                 return {
                     "file": file.name,
                     "original_path": str(file),
@@ -100,7 +102,9 @@ async def batch_process_folder(
                     "has_brand_strap": result.has_brand_strap,
                     "strap_color": result.strap_color,
                     "is_safe_for_public": result.is_safe_for_public,
+                    "moderation_status": result.moderation_status,
                     "moderation_reason": result.moderation_reason,
+                    "ai_decision": ai_decision,
                     "status": "ok",
                 }
             except Exception as e:
@@ -219,6 +223,9 @@ async def batch_process_drive(
                     created_file = await asyncio.to_thread(upload)
                     output_link = created_file.get("webViewLink")
 
+                # 計算 ai_decision
+                ai_decision = "safe" if result.moderation_status == "public" else "unsafe" if result.moderation_status == "private" else "pending"
+
                 # 因為是雲端檔案，回傳時 B64 以便前端預覽
                 return {
                     "file": file_name,
@@ -230,7 +237,9 @@ async def batch_process_drive(
                     "has_brand_strap": result.has_brand_strap,
                     "strap_color": result.strap_color,
                     "is_safe_for_public": result.is_safe_for_public,
+                    "moderation_status": result.moderation_status,
                     "moderation_reason": result.moderation_reason,
+                    "ai_decision": ai_decision,
                     "status": "ok",
                 }
             except Exception as e:
@@ -327,13 +336,17 @@ async def batch_process_drive_stream(folder_id: str, credentials, target_folder_
                     img.save(orig_io, format="JPEG", quality=75)
                 orig_b64 = base64.b64encode(orig_io.getvalue()).decode('utf-8')
 
+                ai_decision = "safe" if analysis.moderation_status == "public" else "unsafe" if analysis.moderation_status == "private" else "pending"
+                result_dict = analysis.model_dump()
+                result_dict["ai_decision"] = ai_decision
+
                 return {
                     "status": "ok",
                     "index": index + 1,
                     "total": total,
                     "file_name": file_name,
                     "drive_id": file_id,
-                    "result": analysis.model_dump(),
+                    "result": result_dict,
                     "drawn_image_b64": preview_b64,
                     "original_image_b64": orig_b64,
                 }

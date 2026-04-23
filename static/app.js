@@ -565,6 +565,10 @@ document.addEventListener('DOMContentLoaded', () => {
         batchMode = source;
         const currentConcurrency = parseInt(batchConcurrency.value) || 3;
 
+        // Generate session_id for metrics tracking
+        const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        window._currentSessionId = sessionId;
+
         let endpoint = '/batch/';
         let body = {};
 
@@ -578,6 +582,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 input_folder: inputDir,
                 concurrency: currentConcurrency,
                 color_rules: colorSwatches,
+                session_id: sessionId,
             };
         } else {
             const fId = driveFolderId.value.trim();
@@ -592,6 +597,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 target_folder_id: tId || null,
                 concurrency: currentConcurrency,
                 color_rules: colorSwatches,
+                session_id: sessionId,
             };
         }
 
@@ -651,9 +657,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             totalImages = data.total;
                             const result = data.result || data;
                             const aiStatus = result.moderation_status || (result.is_safe_for_public ? 'public' : 'private');
-                            const aiDecision = aiStatus === 'public' ? 'safe' : aiStatus === 'pending' ? 'pending' : 'unsafe';
-                            data.user_decision = aiDecision;
-                            data.ai_decision = aiDecision;
+                            // 計算 ai_decision（如果還沒有）
+                            if (!result.ai_decision) {
+                                result.ai_decision = aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending';
+                            }
+                            data.user_decision = data.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                            data.ai_decision = result.ai_decision;
+                            // 保持 session_id
+                            if (data.session_id) window._currentSessionId = data.session_id;
                             currentBatchResults.push(data);
                         } else if (data.status === 'error') {
                             failedCount++;
@@ -663,12 +674,12 @@ document.addEventListener('DOMContentLoaded', () => {
                             // 本機批次模式：一次性完整 JSON 回應
                             totalImages = data.total || data.results.length;
                             if (data.temp_folder) currentTempFolder = data.temp_folder;
+                            if (data.session_id) window._currentSessionId = data.session_id;
                             data.results.forEach(item => {
                                 if (item.status === 'ok') {
                                     const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
-                                    const aiDecision = aiStatus === 'public' ? 'safe' : aiStatus === 'pending' ? 'pending' : 'unsafe';
-                                    item.user_decision = aiDecision;
-                                    item.ai_decision = aiDecision;
+                                    item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                                    item.ai_decision = item.ai_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
                                     currentBatchResults.push(item);
                                     successCount++;
                                 } else {
@@ -698,6 +709,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (currentBatchResults.length > 0) {
                 showBatchOverview();
+                // 顯示批次指標摘要
+                if (window._currentSessionId) {
+                    setTimeout(() => {
+                        window.__showMetricsSummary(window._currentSessionId);
+                    }, 500);
+                }
             }
 
         } catch (e) {
@@ -711,25 +728,6 @@ document.addEventListener('DOMContentLoaded', () => {
     function updatePageIndicator() {
         if (currentBatchResults.length > 0) {
             pageIndicator.textContent = `${currentIndex + 1} / ${currentBatchResults.length}`;
-        }
-    }
-
-    function renderOverrideIndicator() {
-        if (currentBatchResults.length === 0) return;
-        const currentData = currentBatchResults[currentIndex];
-        if (!currentData) return;
-
-        // 先移除舊的 override badge
-        const oldOverrideEl = document.getElementById('override-indicator');
-        if (oldOverrideEl) oldOverrideEl.remove();
-
-        // 依據資料決定是否重新加上
-        if (currentData.user_decision !== currentData.ai_decision) {
-            const badge = document.createElement('span');
-            badge.id = 'override-indicator';
-            badge.className = 'override-badge';
-            badge.textContent = '🔄 已覆寫';
-            safetyBadge.parentElement.appendChild(badge);
         }
     }
 
@@ -776,8 +774,6 @@ document.addEventListener('DOMContentLoaded', () => {
             };
             updateStatsUI(currentData.file, fakeAnalysis);
         }
-
-        renderOverrideIndicator();
     }
 
     // === Batch Overview ===
@@ -965,7 +961,18 @@ document.addEventListener('DOMContentLoaded', () => {
             safetyBadge.className = 'status-badge status-unsafe';
         }
 
-        renderOverrideIndicator();
+        const overrideEl = document.getElementById('override-indicator');
+        if (currentData.user_decision !== currentData.ai_decision) {
+            if (!overrideEl) {
+                const badge = document.createElement('span');
+                badge.id = 'override-indicator';
+                badge.className = 'override-badge';
+                badge.textContent = '🔄 已覆寫';
+                safetyBadge.parentElement.appendChild(badge);
+            }
+        } else {
+            if (overrideEl) overrideEl.remove();
+        }
 
         const toastText = decision === 'safe' ? '✅ Safe' : decision === 'pending' ? '⏳ Pending' : '❌ Unsafe';
         showToast(`已將此圖設為 ${toastText}`);
@@ -1268,4 +1275,270 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }, 500);
     }
+});
+
+    // ============================================
+    // Batch Metrics Summary Functions
+    // ============================================
+
+    window.__showMetricsSummary = async function(sessionId) {
+        const summaryPanel = document.getElementById('batch-metrics-summary');
+        if (!summaryPanel) return;
+
+        try {
+            const response = await fetch('/batch_summary/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId })
+            });
+
+            if (!response.ok) {
+                showToast('無法載入批次摘要', 'error');
+                return;
+            }
+
+            const data = await response.json();
+            if (data.error) {
+                showToast('尚無結果', 'warning');
+                return;
+            }
+
+            renderMetricsSummary(data);
+            summaryPanel.classList.remove('hidden');
+            summaryPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        } catch (e) {
+            console.error('Failed to load metrics:', e);
+            showToast('載入失敗：' + e.message, 'error');
+        }
+    };
+
+    window.__toggleMetricsSummary = function() {
+        const content = document.getElementById('metrics-content');
+        if (!content) return;
+        content.style.display = content.style.display === 'none' ? '' : 'none';
+    };
+
+    function renderMetricsSummary(data) {
+        const metrics = data.metrics || {};
+        const stats = data.analysis_stats || {};
+        const changedFiles = data.changed_files || [];
+
+        // Processing Stats
+        document.getElementById('metrics-total').textContent = metrics.total_processed || 0;
+        document.getElementById('metrics-success').textContent = metrics.total_processed || 0;
+        document.getElementById('metrics-failed').textContent = metrics.total_errors || 0;
+
+        const duration = metrics.timestamp?.duration_seconds || 0;
+        document.getElementById('metrics-duration').textContent = duration > 60 
+            ? `${Math.floor(duration / 60)}m ${Math.floor(duration % 60)}s`
+            : `${duration.toFixed(1)}s`;
+
+        // Decision Distribution
+        const userDist = metrics.decision_distribution?.user_decisions || {};
+        document.getElementById('metrics-dist-safe').textContent = userDist.safe || 0;
+        document.getElementById('metrics-dist-pending').textContent = userDist.pending || 0;
+        document.getElementById('metrics-dist-unsafe').textContent = userDist.unsafe || 0;
+
+        // Agreement Analysis
+        const agreementRate = (metrics.agreement_rate || 0) * 100;
+        document.getElementById('metrics-agreement-rate').textContent = agreementRate.toFixed(1) + '%';
+        document.getElementById('metrics-changed-count').textContent = metrics.changed_count || 0;
+        document.querySelector('.agreement-fill').style.width = agreementRate + '%';
+
+        // Confusion Matrix
+        renderConfusionMatrix(metrics.confusion_matrix || {});
+
+        // Performance Metrics
+        renderPerformanceMetrics(metrics.metrics || {});
+
+        // Analysis Stats
+        document.getElementById('metrics-with-faces').textContent = stats.images_with_faces || 0;
+        document.getElementById('metrics-avg-faces').textContent = (stats.average_faces_per_image || 0).toFixed(2);
+        document.getElementById('metrics-with-straps').textContent = stats.images_with_straps || 0;
+        document.getElementById('metrics-avg-straps').textContent = (stats.average_straps_per_image || 0).toFixed(2);
+
+        // Changed Files
+        renderChangedFilesList(changedFiles);
+
+        // Store current metrics for export
+        window._currentMetrics = { metrics, stats, changedFiles };
+    }
+
+    function renderConfusionMatrix(cm) {
+        const container = document.getElementById('metrics-confusion-matrix');
+        if (!container) return;
+
+        const labels = ['safe', 'unsafe', 'pending'];
+        let html = '<table>';
+        
+        // Header
+        html += '<tr><th>實際/預測</th>';
+        labels.forEach(label => {
+            const displayLabel = label === 'safe' ? '可公開' : label === 'unsafe' ? '不可公開' : '待確認';
+            html += `<th>${displayLabel}</th>`;
+        });
+        html += '</tr>';
+
+        // Rows
+        labels.forEach(trueLabel => {
+            const displayLabel = trueLabel === 'safe' ? '可公開' : trueLabel === 'unsafe' ? '不可公開' : '待確認';
+            html += `<tr><td class="matrix-label">${displayLabel}</td>`;
+            labels.forEach(predLabel => {
+                const count = cm[trueLabel]?.[predLabel] || 0;
+                const isCorrect = trueLabel === predLabel;
+                const cellClass = isCorrect ? 'diagonal' : '';
+                html += `<td class="${cellClass}">${count}</td>`;
+            });
+            html += '</tr>';
+        });
+
+        html += '</table>';
+        container.innerHTML = html;
+    }
+
+    function renderPerformanceMetrics(metricsDict) {
+        const container = document.getElementById('metrics-performance');
+        if (!container) return;
+
+        const labels = ['safe', 'unsafe', 'pending'];
+        const labelNames = { safe: '可公開', unsafe: '不可公開', pending: '待確認' };
+
+        let html = '';
+        labels.forEach(label => {
+            const m = metricsDict[label] || {};
+            html += `<div class="metric-row">
+                <div class="class-label">${labelNames[label]}</div>
+                <div></div>
+                <div class="metric-cell">
+                    <span class="cell-label">精準度</span>
+                    <strong>${(m.precision || 0).toFixed(3)}</strong>
+                </div>
+                <div class="metric-cell">
+                    <span class="cell-label">召回率</span>
+                    <strong>${(m.recall || 0).toFixed(3)}</strong>
+                </div>
+                <div class="metric-cell">
+                    <span class="cell-label">F1分數</span>
+                    <strong>${(m.f1_score || 0).toFixed(3)}</strong>
+                </div>
+            </div>`;
+        });
+
+        container.innerHTML = html;
+    }
+
+    function renderChangedFilesList(changedFiles) {
+        const container = document.getElementById('metrics-changed-files');
+        if (!container) return;
+
+        if (!changedFiles || changedFiles.length === 0) {
+            container.innerHTML = '<div class="no-changes">沒有被覆寫的檔案</div>';
+            return;
+        }
+
+        let html = '';
+        changedFiles.forEach(file => {
+            const aiDecisionClass = 'badge-ai';
+            const aiLabel = file.ai_decision === 'safe' ? '可公開' : file.ai_decision === 'unsafe' ? '不可公開' : '待確認';
+            const userLabel = file.user_decision === 'safe' ? '可公開' : file.user_decision === 'unsafe' ? '不可公開' : '待確認';
+            const userClass = file.user_decision === 'safe' ? 'badge-user safe' : file.user_decision === 'unsafe' ? 'badge-user unsafe' : 'badge-user pending';
+
+            html += `<div class="changed-file-item">
+                <div class="changed-file-name" title="${file.file_name}">${file.file_name}</div>
+                <div class="changed-decision-badge ${aiDecisionClass}">${aiLabel}</div>
+                <div class="changed-decision-badge ${userClass}">${userLabel}</div>
+            </div>`;
+        });
+
+        container.innerHTML = html;
+    }
+
+    window.__exportMetricsJSON = async function() {
+        const sessionId = window._currentSessionId;
+        if (!sessionId) {
+            showToast('找不到會話', 'error');
+            return;
+        }
+
+        try {
+            const response = await fetch('/batch_summary_export/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId })
+            });
+
+            if (!response.ok) {
+                showToast('匯出失敗', 'error');
+                return;
+            }
+
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `batch_summary_${sessionId}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('已匯出 JSON', 'success');
+
+        } catch (e) {
+            console.error('Export failed:', e);
+            showToast('匯出失敗：' + e.message, 'error');
+        }
+    };
+
+    window.__exportMetricsCSV = function() {
+        const metrics = window._currentMetrics;
+        if (!metrics) {
+            showToast('尚無指標資料', 'error');
+            return;
+        }
+
+        try {
+            // Simple CSV export of metrics
+            let csv = '批量辨識結果摘要\n\n';
+
+            // Processing Stats
+            csv += '處理統計\n';
+            csv += `總共處理,${metrics.metrics.total_processed}\n`;
+            csv += `失敗,${metrics.metrics.total_errors}\n`;
+            csv += `處理時間(秒),${metrics.metrics.timestamp?.duration_seconds || 0}\n\n`;
+
+            // Decision Distribution
+            csv += '決策分佈\n';
+            const userDist = metrics.metrics.decision_distribution?.user_decisions || {};
+            csv += `可公開(Safe),${userDist.safe || 0}\n`;
+            csv += `待確認(Pending),${userDist.pending || 0}\n`;
+            csv += `不可公開(Unsafe),${userDist.unsafe || 0}\n\n`;
+
+            // Performance Metrics
+            csv += '分類性能指標\n';
+            csv += '類別,精準度,召回率,F1分數\n';
+            const metricsDict = metrics.metrics.metrics || {};
+            ['safe', 'unsafe', 'pending'].forEach(label => {
+                const m = metricsDict[label] || {};
+                csv += `${label},${(m.precision || 0).toFixed(3)},${(m.recall || 0).toFixed(3)},${(m.f1_score || 0).toFixed(3)}\n`;
+            });
+
+            csv += '\n分析統計\n';
+            csv += `含人臉圖片,${metrics.stats.images_with_faces || 0}\n`;
+            csv += `平均人臉數,${(metrics.stats.average_faces_per_image || 0).toFixed(2)}\n`;
+            csv += `含名牌圖片,${metrics.stats.images_with_straps || 0}\n`;
+            csv += `平均名牌數,${(metrics.stats.average_straps_per_image || 0).toFixed(2)}\n`;
+
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `batch_summary_${window._currentSessionId || 'export'}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('已匯出 CSV', 'success');
+
+        } catch (e) {
+            console.error('CSV export failed:', e);
+            showToast('CSV 匯出失敗：' + e.message, 'error');
+        }
+    };
 });
