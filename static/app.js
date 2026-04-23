@@ -549,7 +549,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const streamPendingEl = document.getElementById('stream-pending-count');
 
     function updateProgressUI(current, total, success, failed) {
-        if (total === 0) return;
+        if (total === 0) {
+            progressFill.style.width = '0%';
+            progressPercent.textContent = '0%';
+            progressCount.textContent = '0 / 0';
+            streamSuccessEl.textContent = '0';
+            streamFailedEl.textContent = '0';
+            streamPendingEl.textContent = '0';
+            return;
+        }
         const percent = Math.round((current / total) * 100);
         progressFill.style.width = percent + '%';
         progressPercent.textContent = percent + '%';
