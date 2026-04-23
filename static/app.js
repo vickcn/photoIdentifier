@@ -1276,11 +1276,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 500);
     }
 });
-
-    // ============================================
-    // Batch Metrics Summary Functions
-    // ============================================
-
     window.__showMetricsSummary = async function(sessionId) {
         const summaryPanel = document.getElementById('batch-metrics-summary');
         if (!summaryPanel) return;
