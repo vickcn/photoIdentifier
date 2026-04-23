@@ -867,16 +867,24 @@ document.addEventListener('DOMContentLoaded', () => {
         batchOverviewActive = false;
         currentIndex = index;
         document.getElementById('batch-overview').classList.add('hidden');
+        document.getElementById('batch-metrics-summary').classList.add('hidden');
         emptyState.classList.add('hidden');
         splitViewer.classList.remove('hidden');
         decisionButtons.style.display = 'flex';
         document.getElementById('back-to-overview-btn').classList.remove('hidden');
         renderBatchViewer();
+        splitViewer.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     window.__backToOverview = function () {
         batchOverviewActive = true;
         splitViewer.classList.add('hidden');
+        const metricsSummary = document.getElementById('batch-metrics-summary');
+        if (metricsSummary && !metricsSummary.classList.contains('hidden')) {
+            // 已有 metrics，保持顯示
+        } else if (window._currentMetrics) {
+            metricsSummary.classList.remove('hidden');
+        }
         decisionButtons.style.display = 'none';
         document.getElementById('back-to-overview-btn').classList.add('hidden');
         document.getElementById('batch-overview').classList.remove('hidden');
