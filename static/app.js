@@ -714,6 +714,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function renderOverrideIndicator() {
+        if (currentBatchResults.length === 0) return;
+        const currentData = currentBatchResults[currentIndex];
+        if (!currentData) return;
+
+        // 先移除舊的 override badge
+        const oldOverrideEl = document.getElementById('override-indicator');
+        if (oldOverrideEl) oldOverrideEl.remove();
+
+        // 依據資料決定是否重新加上
+        if (currentData.user_decision !== currentData.ai_decision) {
+            const badge = document.createElement('span');
+            badge.id = 'override-indicator';
+            badge.className = 'override-badge';
+            badge.textContent = '🔄 已覆寫';
+            safetyBadge.parentElement.appendChild(badge);
+        }
+    }
+
     function renderBatchViewer() {
         if (currentBatchResults.length === 0) return;
 
@@ -757,6 +776,8 @@ document.addEventListener('DOMContentLoaded', () => {
             };
             updateStatsUI(currentData.file, fakeAnalysis);
         }
+
+        renderOverrideIndicator();
     }
 
     // === Batch Overview ===
@@ -944,18 +965,7 @@ document.addEventListener('DOMContentLoaded', () => {
             safetyBadge.className = 'status-badge status-unsafe';
         }
 
-        const overrideEl = document.getElementById('override-indicator');
-        if (currentData.user_decision !== currentData.ai_decision) {
-            if (!overrideEl) {
-                const badge = document.createElement('span');
-                badge.id = 'override-indicator';
-                badge.className = 'override-badge';
-                badge.textContent = '🔄 已覆寫';
-                safetyBadge.parentElement.appendChild(badge);
-            }
-        } else {
-            if (overrideEl) overrideEl.remove();
-        }
+        renderOverrideIndicator();
 
         const toastText = decision === 'safe' ? '✅ Safe' : decision === 'pending' ? '⏳ Pending' : '❌ Unsafe';
         showToast(`已將此圖設為 ${toastText}`);
