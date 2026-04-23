@@ -539,6 +539,18 @@ document.addEventListener('DOMContentLoaded', () => {
         strapColor.textContent = analysis.strap_color || '無';
     }
 
+    function updateOverrideIndicator(data) {
+        const existing = document.getElementById('override-indicator');
+        if (existing) existing.remove();
+        if (data && data.user_decision && data.ai_decision && data.user_decision !== data.ai_decision) {
+            const badge = document.createElement('span');
+            badge.id = 'override-indicator';
+            badge.className = 'override-badge';
+            badge.textContent = '🔄 已覆寫';
+            safetyBadge.parentElement.appendChild(badge);
+        }
+    }
+
 
     // === DOM Progress Elements ===
     const progressFill = document.getElementById('progress-fill');
@@ -780,6 +792,8 @@ document.addEventListener('DOMContentLoaded', () => {
             };
             updateStatsUI(currentData.file, fakeAnalysis);
         }
+
+        updateOverrideIndicator(currentData);
     }
 
     // === Batch Overview ===
@@ -975,18 +989,7 @@ document.addEventListener('DOMContentLoaded', () => {
             safetyBadge.className = 'status-badge status-unsafe';
         }
 
-        const overrideEl = document.getElementById('override-indicator');
-        if (currentData.user_decision !== currentData.ai_decision) {
-            if (!overrideEl) {
-                const badge = document.createElement('span');
-                badge.id = 'override-indicator';
-                badge.className = 'override-badge';
-                badge.textContent = '🔄 已覆寫';
-                safetyBadge.parentElement.appendChild(badge);
-            }
-        } else {
-            if (overrideEl) overrideEl.remove();
-        }
+        updateOverrideIndicator(currentData);
 
         const toastText = decision === 'safe' ? '✅ Safe' : decision === 'pending' ? '⏳ Pending' : '❌ Unsafe';
         showToast(`已將此圖設為 ${toastText}`);
