@@ -217,6 +217,129 @@
                     </div>
                 </div>
 
+                <!-- Batch Metrics Summary Panel -->
+                <div id="batch-metrics-summary" class="batch-metrics-summary hidden">
+                    <div class="metrics-header">
+                        <div class="metrics-title-row">
+                            <h3>📊 批量辨識結果摘要</h3>
+                            <button class="metrics-collapse-btn" onclick="window.__toggleMetricsSummary()">▼</button>
+                        </div>
+                        <div class="metrics-export-buttons">
+                            <button class="export-btn" onclick="window.__exportMetricsJSON()">💾 匯出 JSON</button>
+                            <button class="export-btn" onclick="window.__exportMetricsCSV()">📋 匯出 CSV</button>
+                        </div>
+                    </div>
+
+                    <div id="metrics-content" class="metrics-content">
+                        <!-- Overview Stats -->
+                        <div class="metrics-section">
+                            <h4>📈 處理統計</h4>
+                            <div class="stats-grid-metrics">
+                                <div class="stat-metric">
+                                    <span class="label">總共處理</span>
+                                    <strong id="metrics-total">0</strong>
+                                </div>
+                                <div class="stat-metric">
+                                    <span class="label">成功</span>
+                                    <strong id="metrics-success">0</strong>
+                                </div>
+                                <div class="stat-metric">
+                                    <span class="label">失敗</span>
+                                    <strong id="metrics-failed">0</strong>
+                                </div>
+                                <div class="stat-metric">
+                                    <span class="label">處理時間</span>
+                                    <strong id="metrics-duration">-</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Decision Distribution -->
+                        <div class="metrics-section">
+                            <h4>🎯 決策分佈</h4>
+                            <div class="decision-dist-grid">
+                                <div class="dist-item safe">
+                                    <span class="dist-label">可公開 (Safe)</span>
+                                    <strong id="metrics-dist-safe">0</strong>
+                                </div>
+                                <div class="dist-item pending">
+                                    <span class="dist-label">待確認 (Pending)</span>
+                                    <strong id="metrics-dist-pending">0</strong>
+                                </div>
+                                <div class="dist-item unsafe">
+                                    <span class="dist-label">不可公開 (Unsafe)</span>
+                                    <strong id="metrics-dist-unsafe">0</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Agreement Analysis -->
+                        <div class="metrics-section">
+                            <h4>🔄 用戶與 AI 決定一致性</h4>
+                            <div class="agreement-stats">
+                                <div class="agreement-metric">
+                                    <span class="label">一致率</span>
+                                    <strong id="metrics-agreement-rate">0%</strong>
+                                </div>
+                                <div class="agreement-metric">
+                                    <span class="label">被覆寫</span>
+                                    <strong id="metrics-changed-count">0</strong>
+                                </div>
+                            </div>
+                            <div id="metrics-agreement-bar" class="agreement-bar">
+                                <div class="agreement-fill"></div>
+                            </div>
+                        </div>
+
+                        <!-- Confusion Matrix -->
+                        <div class="metrics-section">
+                            <h4>🎲 混淆矩陣</h4>
+                            <div id="metrics-confusion-matrix" class="confusion-matrix-table">
+                                <!-- Rendered by JS -->
+                            </div>
+                        </div>
+
+                        <!-- Performance Metrics -->
+                        <div class="metrics-section">
+                            <h4>📊 分類性能指標</h4>
+                            <div id="metrics-performance" class="performance-metrics">
+                                <!-- Rendered by JS -->
+                            </div>
+                        </div>
+
+                        <!-- Analysis Stats -->
+                        <div class="metrics-section">
+                            <h4>🔍 分析統計</h4>
+                            <div class="analysis-stats-grid">
+                                <div class="analysis-stat">
+                                    <span class="label">含人臉圖片</span>
+                                    <strong id="metrics-with-faces">0</strong>
+                                </div>
+                                <div class="analysis-stat">
+                                    <span class="label">平均人臉數</span>
+                                    <strong id="metrics-avg-faces">0.0</strong>
+                                </div>
+                                <div class="analysis-stat">
+                                    <span class="label">含名牌圖片</span>
+                                    <strong id="metrics-with-straps">0</strong>
+                                </div>
+                                <div class="analysis-stat">
+                                    <span class="label">平均名牌數</span>
+                                    <strong id="metrics-avg-straps">0.0</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Changed Files List -->
+                        <div class="metrics-section">
+                            <h4>✏️ 已覆寫的檔案</h4>
+                            <div id="metrics-changed-files" class="changed-files-list">
+                                <!-- Rendered by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Viewer + Review Side-by-Side Wrapper -->
                 <div id="viewer-review-wrapper" class="viewer-review-wrapper">
 
