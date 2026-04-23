@@ -2,6 +2,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Optional
+from datetime import datetime
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -75,7 +76,11 @@ app.add_middleware(
 
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
 from src.google_auth import get_auth_url, exchange_code_for_token, load_user_credentials, token_store, DEFAULT_SCOPES
+from src.metrics import compute_batch_metrics, collect_changed_files, compute_analysis_stats, format_metrics_for_export
 from photoIdentifier import process_and_visualize_photo, batch_process_folder, batch_process_drive, batch_process_drive_stream
+
+# Session storage for batch operations
+_batch_sessions: dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -293,16 +298,34 @@ class BatchRequest(BaseModel):
     input_folder: str
     concurrency: int = 3
     color_rules: Optional[list] = None
+    session_id: Optional[str] = None
 
 @app.post("/batch/")
 async def batch_visualize(req: BatchRequest):
-    from datetime import datetime
     input_path = Path(req.input_folder)
     if not input_path.exists() or not input_path.is_dir():
         raise HTTPException(status_code=400, detail=f"資料夾不存在：{req.input_folder}")
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     temp_folder = str(input_path / f"review_temp_{ts}")
+
+    # 生成或使用提供的 session_id
+    session_id = req.session_id or str(uuid.uuid4())
+    start_time = datetime.now()
+
+    # 初始化 session storage
+    _batch_sessions[session_id] = {
+        "session_id": session_id,
+        "batch_mode": "local",
+        "start_time": start_time.isoformat(),
+        "end_time": None,
+        "results": [],
+        "processing_info": {
+            "input_folder": req.input_folder,
+            "concurrency": req.concurrency,
+        },
+        "completed": False
+    }
 
     try:
         results = await batch_process_folder(
@@ -313,7 +336,14 @@ async def batch_visualize(req: BatchRequest):
         )
         ok = [r for r in results if r["status"] == "ok"]
         err = [r for r in results if r["status"] == "error"]
+
+        # 儲存結果到 session
+        _batch_sessions[session_id]["results"] = results
+        _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
+        _batch_sessions[session_id]["completed"] = True
+
         return {
+            "session_id": session_id,
             "total": len(results),
             "success": len(ok),
             "failed": len(err),
@@ -322,6 +352,7 @@ async def batch_visualize(req: BatchRequest):
         }
     except Exception as e:
         logger.exception("Batch processing error: %s", e)
+        _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
         raise HTTPException(status_code=500, detail="批量辨識失敗") from e
 
 
@@ -330,6 +361,7 @@ class DriveBatchRequest(BaseModel):
     target_folder_id: Optional[str] = None
     concurrency: int = 3
     color_rules: Optional[list] = None
+    session_id: Optional[str] = None
 
 @app.post("/batch_drive/")
 async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
@@ -372,6 +404,24 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
     try:
         creds = get_drive_credentials(request)
 
+        # 生成或使用提供的 session_id
+        session_id = req.session_id or str(uuid.uuid4())
+        start_time = datetime.now()
+
+        # 初始化 session storage
+        _batch_sessions[session_id] = {
+            "session_id": session_id,
+            "batch_mode": "drive",
+            "start_time": start_time.isoformat(),
+            "end_time": None,
+            "results": [],
+            "processing_info": {
+                "folder_id": req.folder_id,
+                "concurrency": req.concurrency,
+            },
+            "completed": False
+        }
+
         async def event_generator():
             try:
                 # 這裡調用剛才在 photoIdentifier.py 寫好的產生器
@@ -382,9 +432,25 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                     concurrency=req.concurrency,
                     color_rules=req.color_rules,
                 ):
+                    # 儲存結果到 session
+                    if chunk.get("status") == "ok":
+                        _batch_sessions[session_id]["results"].append(chunk)
+
                     # 每一筆結果都轉成 JSON 並加上換行符號推播出去
-                    yield json.dumps(chunk, ensure_ascii=False) + "\n"
+                    chunk_with_session = {**chunk, "session_id": session_id}
+                    yield json.dumps(chunk_with_session, ensure_ascii=False) + "\n"
+
+                # 標記完成
+                _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
+                _batch_sessions[session_id]["completed"] = True
+                yield json.dumps({
+                    "status": "completed",
+                    "session_id": session_id,
+                    "message": f"批次處理完成，共 {len(_batch_sessions[session_id]['results'])} 個結果"
+                }, ensure_ascii=False) + "\n"
+
             except Exception as inner_e:
+                _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
                 yield json.dumps({"status": "error", "error": f"串流中斷: {str(inner_e)}"}, ensure_ascii=False) + "\n"
 
         return StreamingResponse(event_generator(), media_type="application/x-ndjson")
@@ -552,6 +618,93 @@ async def delete_review_temp(req: DeleteTempFolderRequest):
 class FinalizeReviewRequest(BaseModel):
     decisions: list[dict]  # [{file_name, drive_id, user_decision: "safe"|"unsafe"}, ...]
     target_folder_id: str
+
+
+class BatchSummaryRequest(BaseModel):
+    session_id: str
+
+
+@app.post("/batch_summary/")
+async def get_batch_summary(req: BatchSummaryRequest):
+    """獲取批次處理的綜合指標與混淆矩陣"""
+    session_id = req.session_id
+    if session_id not in _batch_sessions:
+        raise HTTPException(status_code=404, detail=f"找不到會話 {session_id}")
+
+    session_data = _batch_sessions[session_id]
+    results = session_data.get("results", [])
+
+    if not results:
+        return {"error": "尚無結果"}
+
+    try:
+        start_time = datetime.fromisoformat(session_data.get("start_time", datetime.now().isoformat()))
+        end_time = datetime.fromisoformat(session_data.get("end_time", datetime.now().isoformat()))
+        batch_mode = session_data.get("batch_mode", "local")
+        processing_info = session_data.get("processing_info", {})
+
+        metrics = compute_batch_metrics(results, start_time, end_time, batch_mode, session_id, processing_info)
+        stats = compute_analysis_stats(results)
+        changed_files = collect_changed_files(results, session_id)
+
+        return {
+            "session_id": session_id,
+            "metrics": metrics,
+            "analysis_stats": stats,
+            "changed_files": changed_files
+        }
+    except Exception as e:
+        logger.exception("Failed to compute batch summary: %s", e)
+        raise HTTPException(status_code=500, detail=f"計算指標失敗: {str(e)}")
+
+
+@app.post("/batch_summary_export/")
+async def export_batch_summary(req: BatchSummaryRequest):
+    """匯出批次指標為 JSON 格式"""
+    session_id = req.session_id
+    if session_id not in _batch_sessions:
+        raise HTTPException(status_code=404, detail=f"找不到會話 {session_id}")
+
+    session_data = _batch_sessions[session_id]
+    results = session_data.get("results", [])
+
+    if not results:
+        raise HTTPException(status_code=400, detail="尚無結果可匯出")
+
+    try:
+        start_time = datetime.fromisoformat(session_data.get("start_time", datetime.now().isoformat()))
+        end_time = datetime.fromisoformat(session_data.get("end_time", datetime.now().isoformat()))
+        batch_mode = session_data.get("batch_mode", "local")
+        processing_info = session_data.get("processing_info", {})
+
+        metrics = compute_batch_metrics(results, start_time, end_time, batch_mode, session_id, processing_info)
+        stats = compute_analysis_stats(results)
+
+        json_content = format_metrics_for_export(metrics, stats)
+
+        return Response(
+            content=json_content,
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=batch_summary_{session_id}.json"}
+        )
+    except Exception as e:
+        logger.exception("Failed to export batch summary: %s", e)
+        raise HTTPException(status_code=500, detail=f"匯出失敗: {str(e)}")
+
+
+@app.get("/batch_sessions/")
+async def list_batch_sessions():
+    """列出所有活躍的批次會話"""
+    sessions = []
+    for session_id, session_data in _batch_sessions.items():
+        sessions.append({
+            "session_id": session_id,
+            "batch_mode": session_data.get("batch_mode"),
+            "start_time": session_data.get("start_time"),
+            "result_count": len(session_data.get("results", [])),
+            "status": "processing" if not session_data.get("completed") else "completed"
+        })
+    return {"sessions": sessions}
 
 @app.post("/finalize_review/")
 async def finalize_review(req: FinalizeReviewRequest, request: Request):
