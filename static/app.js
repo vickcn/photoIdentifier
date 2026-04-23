@@ -1275,7 +1275,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }, 500);
     }
-});
+
     window.__showMetricsSummary = async function(sessionId) {
         const summaryPanel = document.getElementById('batch-metrics-summary');
         if (!summaryPanel) return;
@@ -1536,4 +1536,5 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('CSV 匯出失敗：' + e.message, 'error');
         }
     };
+
 });
