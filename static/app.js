@@ -605,8 +605,11 @@ document.addEventListener('DOMContentLoaded', () => {
         updateProgressUI(0, 0, 0, 0);
         currentBatchResults = [];
         batchOverviewActive = false;
+        window._currentMetrics = null;
+        window._currentSessionId = sessionId;
         document.getElementById('batch-overview').classList.add('hidden');
         document.getElementById('back-to-overview-btn').classList.add('hidden');
+        document.getElementById('batch-metrics-summary').classList.add('hidden');
         reviewSummary.style.display = 'none';
         decisionButtons.style.display = 'none';
         splitViewer.classList.add('hidden');
