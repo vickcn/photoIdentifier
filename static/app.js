@@ -710,11 +710,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (currentBatchResults.length > 0) {
                 showBatchOverview();
                 // 顯示批次指標摘要
-                if (window._currentSessionId) {
-                    setTimeout(() => {
-                        window.__showMetricsSummary(window._currentSessionId);
-                    }, 500);
-                }
+                setTimeout(() => window.__showMetricsSummary(), 300);
             }
 
         } catch (e) {
@@ -1108,6 +1104,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 const data = await res.json();
                 showToast(`✅ ${data.message}`);
+                window.__showMetricsSummary();
             } catch (e) {
                 showToast(e.message, 'error');
             } finally {
@@ -1276,37 +1273,94 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 500);
     }
 
-    window.__showMetricsSummary = async function(sessionId) {
+    window.__showMetricsSummary = function() {
         const summaryPanel = document.getElementById('batch-metrics-summary');
         if (!summaryPanel) return;
+        if (!currentBatchResults || currentBatchResults.length === 0) return;
 
-        try {
-            const response = await fetch('/batch_summary/', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_id: sessionId })
-            });
-
-            if (!response.ok) {
-                showToast('無法載入批次摘要', 'error');
-                return;
-            }
-
-            const data = await response.json();
-            if (data.error) {
-                showToast('尚無結果', 'warning');
-                return;
-            }
-
-            renderMetricsSummary(data);
-            summaryPanel.classList.remove('hidden');
-            summaryPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-        } catch (e) {
-            console.error('Failed to load metrics:', e);
-            showToast('載入失敗：' + e.message, 'error');
-        }
+        const computed = computeFrontendMetrics(currentBatchResults);
+        renderMetricsSummary(computed);
+        summaryPanel.classList.remove('hidden');
+        summaryPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
+
+    function computeFrontendMetrics(results) {
+        const labels = ['safe', 'unsafe', 'pending'];
+
+        // 初始化混淆矩陣
+        const cm = {};
+        labels.forEach(t => { cm[t] = {}; labels.forEach(p => { cm[t][p] = 0; }); });
+
+        // 決策分佈
+        const userDist = { safe: 0, unsafe: 0, pending: 0 };
+        const aiDist = { safe: 0, unsafe: 0, pending: 0 };
+
+        // 分析統計
+        let imagesWithFaces = 0, imagesWithStraps = 0, totalFaces = 0, totalStraps = 0;
+
+        // 已覆寫的檔案
+        const changedFiles = [];
+
+        results.forEach((item, idx) => {
+            const ai = item.ai_decision || 'safe';
+            const user = item.user_decision || ai;
+
+            if (labels.includes(ai) && labels.includes(user)) {
+                cm[ai][user]++;
+                userDist[user]++;
+                aiDist[ai]++;
+            }
+
+            if (ai !== user) {
+                changedFiles.push({
+                    index: idx + 1,
+                    file_name: item.file_name || item.file || 'unknown',
+                    ai_decision: ai,
+                    user_decision: user
+                });
+            }
+
+            // 分析統計（Drive 模式資料在 item.result，本地模式在 item 本身）
+            const analysis = item.result || item;
+            if (analysis.has_face) { imagesWithFaces++; totalFaces += (analysis.face_bboxes?.length || analysis.face_count || 0); }
+            if (analysis.has_brand_strap) { imagesWithStraps++; totalStraps += (analysis.strap_bboxes?.length || 0); }
+        });
+
+        // 計算 precision / recall / F1
+        const classMetrics = {};
+        labels.forEach(label => {
+            const tp = cm[label][label];
+            const fp = labels.reduce((s, l) => l !== label ? s + cm[l][label] : s, 0);
+            const fn = labels.reduce((s, l) => l !== label ? s + cm[label][l] : s, 0);
+            const precision = (tp + fp) > 0 ? tp / (tp + fp) : 0;
+            const recall    = (tp + fn) > 0 ? tp / (tp + fn) : 0;
+            const f1        = (precision + recall) > 0 ? 2 * precision * recall / (precision + recall) : 0;
+            classMetrics[label] = { precision, recall, f1_score: f1, support: tp + fn };
+        });
+
+        const total = results.length;
+        const agreed = results.filter(r => (r.ai_decision || 'safe') === (r.user_decision || r.ai_decision || 'safe')).length;
+
+        return {
+            metrics: {
+                total_processed: total,
+                total_errors: 0,
+                timestamp: { duration_seconds: 0 },
+                confusion_matrix: cm,
+                metrics: classMetrics,
+                agreement_rate: total > 0 ? agreed / total : 0,
+                changed_count: changedFiles.length,
+                decision_distribution: { user_decisions: userDist, ai_decisions: aiDist }
+            },
+            analysis_stats: {
+                images_with_faces: imagesWithFaces,
+                images_with_straps: imagesWithStraps,
+                average_faces_per_image: total > 0 ? totalFaces / total : 0,
+                average_straps_per_image: total > 0 ? totalStraps / total : 0
+            },
+            changed_files: changedFiles
+        };
+    }
 
     window.__toggleMetricsSummary = function() {
         const content = document.getElementById('metrics-content');
@@ -1449,30 +1503,18 @@ document.addEventListener('DOMContentLoaded', () => {
         container.innerHTML = html;
     }
 
-    window.__exportMetricsJSON = async function() {
-        const sessionId = window._currentSessionId;
-        if (!sessionId) {
-            showToast('找不到會話', 'error');
+    window.__exportMetricsJSON = function() {
+        if (!window._currentMetrics) {
+            showToast('尚無指標資料', 'error');
             return;
         }
-
         try {
-            const response = await fetch('/batch_summary_export/', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_id: sessionId })
-            });
-
-            if (!response.ok) {
-                showToast('匯出失敗', 'error');
-                return;
-            }
-
-            const blob = await response.blob();
+            const json = JSON.stringify(window._currentMetrics, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `batch_summary_${sessionId}.json`;
+            a.download = `batch_summary_${Date.now()}.json`;
             a.click();
             URL.revokeObjectURL(url);
             showToast('已匯出 JSON', 'success');
