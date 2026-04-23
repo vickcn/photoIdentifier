@@ -565,6 +565,10 @@ document.addEventListener('DOMContentLoaded', () => {
         batchMode = source;
         const currentConcurrency = parseInt(batchConcurrency.value) || 3;
 
+        // Generate session_id for metrics tracking
+        const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        window._currentSessionId = sessionId;
+
         let endpoint = '/batch/';
         let body = {};
 
@@ -578,6 +582,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 input_folder: inputDir,
                 concurrency: currentConcurrency,
                 color_rules: colorSwatches,
+                session_id: sessionId,
             };
         } else {
             const fId = driveFolderId.value.trim();
@@ -592,6 +597,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 target_folder_id: tId || null,
                 concurrency: currentConcurrency,
                 color_rules: colorSwatches,
+                session_id: sessionId,
             };
         }
 
@@ -651,8 +657,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             totalImages = data.total;
                             const result = data.result || data;
                             const aiStatus = result.moderation_status || (result.is_safe_for_public ? 'public' : 'private');
-                            data.user_decision = aiStatus;
-                            data.ai_decision = aiStatus;
+                            // 計算 ai_decision（如果還沒有）
+                            if (!result.ai_decision) {
+                                result.ai_decision = aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending';
+                            }
+                            data.user_decision = data.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                            data.ai_decision = result.ai_decision;
+                            // 保持 session_id
+                            if (data.session_id) window._currentSessionId = data.session_id;
                             currentBatchResults.push(data);
                         } else if (data.status === 'error') {
                             failedCount++;
@@ -662,11 +674,12 @@ document.addEventListener('DOMContentLoaded', () => {
                             // 本機批次模式：一次性完整 JSON 回應
                             totalImages = data.total || data.results.length;
                             if (data.temp_folder) currentTempFolder = data.temp_folder;
+                            if (data.session_id) window._currentSessionId = data.session_id;
                             data.results.forEach(item => {
                                 if (item.status === 'ok') {
                                     const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
-                                    item.user_decision = aiStatus;
-                                    item.ai_decision = aiStatus;
+                                    item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                                    item.ai_decision = item.ai_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
                                     currentBatchResults.push(item);
                                     successCount++;
                                 } else {
@@ -696,6 +709,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (currentBatchResults.length > 0) {
                 showBatchOverview();
+                // 顯示批次指標摘要
+                if (window._currentSessionId) {
+                    setTimeout(() => {
+                        window.__showMetricsSummary(window._currentSessionId);
+                    }, 500);
+                }
             }
 
         } catch (e) {
