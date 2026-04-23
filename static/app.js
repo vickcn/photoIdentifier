@@ -709,8 +709,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (currentBatchResults.length > 0) {
                 showBatchOverview();
-                // 顯示批次指標摘要
-                setTimeout(() => window.__showMetricsSummary(), 300);
+                // metrics 等用戶確認後再顯示
             }
 
         } catch (e) {
@@ -1033,13 +1032,11 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const activeBtn = document.getElementById('overview-finalize-btn') || finalizeBtn;
-
         function setBusy(busy) {
             [document.getElementById('overview-finalize-btn'), finalizeBtn].forEach(btn => {
                 if (!btn) return;
                 btn.disabled = busy;
-                btn.textContent = busy ? '⏳ 歸檔中...' : '🚀 確認並批次歸檔';
+                btn.textContent = busy ? '⏳ 處理中...' : '✅ 確認批次辨識結果';
             });
         }
 
@@ -1047,69 +1044,71 @@ document.addEventListener('DOMContentLoaded', () => {
             const safe = safeFolder.value.trim();
             const unsafe = unsafeFolder.value.trim();
             const pending = document.getElementById('pending-folder').value.trim();
-            if (!safe || !unsafe) {
-                showToast('請填寫安全與不安全的分流資料夾路徑', 'error');
-                return;
+
+            // 有填資料夾才歸檔，否則只顯示 metrics
+            if (safe && unsafe) {
+                const adjusted = currentBatchResults.map(r => ({
+                    ...r,
+                    moderation_status: r.user_decision,
+                    is_safe_for_public: r.user_decision === 'safe'
+                }));
+
+                setBusy(true);
+                try {
+                    const res = await fetch('/organize_batch/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            results: adjusted,
+                            safe_folder: safe,
+                            unsafe_folder: unsafe,
+                            pending_folder: pending || null
+                        })
+                    });
+                    if (!res.ok) throw new Error('歸檔失敗');
+                    const data = await res.json();
+                    showToast(data.message);
+                } catch (e) {
+                    showToast(e.message, 'error');
+                } finally {
+                    setBusy(false);
+                }
             }
 
-            const adjusted = currentBatchResults.map(r => ({
-                ...r,
-                moderation_status: r.user_decision,
-                is_safe_for_public: r.user_decision === 'safe'
-            }));
+            window.__showMetricsSummary();
 
-            setBusy(true);
-            try {
-                const res = await fetch('/organize_batch/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        results: adjusted,
-                        safe_folder: safe,
-                        unsafe_folder: unsafe,
-                        pending_folder: pending || null
-                    })
-                });
-                if (!res.ok) throw new Error('歸檔失敗');
-                const data = await res.json();
-                showToast(data.message);
-            } catch (e) {
-                showToast(e.message, 'error');
-            } finally {
-                setBusy(false);
-            }
         } else {
             const targetId = driveTargetId.value.trim();
-            if (!targetId) {
-                showToast('請填寫 Drive 目標資料夾 ID 才能歸檔', 'error');
-                return;
-            }
 
-            const decisions = currentBatchResults.map(r => ({
-                file_name: r.file_name || r.file,
-                drive_id: r.drive_id || r.result?.drive_id,
-                user_decision: r.user_decision
-            }));
+            // 有填 Drive 資料夾才歸檔，否則只顯示 metrics
+            if (targetId) {
+                const decisions = currentBatchResults.map(r => ({
+                    file_name: r.file_name || r.file,
+                    drive_id: r.drive_id || r.result?.drive_id,
+                    user_decision: r.user_decision
+                }));
 
-            setBusy(true);
-            try {
-                const res = await fetch('/finalize_review/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ decisions, target_folder_id: targetId })
-                });
-                if (!res.ok) {
-                    const err = await res.json();
-                    throw new Error(err.detail || '歸檔失敗');
+                setBusy(true);
+                try {
+                    const res = await fetch('/finalize_review/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ decisions, target_folder_id: targetId })
+                    });
+                    if (!res.ok) {
+                        const err = await res.json();
+                        throw new Error(err.detail || '歸檔失敗');
+                    }
+                    const data = await res.json();
+                    showToast(`✅ ${data.message}`);
+                } catch (e) {
+                    showToast(e.message, 'error');
+                } finally {
+                    setBusy(false);
                 }
-                const data = await res.json();
-                showToast(`✅ ${data.message}`);
-                window.__showMetricsSummary();
-            } catch (e) {
-                showToast(e.message, 'error');
-            } finally {
-                setBusy(false);
             }
+
+            window.__showMetricsSummary();
         }
     };
 
