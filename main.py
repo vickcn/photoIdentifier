@@ -169,7 +169,7 @@ async def get_frontend_config():
     return {
         "google_client_id": client_id,
         "google_api_key": os.environ.get("GOOGLE_API_KEY", ""),
-        "google_app_id": client_id.split("-")[0] if "-" in client_id else ""
+        "google_app_id": client_id  # 使用完整 client_id，而非分割版本
     }
 
 @app.get("/api/user/me")

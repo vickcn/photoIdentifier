@@ -1235,7 +1235,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: config.google_client_id,
-            scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file',
+            scope: 'https://www.googleapis.com/auth/drive.file',  // 統一使用 drive.file scope
             callback: async (response) => {
                 if (response.error !== undefined) {
                     throw (response);
@@ -1260,7 +1260,23 @@ document.addEventListener('DOMContentLoaded', () => {
     tryFetchServerToken();
 
     function createPicker(targetId) {
-        if (pickerApiLoaded && oauthToken) {
+        if (!pickerApiLoaded) {
+            console.warn('Picker API 尚未載入，嘗試重新載入...');
+            if (!window.gapi) {
+                showToast('Google API 未載入，請稍後重試', 'error');
+                return;
+            }
+            gapi.load('picker', { 'callback': () => { pickerApiLoaded = true; createPicker(targetId); } });
+            return;
+        }
+
+        if (!oauthToken) {
+            showToast('未取得授權令牌，請重試', 'error');
+            console.error('Missing OAuth token');
+            return;
+        }
+
+        try {
             const view = new google.picker.DocsView(google.picker.ViewId.DOCS);
             view.setIncludeFolders(true);
             view.setSelectFolderEnabled(true);
@@ -1274,18 +1290,32 @@ document.addEventListener('DOMContentLoaded', () => {
                 .setDeveloperKey(config.google_api_key)
                 .setCallback((data) => pickerCallback(data, targetId))
                 .build();
+
             picker.setVisible(true);
+        } catch (e) {
+            console.error('建立 Picker 失敗:', e);
+            showToast('瀏覽工具啟動失敗：' + e.message, 'error');
         }
     }
 
     function pickerCallback(data, targetId) {
         if (data.action === google.picker.Action.PICKED) {
+            if (!data.docs || data.docs.length === 0) {
+                showToast('未選取任何資料夾', 'warning');
+                return;
+            }
             const folder = data.docs[0];
             const input = document.getElementById(targetId);
             if (input) {
                 input.value = folder.id;
                 showToast(`已選取資料夾：${folder.name}`);
             }
+        } else if (data.action === google.picker.Action.CANCEL) {
+            console.log('Picker 已取消');
+        } else if (data[google.picker.Response.ERROR_CODE]) {
+            const errorCode = data[google.picker.Response.ERROR_CODE];
+            console.error('Picker 錯誤代碼:', errorCode);
+            showToast(`Picker 錯誤：${errorCode}`, 'error');
         }
     }
 
