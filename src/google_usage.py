@@ -159,16 +159,20 @@ async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rul
        - bbox: [ymin, xmin, ymax, xmax]，以 0 到 1000 的整數表示
        - confidence: 0.0 到 1.0 的信心度浮點數
 
-    2. 偵測圖片中「所有」名牌帶子（識別證帶、掛繩、lanyard/strap）（⚠️最多列出前 5 個）：
+    2. 偵測圖片中「所有」名牌帶子（識別證帶、掛繩、lanyard/strap）：
+       ⚠️ 帶子特徵：細長條形、繞過頸部或肩膀、與衣服分離的獨立物體
+       ⚠️ 重要提醒：不要把衣服本身的大面積色塊當成帶子（即使衣服是純色也不算）
        - bbox: [ymin, xmin, ymax, xmax]，以 0 到 1000 的整數表示
        - confidence: 0.0 到 1.0 的信心度浮點數
+       - 最多列出前 5 個最明確的帶子
 
-    3. 如果有帶子，請對照以下色票辨識整體主要顏色：
+    3. 如果有帶子，請「分別」對每條帶子辨識其主要顏色（不要混入衣服顏色）：
 {color_ref_lines}
 
     4. 判斷帶子是否為「不可公開」顏色：
-       - 不可公開顏色：「{unsafe_names}」→ has_unsafe_strap = true
-       - 可公開顏色：「{safe_names}」→ has_unsafe_strap = false
+       ⚠️ 重要：如果有多條帶子，只要有「任何一條」帶子是可公開顏色，就標記為可公開
+       - 不可公開顏色：「{unsafe_names}」→ has_unsafe_strap = true（所有帶子都是不可公開顏色）
+       - 可公開顏色：「{safe_names}」→ has_unsafe_strap = false（至少有一條帶子是可公開顏色，或無帶子）
        - 無帶子 → has_unsafe_strap = false
 
     5. 逐一確認圖片中每一名「小孩（兒童、未成年）」：
