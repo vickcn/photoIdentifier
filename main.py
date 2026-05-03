@@ -522,16 +522,11 @@ async def get_collaborative_memory(folder_id: str, request: Request):
 
 
 @app.post("/drive/collaborative_memory/save/")
-async def save_collaborative_memory(folder_id: str, content: str = Form(...), request: Request = None):
+async def save_collaborative_memory(request: Request, folder_id: str = Form(...), content: str = Form(...)):
     """保存協作記憶文件到 Google Drive（新增或更新）"""
     try:
-        # 從請求中取得 folder_id 和 content
-        if request is None:
-            raise HTTPException(status_code=400, detail="缺少必要參數")
-
         creds = get_drive_credentials(request)
         from googleapiclient.discovery import build
-        from googleapiclient.http import MediaFileUpload
         import io
         from googleapiclient.http import MediaIoBaseUpload
 
