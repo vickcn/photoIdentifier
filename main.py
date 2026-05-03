@@ -404,6 +404,30 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
     try:
         creds = get_drive_credentials(request)
 
+        # 1. 獲取協作記憶文件（如果存在）
+        collaborative_memory = None
+        try:
+            from googleapiclient.discovery import build
+            drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+            q = f"name = '.photoidentifier_memory.md' and '{req.folder_id}' in parents and trashed = false"
+            res = drive_service.files().list(q=q, fields="files(id)").execute()
+            files = res.get("files", [])
+
+            if files:
+                file_id = files[0]["id"]
+                import httpx
+                url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+                headers = {"Authorization": f"Bearer {creds.token}"}
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(url, headers=headers)
+                    if resp.status_code == 200:
+                        content = resp.text
+                        if len(content) > 1000:
+                            content = content[:1000]
+                        collaborative_memory = content
+        except Exception as e:
+            logger.warning(f"無法獲取協作記憶文件: {e}")
+
         # 生成或使用提供的 session_id
         session_id = req.session_id or str(uuid.uuid4())
         start_time = datetime.now()
@@ -431,6 +455,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                     target_folder_id=req.target_folder_id,
                     concurrency=req.concurrency,
                     color_rules=req.color_rules,
+                    collaborative_memory=collaborative_memory,
                 ):
                     # 儲存結果到 session
                     if chunk.get("status") == "ok":
@@ -460,6 +485,94 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
         if "找不到使用者憑證" in str(e):
              raise HTTPException(status_code=401, detail="Google 授權已失效，請重新連結。")
         raise HTTPException(status_code=500, detail=f"啟動串流處理失敗: {str(e)}")
+
+
+@app.get("/drive/collaborative_memory/get/")
+async def get_collaborative_memory(folder_id: str, request: Request):
+    """獲取指定文件夾的協作記憶文件內容"""
+    try:
+        creds = get_drive_credentials(request)
+        from googleapiclient.discovery import build
+        drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+        # 查找 .photoidentifier_memory.md 文件
+        q = f"name = '.photoidentifier_memory.md' and '{folder_id}' in parents and trashed = false"
+        res = drive_service.files().list(q=q, fields="files(id)").execute()
+        files = res.get("files", [])
+
+        if not files:
+            return {"content": "", "exists": False}
+
+        # 下載文件內容
+        file_id = files[0]["id"]
+        import httpx
+        url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+        headers = {"Authorization": f"Bearer {creds.token}"}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code != 200:
+                raise Exception(f"下載失敗: HTTP {resp.status_code}")
+            content = resp.text
+
+        return {"content": content, "exists": True}
+
+    except Exception as e:
+        logger.exception("獲取協作記憶文件失敗: %s", e)
+        raise HTTPException(status_code=500, detail=f"無法讀取協作記憶文件: {str(e)}")
+
+
+@app.post("/drive/collaborative_memory/save/")
+async def save_collaborative_memory(folder_id: str, content: str = Form(...), request: Request = None):
+    """保存協作記憶文件到 Google Drive（新增或更新）"""
+    try:
+        # 從請求中取得 folder_id 和 content
+        if request is None:
+            raise HTTPException(status_code=400, detail="缺少必要參數")
+
+        creds = get_drive_credentials(request)
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+        import io
+        from googleapiclient.http import MediaIoBaseUpload
+
+        drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+        # 限制內容長度為 1000 字
+        if len(content) > 1000:
+            content = content[:1000]
+
+        # 查找是否已存在
+        q = f"name = '.photoidentifier_memory.md' and '{folder_id}' in parents and trashed = false"
+        res = drive_service.files().list(q=q, fields="files(id)").execute()
+        files = res.get("files", [])
+
+        file_metadata = {"name": ".photoidentifier_memory.md"}
+        media = MediaIoBaseUpload(io.BytesIO(content.encode('utf-8')), mimetype="text/markdown", resumable=True)
+
+        if files:
+            # 更新現有文件
+            file_id = files[0]["id"]
+            drive_service.files().update(
+                fileId=file_id,
+                body=file_metadata,
+                media_body=media,
+                fields="id"
+            ).execute()
+            return {"status": "updated", "message": "協作記憶文件已更新"}
+        else:
+            # 創建新文件
+            file_metadata["mimeType"] = "text/markdown"
+            file_metadata["parents"] = [folder_id]
+            drive_service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id"
+            ).execute()
+            return {"status": "created", "message": "協作記憶文件已創建"}
+
+    except Exception as e:
+        logger.exception("保存協作記憶文件失敗: %s", e)
+        raise HTTPException(status_code=500, detail=f"無法保存協作記憶文件: {str(e)}")
 
 
 @app.get("/auth/google")

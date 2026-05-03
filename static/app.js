@@ -1613,4 +1613,99 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // 協作記憶相關函數
+    window.__openCollaborativeMemoryModal = async function() {
+        const folderInput = document.getElementById('drive-folder-id');
+        const folderId = folderInput.value.trim();
+
+        if (!folderId) {
+            showToast('請先選擇 Google Drive 資料夾', 'error');
+            return;
+        }
+
+        const modal = document.getElementById('collaborative-memory-modal');
+        const textarea = document.getElementById('collaborative-memory-text');
+
+        try {
+            // 獲取現有的協作記憶內容
+            const response = await fetch(`/drive/collaborative_memory/get/?folder_id=${encodeURIComponent(folderId)}`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            textarea.value = data.content || '';
+            updateCharCount();
+        } catch (e) {
+            console.warn('無法加載協作記憶文件:', e);
+            textarea.value = '';
+        }
+
+        modal.classList.remove('hidden');
+    };
+
+    window.__closeCollaborativeMemoryModal = function() {
+        const modal = document.getElementById('collaborative-memory-modal');
+        modal.classList.add('hidden');
+    };
+
+    window.__saveCollaborativeMemory = async function() {
+        const folderInput = document.getElementById('drive-folder-id');
+        const folderId = folderInput.value.trim();
+        const textarea = document.getElementById('collaborative-memory-text');
+        const content = textarea.value.trim();
+
+        if (!folderId) {
+            showToast('請先選擇 Google Drive 資料夾', 'error');
+            return;
+        }
+
+        if (content.length > 1000) {
+            showToast('內容超過 1000 字限制', 'error');
+            return;
+        }
+
+        try {
+            const formData = new FormData();
+            formData.append('folder_id', folderId);
+            formData.append('content', content);
+
+            const response = await fetch('/drive/collaborative_memory/save/', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || `HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            showToast('協作記憶已' + (data.status === 'created' ? '建立' : '更新'), 'success');
+            window.__closeCollaborativeMemoryModal();
+        } catch (e) {
+            console.error('保存協作記憶失敗:', e);
+            showToast('保存失敗：' + e.message, 'error');
+        }
+    };
+
+    // 字符計數
+    function updateCharCount() {
+        const textarea = document.getElementById('collaborative-memory-text');
+        const count = document.getElementById('char-count');
+        count.textContent = textarea.value.length;
+    }
+
+    // 字符計數事件監聽
+    const textarea = document.getElementById('collaborative-memory-text');
+    if (textarea) {
+        textarea.addEventListener('input', updateCharCount);
+    }
+
+    // 綁定編輯按鈕
+    const editMemoryBtn = document.getElementById('btn-edit-collaborative-memory');
+    if (editMemoryBtn) {
+        editMemoryBtn.addEventListener('click', window.__openCollaborativeMemoryModal);
+    }
+
 });

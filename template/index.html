@@ -132,6 +132,8 @@
                         </div>
                     </div>
 
+                    <button id="btn-edit-collaborative-memory" class="secondary-btn" style="width: 100%;">📝 編輯協作記憶</button>
+
                     <button id="analyze-batch-btn" class="primary-btn">開始批量辨識</button>
 
                     <!-- Batch Organize Area -->
@@ -425,6 +427,28 @@
                 </div><!-- end viewer-review-wrapper -->
             </section>
         </main>
+    </div>
+
+    <!-- Collaborative Memory Modal -->
+    <div id="collaborative-memory-modal" class="modal hidden">
+        <div class="modal-overlay" onclick="window.__closeCollaborativeMemoryModal()"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📝 編輯協作記憶</h3>
+                <button class="modal-close-btn" onclick="window.__closeCollaborativeMemoryModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-hint">在此輸入針對此資料夾的特殊辨識規則或背景信息（最多 1000 字）。這些信息將在每次批量辨識時自動附加到 AI prompt 中。</p>
+                <textarea id="collaborative-memory-text" class="memory-textarea" placeholder="例如：此資料夾中所有圖片都是學校員工活動照片，請重點檢查是否有名牌帶子的存在..."></textarea>
+                <div class="character-count">
+                    <span id="char-count">0</span> / 1000
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="secondary-btn" onclick="window.__closeCollaborativeMemoryModal()">取消</button>
+                <button class="primary-btn" onclick="window.__saveCollaborativeMemory()">保存</button>
+            </div>
+        </div>
     </div>
 
     <!-- Notification Toast -->

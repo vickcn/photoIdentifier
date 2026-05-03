@@ -134,7 +134,7 @@ def _dedup_bboxes(bboxes: list, confidences: list) -> tuple[list, list]:
     return new_bboxes, new_confs
 
 
-async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rules: list | None = None) -> PhotoAnalysisResult:
+async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rules: list | None = None, collaborative_memory: str | None = None) -> PhotoAnalysisResult:
     """
     單次 LLM 呼叫取得所有偵測結果，再由系統邏輯分三段 if 判定：
       1. 有不可公開帶子 → private
@@ -151,9 +151,18 @@ async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rul
         for r in color_rules
     )
 
+    # 組合協作記憶（如果有的話）
+    collaborative_section = ""
+    if collaborative_memory and collaborative_memory.strip():
+        collaborative_section = f"""
+    【用戶協作記憶】：
+    {collaborative_memory.strip()}
+
+    """
+
     prompt = f"""
     你是一個專業的圖片審核系統。請分析這張圖片，並回傳純 JSON 格式的結果，不要任何 markdown 標記。
-
+{collaborative_section}
     【辨識目標】：
     1. 偵測圖片中「所有」清晰可見的人臉（⚠️最多列出前 5 個最清晰的人臉）：
        - bbox: [ymin, xmin, ymax, xmax]，以 0 到 1000 的整數表示
