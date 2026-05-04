@@ -490,6 +490,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         formData.append('file', singleSelectedFile);
         formData.append('color_rules_json', JSON.stringify(colorSwatches));
+        if (window._collaborativeMemories && window._collaborativeMemories.single) {
+            formData.append('collaborative_memory', window._collaborativeMemories.single);
+        }
 
         try {
             const res = await fetch('/analyze_with_image/', {
@@ -603,6 +606,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 concurrency: currentConcurrency,
                 color_rules: colorSwatches,
                 session_id: sessionId,
+                collaborative_memory: window._collaborativeMemories?.local || null,
             };
         } else {
             const fId = driveFolderId.value.trim();
@@ -1643,34 +1647,59 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
+    // 儲存各模式的協作記憶
+    window._collaborativeMemories = {
+        single: '',
+        local: '',
+        drive: ''
+    };
+
     // 協作記憶相關函數
-    window.__openCollaborativeMemoryModal = async function() {
-        const folderInput = document.getElementById('drive-folder-id');
-        const folderId = folderInput.value.trim();
-
-        if (!folderId) {
-            showToast('請先選擇 Google Drive 資料夾', 'error');
-            return;
-        }
-
+    window.__openCollaborativeMemoryModal = async function(mode) {
         const modal = document.getElementById('collaborative-memory-modal');
         const textarea = document.getElementById('collaborative-memory-text');
+        const title = document.getElementById('memory-modal-title');
+        const hint = document.getElementById('memory-modal-hint');
 
-        try {
-            // 獲取現有的協作記憶內容
-            const response = await fetch(`/drive/collaborative_memory/get/?folder_id=${encodeURIComponent(folderId)}`);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
+        modal.setAttribute('data-mode', mode);
+
+        if (mode === 'drive') {
+            // Google Drive 模式：需要選擇資料夾
+            const folderInput = document.getElementById('drive-folder-id');
+            const folderId = folderInput.value.trim();
+
+            if (!folderId) {
+                showToast('請先選擇 Google Drive 資料夾', 'error');
+                return;
             }
 
-            const data = await response.json();
-            textarea.value = data.content || '';
-            updateCharCount();
-        } catch (e) {
-            console.warn('無法加載協作記憶文件:', e);
-            textarea.value = '';
+            title.textContent = '📝 編輯協作記憶';
+            hint.textContent = '在此輸入針對此資料夾的特殊辨識規則或背景信息（最多 1000 字）。這些信息將在每次批量辨識時自動附加到 AI prompt 中。';
+
+            try {
+                // 獲取現有的協作記憶內容
+                const response = await fetch(`/drive/collaborative_memory/get/?folder_id=${encodeURIComponent(folderId)}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                textarea.value = data.content || '';
+            } catch (e) {
+                console.warn('無法加載協作記憶文件:', e);
+                textarea.value = '';
+            }
+        } else if (mode === 'single') {
+            title.textContent = '📝 添加協作提示詞（單張辨識）';
+            hint.textContent = '輸入特殊的辨識規則或背景信息以增強 AI 判定準確性。這些信息僅在本次辨識中使用。';
+            textarea.value = window._collaborativeMemories.single || '';
+        } else if (mode === 'local') {
+            title.textContent = '📝 添加協作提示詞（本地批量）';
+            hint.textContent = '輸入特殊的辨識規則或背景信息以增強 AI 判定準確性。這些信息僅在本次批量辨識中使用。';
+            textarea.value = window._collaborativeMemories.local || '';
         }
 
+        updateCharCount();
         modal.classList.remove('hidden');
     };
 
@@ -1680,15 +1709,10 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.__saveCollaborativeMemory = async function() {
-        const folderInput = document.getElementById('drive-folder-id');
-        const folderId = folderInput.value.trim();
+        const modal = document.getElementById('collaborative-memory-modal');
+        const mode = modal.getAttribute('data-mode');
         const textarea = document.getElementById('collaborative-memory-text');
         const content = textarea.value.trim();
-
-        if (!folderId) {
-            showToast('請先選擇 Google Drive 資料夾', 'error');
-            return;
-        }
 
         if (content.length > 1000) {
             showToast('內容超過 1000 字限制', 'error');
@@ -1696,22 +1720,42 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
-            const formData = new FormData();
-            formData.append('folder_id', folderId);
-            formData.append('content', content);
+            if (mode === 'drive') {
+                // Google Drive 模式：保存到遠端
+                const folderInput = document.getElementById('drive-folder-id');
+                const folderId = folderInput.value.trim();
 
-            const response = await fetch('/drive/collaborative_memory/save/', {
-                method: 'POST',
-                body: formData
-            });
+                if (!folderId) {
+                    showToast('請先選擇 Google Drive 資料夾', 'error');
+                    return;
+                }
 
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || `HTTP ${response.status}`);
+                const formData = new FormData();
+                formData.append('folder_id', folderId);
+                formData.append('content', content);
+
+                const response = await fetch('/drive/collaborative_memory/save/', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                showToast('協作記憶已' + (data.status === 'created' ? '建立' : '更新'), 'success');
+            } else if (mode === 'single') {
+                // 單張模式：存到記憶體，不保存
+                window._collaborativeMemories.single = content;
+                showToast('已添加協作提示詞（本次辨識有效）', 'success');
+            } else if (mode === 'local') {
+                // 本地模式：存到記憶體，不保存
+                window._collaborativeMemories.local = content;
+                showToast('已添加協作提示詞（本次批量有效）', 'success');
             }
 
-            const data = await response.json();
-            showToast('協作記憶已' + (data.status === 'created' ? '建立' : '更新'), 'success');
             window.__closeCollaborativeMemoryModal();
         } catch (e) {
             console.error('保存協作記憶失敗:', e);
@@ -1732,10 +1776,22 @@ document.addEventListener('DOMContentLoaded', () => {
         textarea.addEventListener('input', updateCharCount);
     }
 
-    // 綁定編輯按鈕
+    // 綁定編輯按鈕（Google Drive 模式）
     const editMemoryBtn = document.getElementById('btn-edit-collaborative-memory');
     if (editMemoryBtn) {
-        editMemoryBtn.addEventListener('click', window.__openCollaborativeMemoryModal);
+        editMemoryBtn.addEventListener('click', () => window.__openCollaborativeMemoryModal('drive'));
+    }
+
+    // 綁定添加按鈕（單張模式）
+    const addMemorySingleBtn = document.getElementById('btn-add-memory-single');
+    if (addMemorySingleBtn) {
+        addMemorySingleBtn.addEventListener('click', () => window.__openCollaborativeMemoryModal('single'));
+    }
+
+    // 綁定添加按鈕（本地批量模式）
+    const addMemoryLocalBtn = document.getElementById('btn-add-memory-local');
+    if (addMemoryLocalBtn) {
+        addMemoryLocalBtn.addEventListener('click', () => window.__openCollaborativeMemoryModal('local'));
     }
 
 });

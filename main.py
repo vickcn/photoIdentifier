@@ -212,7 +212,7 @@ async def get_local_file(path: str):
 
 
 @app.post("/analyze/", response_model=PhotoAnalysisResult)
-async def analyze_photo(file: UploadFile = File(...)):
+async def analyze_photo(file: UploadFile = File(...), collaborative_memory: str = Form(None)):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="請上傳圖片檔案")
 
@@ -227,8 +227,8 @@ async def analyze_photo(file: UploadFile = File(...)):
             )
 
         b64_image = base64.b64encode(image_bytes).decode('utf-8')
-        
-        return await analyze_brand_strap_image(b64_image, file.content_type)
+
+        return await analyze_brand_strap_image(b64_image, file.content_type, collaborative_memory=collaborative_memory)
 
     except HTTPException:
         raise
@@ -238,7 +238,7 @@ async def analyze_photo(file: UploadFile = File(...)):
 
 
 @app.post("/visualize/", response_class=Response)
-async def visualize_photo(file: UploadFile = File(...)):
+async def visualize_photo(file: UploadFile = File(...), collaborative_memory: str = Form(None)):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="請上傳圖片檔案")
 
@@ -253,7 +253,7 @@ async def visualize_photo(file: UploadFile = File(...)):
             )
 
         # 這裡改走最新封裝的流程，同時取得診斷與製圖！
-        analysis_result, drawn_image_bytes = await process_and_visualize_photo(image_bytes, file.content_type)
+        analysis_result, drawn_image_bytes = await process_and_visualize_photo(image_bytes, file.content_type, collaborative_memory=collaborative_memory)
         
         # 將畫好框的圖片以二進位返回，並標明 MIME 類型為 jpeg
         return Response(content=drawn_image_bytes, media_type="image/jpeg")
@@ -269,6 +269,7 @@ async def visualize_photo(file: UploadFile = File(...)):
 async def analyze_with_image(
     file: UploadFile = File(...),
     color_rules_json: Optional[str] = Form(None),
+    collaborative_memory: Optional[str] = Form(None),
 ):
     """專門給單圖 UI 使用，回傳 JSON 結果，且夾帶畫好框的 base64 圖片供前端立即渲染"""
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -282,7 +283,7 @@ async def analyze_with_image(
 
         color_rules = json.loads(color_rules_json) if color_rules_json else None
         analysis_result, drawn_image_bytes = await process_and_visualize_photo(
-            image_bytes, file.content_type, color_rules=color_rules
+            image_bytes, file.content_type, color_rules=color_rules, collaborative_memory=collaborative_memory
         )
         drawn_b64 = base64.b64encode(drawn_image_bytes).decode('utf-8')
         return {
@@ -299,6 +300,7 @@ class BatchRequest(BaseModel):
     concurrency: int = 3
     color_rules: Optional[list] = None
     session_id: Optional[str] = None
+    collaborative_memory: Optional[str] = None
 
 @app.post("/batch/")
 async def batch_visualize(req: BatchRequest):
@@ -333,6 +335,7 @@ async def batch_visualize(req: BatchRequest):
             output_dir=temp_folder,
             concurrency=req.concurrency,
             color_rules=req.color_rules,
+            collaborative_memory=req.collaborative_memory,
         )
         ok = [r for r in results if r["status"] == "ok"]
         err = [r for r in results if r["status"] == "error"]
@@ -362,6 +365,7 @@ class DriveBatchRequest(BaseModel):
     concurrency: int = 3
     color_rules: Optional[list] = None
     session_id: Optional[str] = None
+    collaborative_memory: Optional[str] = None
 
 @app.post("/batch_drive/")
 async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
