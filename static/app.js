@@ -1314,6 +1314,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (input) {
                 input.value = folder.id;
                 showToast(`已選取資料夾：${folder.name}`);
+                // 當選擇輸入資料夾時，自動加載該資料夾的協作記憶
+                if (targetId === 'drive-folder-id') {
+                    autoLoadCollaborativeMemoryForDrive(folder.id);
+                }
             }
         } else if (data.action === google.picker.Action.CANCEL) {
             console.log('Picker 已取消');
@@ -1321,6 +1325,27 @@ document.addEventListener('DOMContentLoaded', () => {
             const errorCode = data[google.picker.Response.ERROR_CODE];
             console.error('Picker 錯誤代碼:', errorCode);
             showToast(`Picker 錯誤：${errorCode}`, 'error');
+        }
+    }
+
+    // 自動加載 Google Drive 資料夾的協作記憶
+    async function autoLoadCollaborativeMemoryForDrive(folderId) {
+        try {
+            const response = await fetch(`/drive/collaborative_memory/get/?folder_id=${encodeURIComponent(folderId)}`);
+            if (!response.ok) {
+                // 資料夾沒有協作記憶，清空內存版本
+                window._collaborativeMemories.drive = '';
+                return;
+            }
+
+            const data = await response.json();
+            if (data.content) {
+                window._collaborativeMemories.drive = data.content;
+            } else {
+                window._collaborativeMemories.drive = '';
+            }
+        } catch (e) {
+            console.warn('無法自動加載協作記憶:', e);
         }
     }
 
@@ -1779,6 +1804,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const textarea = document.getElementById('collaborative-memory-text');
     if (textarea) {
         textarea.addEventListener('input', updateCharCount);
+    }
+
+    // 監聽 Google Drive 資料夾 ID 的變化，自動加載協作記憶
+    const driveFolderIdInput = document.getElementById('drive-folder-id');
+    if (driveFolderIdInput) {
+        driveFolderIdInput.addEventListener('change', (e) => {
+            const folderId = e.target.value.trim();
+            if (folderId) {
+                autoLoadCollaborativeMemoryForDrive(folderId);
+            } else {
+                // 清空資料夾時，清空協作記憶
+                window._collaborativeMemories.drive = '';
+            }
+        });
     }
 
     // 綁定編輯按鈕（Google Drive 模式）
