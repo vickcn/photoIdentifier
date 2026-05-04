@@ -622,6 +622,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 concurrency: currentConcurrency,
                 color_rules: colorSwatches,
                 session_id: sessionId,
+                collaborative_memory: window._collaborativeMemories?.drive || null,
             };
         }
 
@@ -1664,30 +1665,31 @@ document.addEventListener('DOMContentLoaded', () => {
         modal.setAttribute('data-mode', mode);
 
         if (mode === 'drive') {
-            // Google Drive 模式：需要選擇資料夾
+            // Google Drive 模式
             const folderInput = document.getElementById('drive-folder-id');
             const folderId = folderInput.value.trim();
 
-            if (!folderId) {
-                showToast('請先選擇 Google Drive 資料夾', 'error');
-                return;
-            }
-
             title.textContent = '📝 編輯協作記憶';
-            hint.textContent = '在此輸入針對此資料夾的特殊辨識規則或背景信息（最多 1000 字）。這些信息將在每次批量辨識時自動附加到 AI prompt 中。';
+            hint.textContent = '在此輸入針對此資料夾的特殊辨識規則或背景信息（最多 1000 字）。' +
+                              (folderId ? '這些信息將保存到雲端。' : '未指定資料夾時，信息僅在本次會話有效。');
 
             try {
-                // 獲取現有的協作記憶內容
-                const response = await fetch(`/drive/collaborative_memory/get/?folder_id=${encodeURIComponent(folderId)}`);
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
+                if (folderId) {
+                    // 有指定資料夾時，嘗試從遠端讀取
+                    const response = await fetch(`/drive/collaborative_memory/get/?folder_id=${encodeURIComponent(folderId)}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
 
-                const data = await response.json();
-                textarea.value = data.content || '';
+                    const data = await response.json();
+                    textarea.value = data.content || '';
+                } else {
+                    // 沒有指定資料夾時，從內存讀取
+                    textarea.value = window._collaborativeMemories.drive || '';
+                }
             } catch (e) {
                 console.warn('無法加載協作記憶文件:', e);
-                textarea.value = '';
+                textarea.value = window._collaborativeMemories.drive || '';
             }
         } else if (mode === 'single') {
             title.textContent = '📝 添加協作提示詞（單張辨識）';
@@ -1721,31 +1723,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             if (mode === 'drive') {
-                // Google Drive 模式：保存到遠端
+                // Google Drive 模式
                 const folderInput = document.getElementById('drive-folder-id');
                 const folderId = folderInput.value.trim();
 
-                if (!folderId) {
-                    showToast('請先選擇 Google Drive 資料夾', 'error');
-                    return;
+                if (folderId) {
+                    // 有指定資料夾：保存到遠端
+                    const formData = new FormData();
+                    formData.append('folder_id', folderId);
+                    formData.append('content', content);
+
+                    const response = await fetch('/drive/collaborative_memory/save/', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || `HTTP ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    showToast('協作記憶已' + (data.status === 'created' ? '建立' : '更新'), 'success');
+                    window._collaborativeMemories.drive = content;  // 同時存到內存作為備份
+                } else {
+                    // 沒有指定資料夾：存到內存
+                    window._collaborativeMemories.drive = content;
+                    showToast('已添加協作提示詞（本次會話有效）', 'success');
                 }
-
-                const formData = new FormData();
-                formData.append('folder_id', folderId);
-                formData.append('content', content);
-
-                const response = await fetch('/drive/collaborative_memory/save/', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || `HTTP ${response.status}`);
-                }
-
-                const data = await response.json();
-                showToast('協作記憶已' + (data.status === 'created' ? '建立' : '更新'), 'success');
             } else if (mode === 'single') {
                 // 單張模式：存到記憶體，不保存
                 window._collaborativeMemories.single = content;

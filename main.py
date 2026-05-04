@@ -408,29 +408,32 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
     try:
         creds = get_drive_credentials(request)
 
-        # 1. 獲取協作記憶文件（如果存在）
-        collaborative_memory = None
-        try:
-            from googleapiclient.discovery import build
-            drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
-            q = f"name = '.photoidentifier_memory.md' and '{req.folder_id}' in parents and trashed = false"
-            res = drive_service.files().list(q=q, fields="files(id)").execute()
-            files = res.get("files", [])
+        # 1. 獲取協作記憶：優先使用請求提供的，再從遠端讀取
+        collaborative_memory = req.collaborative_memory
 
-            if files:
-                file_id = files[0]["id"]
-                import httpx
-                url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-                headers = {"Authorization": f"Bearer {creds.token}"}
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.get(url, headers=headers)
-                    if resp.status_code == 200:
-                        content = resp.text
-                        if len(content) > 1000:
-                            content = content[:1000]
-                        collaborative_memory = content
-        except Exception as e:
-            logger.warning(f"無法獲取協作記憶文件: {e}")
+        if not collaborative_memory:
+            # 嘗試從 Google Drive 讀取
+            try:
+                from googleapiclient.discovery import build
+                drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+                q = f"name = '.photoidentifier_memory.md' and '{req.folder_id}' in parents and trashed = false"
+                res = drive_service.files().list(q=q, fields="files(id)").execute()
+                files = res.get("files", [])
+
+                if files:
+                    file_id = files[0]["id"]
+                    import httpx
+                    url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+                    headers = {"Authorization": f"Bearer {creds.token}"}
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        resp = await client.get(url, headers=headers)
+                        if resp.status_code == 200:
+                            content = resp.text
+                            if len(content) > 1000:
+                                content = content[:1000]
+                            collaborative_memory = content
+            except Exception as e:
+                logger.warning(f"無法獲取協作記憶文件: {e}")
 
         # 生成或使用提供的 session_id
         session_id = req.session_id or str(uuid.uuid4())
