@@ -128,7 +128,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const inputDir = inputFolder.value.trim();
         const folderName = tempFolderSelect.value;
         if (!inputDir || !folderName) return;
-        if (!confirm(`確定要刪除暫存資料夾「${folderName}」嗎？`)) return;
+        if (!confirm(`要清掉暫存資料夾「${folderName}」嗎？`)) return;
         try {
             const res = await fetch('/delete_review_temp/', {
                 method: 'POST',
@@ -136,7 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ input_folder: inputDir, folder_name: folderName })
             });
             if (!res.ok) throw new Error((await res.json()).detail);
-            showToast('暫存資料夾已刪除');
+            showToast('暫存資料夾清掉了');
             refreshTempFolders(inputDir);
         } catch (e) {
             showToast(e.message, 'error');
@@ -177,7 +177,7 @@ document.addEventListener('DOMContentLoaded', () => {
                  title="${s.name}\n${s.hex}\nRGB(${s.rgb.join(', ')})">
                 <div class="swatch-color" style="background:${s.hex}"></div>
                 <span class="swatch-name">${s.name}</span>
-                <span class="swatch-status">${s.safe ? '可公開' : '不可'}</span>
+                <span class="swatch-status">${s.safe ? '可以分享' : '先留著'}</span>
             </div>`
         ).join('');
         grid.querySelectorAll('.color-swatch').forEach(el => {
@@ -450,7 +450,7 @@ document.addEventListener('DOMContentLoaded', () => {
         fileNameDisplay.textContent = filename;
         safetyBadge.textContent = '等待分析...';
         safetyBadge.className = 'status-badge';
-        moderationReason.textContent = '點擊「開始辨識單圖」送出請求';
+        moderationReason.textContent = '按下「看看這張照片」就開始';
         faceCount.textContent = '-';
         strapCount.textContent = '-';
         strapColor.textContent = '-';
@@ -495,10 +495,10 @@ document.addEventListener('DOMContentLoaded', () => {
         fileNameDisplay.textContent = filename;
         
         if (analysis.is_safe_for_public) {
-            safetyBadge.textContent = '可公開 (Safe)';
+            safetyBadge.textContent = '可以分享';
             safetyBadge.className = 'status-badge status-safe';
         } else {
-            safetyBadge.textContent = '不可公開 (Unsafe)';
+            safetyBadge.textContent = '先留著';
             safetyBadge.className = 'status-badge status-unsafe';
         }
 
@@ -575,7 +575,7 @@ document.addEventListener('DOMContentLoaded', () => {
         splitViewer.classList.add('hidden');
         emptyState.classList.remove('hidden');
         showLoading(true);
-        document.getElementById('loading-text').textContent = '正在啟動批量辨識引擎...';
+        document.getElementById('loading-text').textContent = '正在翻開這場活動的照片…';
 
         try {
             const response = await fetch(endpoint, {
@@ -586,7 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!response.ok) {
                 const err = await response.json();
-                throw new Error(err.detail || '批量辨識啟動失敗');
+                throw new Error(err.detail || '沒能開始，再試一次好嗎');
             }
 
             // 處理串流結果
@@ -625,7 +625,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else if (data.status === 'error') {
                             failedCount++;
                             totalImages = data.total || totalImages;
-                            showToast(`${data.file_name || data.file} 辨識出錯`, 'error');
+                            showToast(`${data.file_name || data.file} 這張沒看成`, 'error');
                         } else if (data.results && Array.isArray(data.results)) {
                             // 本機批次模式：一次性完整 JSON 回應
                             totalImages = data.total || data.results.length;
@@ -638,7 +638,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     successCount++;
                                 } else {
                                     failedCount++;
-                                    showToast(`${item.file} 辨識出錯`, 'error');
+                                    showToast(`${item.file} 這張沒看成`, 'error');
                                 }
                             });
                         }
@@ -652,7 +652,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            showToast(`批量處理完成！成功：${successCount}，失敗：${failedCount}`);
+            showToast(`看完了。${successCount} 張看過${failedCount ? `，${failedCount} 張沒看成` : ''}`);
 
             if (source === 'local') {
                 organizeArea.classList.remove('hidden');
@@ -669,7 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(e.message, 'error');
         } finally {
             showLoading(false);
-            document.getElementById('loading-text').textContent = '正在用 AI 魔法深度辨識中...';
+            document.getElementById('loading-text').textContent = '正在一張一張看過去…';
         }
     });
 
@@ -773,7 +773,7 @@ document.addEventListener('DOMContentLoaded', () => {
             html += `<div class="thumbnail-item" data-idx="${idx}" title="${fileName}">
                 <img src="${src}" alt="${fileName}" loading="lazy">
                 <div class="thumbnail-overlay">
-                    <span class="thumb-badge ${isSafe ? 'safe' : 'unsafe'}">${isSafe ? 'Safe' : 'Unsafe'}</span>
+                    <span class="thumb-badge ${isSafe ? 'safe' : 'unsafe'}">${isSafe ? '可以分享' : '先留著'}</span>
                 </div>
                 ${isOverride ? '<span class="thumb-override">🔄</span>' : ''}
                 <div class="thumbnail-name">${fileName}</div>
@@ -798,7 +798,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <img class="list-row-thumb" src="${src}" alt="${fileName}" loading="lazy">
                 <span class="list-row-name" title="${fileName}">${fileName}</span>
                 ${isOverride ? '<span class="list-row-override">🔄</span>' : ''}
-                <span class="list-row-badge ${isSafe ? 'safe' : 'unsafe'}">${isSafe ? 'Safe' : 'Unsafe'}</span>
+                <span class="list-row-badge ${isSafe ? 'safe' : 'unsafe'}">${isSafe ? '可以分享' : '先留著'}</span>
             </div>`;
         });
         html += '</div>';
@@ -837,7 +837,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Check for auth success in URL
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('auth') === 'success') {
-        showToast('Google Drive 連結成功！');
+        showToast('雲端連結好了');
         // 自動切換到批次模式
         tabBtns[1].click();
         document.querySelector('input[value="drive"]').checked = true;
@@ -890,10 +890,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 更新 safety badge 顯示
         if (decision === 'safe') {
-            safetyBadge.textContent = '可公開 (Safe)';
+            safetyBadge.textContent = '可以分享';
             safetyBadge.className = 'status-badge status-safe';
         } else {
-            safetyBadge.textContent = '不可公開 (Unsafe)';
+            safetyBadge.textContent = '先留著';
             safetyBadge.className = 'status-badge status-unsafe';
         }
 
@@ -904,14 +904,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const badge = document.createElement('span');
                 badge.id = 'override-indicator';
                 badge.className = 'override-badge';
-                badge.textContent = '🔄 已覆寫';
+                badge.textContent = '✏️ 你改過';
                 safetyBadge.parentElement.appendChild(badge);
             }
         } else {
             if (overrideEl) overrideEl.remove();
         }
 
-        showToast(`已將此圖設為 ${decision === 'safe' ? '✅ Safe' : '❌ Unsafe'}`);
+        showToast(`已經改成「${decision === 'safe' ? '可以分享' : '先留著'}」`);
     };
 
     function renderReviewSummary() {
@@ -932,13 +932,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span class="review-item-index">#${idx + 1}</span>
                 <span class="review-item-name" title="${fileName}">${fileName}</span>
                 ${isOverride ? '<span class="review-item-override">🔄</span>' : ''}
-                <span class="review-item-badge ${isSafe ? 'safe' : 'unsafe'}">${isSafe ? 'Safe' : 'Unsafe'}</span>
+                <span class="review-item-badge ${isSafe ? 'safe' : 'unsafe'}">${isSafe ? '可以分享' : '先留著'}</span>
             </div>`;
         });
 
         reviewList.innerHTML = html;
-        reviewSafeCount.textContent = `Safe: ${safeC}`;
-        reviewUnsafeCount.textContent = `Unsafe: ${unsafeC}`;
+        reviewSafeCount.textContent = `可以分享 ${safeC}`;
+        reviewUnsafeCount.textContent = `先留著 ${unsafeC}`;
 
         // 點擊跳轉
         reviewList.querySelectorAll('.review-item').forEach(el => {
@@ -964,7 +964,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.__finalizeReview = async function() {
         if (currentBatchResults.length === 0) {
-            showToast('沒有可歸檔的結果', 'error');
+            showToast('還沒有可以整理的照片', 'error');
             return;
         }
 
@@ -974,7 +974,7 @@ document.addEventListener('DOMContentLoaded', () => {
             [document.getElementById('overview-finalize-btn'), finalizeBtn].forEach(btn => {
                 if (!btn) return;
                 btn.disabled = busy;
-                btn.textContent = busy ? '⏳ 歸檔中...' : '🚀 確認並批次歸檔';
+                btn.textContent = busy ? '整理中…' : '就這樣，整理好';
             });
         }
 
@@ -982,7 +982,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const safe = safeFolder.value.trim();
             const unsafe = unsafeFolder.value.trim();
             if (!safe || !unsafe) {
-                showToast('請填寫安全與不安全的分流資料夾路徑', 'error');
+                showToast('請先告訴我這兩種照片各要放到哪裡', 'error');
                 return;
             }
 
@@ -998,7 +998,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ results: adjusted, safe_folder: safe, unsafe_folder: unsafe })
                 });
-                if (!res.ok) throw new Error('歸檔失敗');
+                if (!res.ok) throw new Error('沒能整理好');
                 const data = await res.json();
                 showToast(data.message);
             } catch (e) {
@@ -1009,7 +1009,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             const targetId = driveTargetId.value.trim();
             if (!targetId) {
-                showToast('請填寫 Drive 目標資料夾 ID 才能歸檔', 'error');
+                showToast('請先選一個雲端資料夾，放整理好的照片', 'error');
                 return;
             }
 
@@ -1028,7 +1028,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 if (!res.ok) {
                     const err = await res.json();
-                    throw new Error(err.detail || '歸檔失敗');
+                    throw new Error(err.detail || '沒能整理好');
                 }
                 const data = await res.json();
                 showToast(`✅ ${data.message}`);
@@ -1046,7 +1046,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const unsafe = unsafeFolder.value.trim();
 
         if (!safe || !unsafe) {
-            showToast('請填寫安全與不安全的分流資料夾路徑', 'error');
+            showToast('請先告訴我這兩種照片各要放到哪裡', 'error');
             return;
         }
 
@@ -1064,12 +1064,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
             });
 
-            if(!res.ok) throw new Error('分類複製失敗');
+            if(!res.ok) throw new Error('複製的時候出了點問題');
             const data = await res.json();
             
             if(data.errors && data.errors.length > 0) {
                 console.error(data.errors);
-                showToast(`部分失敗，請檢查 Console。成功移動：${data.moved} 個檔案`, 'error');
+                showToast(`有幾張沒複製成功。已經整理好 ${data.moved} 張`, 'error');
             } else {
                 showToast(data.message);
             }
@@ -1078,7 +1078,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(e.message, 'error');
         } finally {
             organizeBtn.disabled = false;
-            organizeBtn.textContent = '複製檔案並歸檔';
+            organizeBtn.textContent = '複製一份，整理好';
         }
     });
 

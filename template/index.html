@@ -4,12 +4,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>智慧圖片審核系統</title>
+    <title>把笑容好好收起來</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Inter:wght@400;600&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Noto+Serif+TC:wght@400;500;600&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="/static/app.css">
     <!-- Google API & Identity Services for Picker -->
@@ -21,8 +21,8 @@
     <div class="app-container">
         <!-- Header -->
         <header class="glass-header">
-            <h1>智慧圖片審核系統 <span>名牌特化版</span></h1>
-            <p>全自動人臉與名牌帶偵測，智能安全過濾</p>
+            <h1>每一張笑容，都值得被好好對待 <span>活動照片整理</span></h1>
+            <p>我們會替你逐張看過活動照片，把不方便公開的孩子先留下來，其餘的快樂，就安心地分享出去吧。</p>
         </header>
 
         <!-- Main Content -->
@@ -30,8 +30,8 @@
             <!-- Controls Panel -->
             <section class="controls-panel glass-panel">
                 <div class="tabs">
-                    <button class="tab-btn active" data-target="single">單圖測試</button>
-                    <button class="tab-btn" data-target="batch">批量處理</button>
+                    <button class="tab-btn active" data-target="single">一張照片</button>
+                    <button class="tab-btn" data-target="batch">整場活動</button>
                 </div>
 
                 <!-- Single Mode -->
@@ -39,10 +39,10 @@
                     <div class="upload-area" id="drop-zone">
                         <input type="file" id="file-input" accept="image/jpeg, image/png, image/webp" hidden>
                         <div class="upload-icon">📸</div>
-                        <p>點擊或拖曳圖片至此處上傳</p>
-                        <span class="sub-text">支援 JPG, PNG, WEBP (最大 25MB)</span>
+                        <p>把照片拖進來，或點一下挑一張</p>
+                        <span class="sub-text">JPG、PNG、WEBP 都可以，25MB 以內</span>
                     </div>
-                    <button id="analyze-single-btn" class="primary-btn" disabled>開始辨識單圖</button>
+                    <button id="analyze-single-btn" class="primary-btn" disabled>看看這張照片</button>
                 </div>
 
                 <!-- Batch Mode -->
@@ -50,29 +50,29 @@
                     <div class="source-selector">
                         <label class="radio-tab">
                             <input type="radio" name="batch-source" value="local" checked>
-                            <span>💻 本機</span>
+                            <span>💻 這台電腦</span>
                         </label>
                         <label class="radio-tab">
                             <input type="radio" name="batch-source" value="drive">
-                            <span>☁️ Google Drive</span>
+                            <span>☁️ Google 雲端</span>
                         </label>
                     </div>
 
                     <!-- Local Batch Inputs -->
                     <div id="local-batch-inputs">
                         <div class="input-group">
-                            <label for="batch-input-folder">來源資料夾 (絕對路徑)</label>
+                            <label for="batch-input-folder">這場活動的照片放在哪裡</label>
                             <input type="text" id="batch-input-folder" placeholder="例如：/Users/.../data">
                         </div>
                         <!-- Temp folder management (shown when review_temp_* folders exist) -->
                         <div id="temp-folder-mgmt" class="temp-folder-mgmt hidden">
                             <div class="temp-mgmt-header">
-                                <span class="temp-mgmt-label">📁 標註暫存資料夾</span>
+                                <span class="temp-mgmt-label">📁 標好記號的暫存資料夾</span>
                                 <button class="icon-btn" id="btn-refresh-temp" onclick="window.__refreshTempFolders()" title="重新整理列表">↻</button>
                             </div>
                             <div class="temp-select-row">
                                 <select id="temp-folder-select" class="temp-select"></select>
-                                <button class="danger-btn" id="btn-clear-temp" onclick="window.__clearSelectedTempFolder()">清空</button>
+                                <button class="danger-btn" id="btn-clear-temp" onclick="window.__clearSelectedTempFolder()">清掉</button>
                             </div>
                         </div>
                     </div>
@@ -80,62 +80,62 @@
                     <!-- Drive Batch Inputs (Hidden by default) -->
                     <div id="drive-batch-inputs" class="hidden">
                         <div class="drive-auth-status">
-                            <button id="google-login-btn" class="secondary-btn">🔑 連結 Google Drive 帳號</button>
-                            <p class="status-msg">請先連結帳號以讀取雲端檔案</p>
+                            <button id="google-login-btn" class="secondary-btn">🔑 連結你的 Google 雲端</button>
+                            <p class="status-msg">連結之後，就能直接整理雲端上的活動照片</p>
                         </div>
                         <div class="input-group">
-                            <label for="drive-folder-id">Google Drive 來源資料夾</label>
+                            <label for="drive-folder-id">這場活動的照片</label>
                             <div class="input-with-button">
-                                <input type="text" id="drive-folder-id" placeholder="請貼上 ID 或點擊右側瀏覽">
-                                <button id="btn-browse-source" class="inline-btn" title="從雲端硬碟挑選">📂 瀏覽</button>
+                                <input type="text" id="drive-folder-id" placeholder="貼上資料夾 ID，或按右邊翻翻看">
+                                <button id="btn-browse-source" class="inline-btn" title="從雲端挑一個資料夾">📂 翻翻看</button>
                             </div>
                         </div>
                         <div class="input-group">
-                            <label for="drive-target-id">結果存放到雲端資料夾 (選填)</label>
+                            <label for="drive-target-id">整理好要放的地方（可以留白）</label>
                             <div class="input-with-button">
-                                <input type="text" id="drive-target-id" placeholder="留空則僅顯示於網頁">
-                                <button id="btn-browse-target" class="inline-btn" title="從雲端硬碟挑選">📂 瀏覽</button>
+                                <input type="text" id="drive-target-id" placeholder="留白的話，就只在畫面上看，不會動到雲端">
+                                <button id="btn-browse-target" class="inline-btn" title="從雲端挑一個資料夾">📂 翻翻看</button>
                             </div>
                         </div>
                     </div>
                     <div class="input-group row-group">
-                        <label for="batch-concurrency">並行數量</label>
+                        <label for="batch-concurrency">一次看幾張</label>
                         <input type="number" id="batch-concurrency" value="3" min="1" max="10">
                     </div>
 
                     <!-- Color Rules Panel -->
                     <div class="color-rules-panel">
                         <button class="color-rules-toggle" id="btn-toggle-color-rules" onclick="window.__toggleColorRules()">
-                            <span>帶子顏色規則</span>
+                            <span>帶子的顏色，代表什麼</span>
                             <span class="color-rules-arrow" id="color-rules-arrow">▼</span>
                         </button>
                         <div class="color-rules-body hidden" id="color-rules-body">
                             <div class="color-legend">
-                                <span class="legend-item safe-legend">可公開</span>
-                                <span class="legend-item unsafe-legend">不可公開</span>
-                                <button class="color-rules-reset" onclick="window.__resetColorRules()">還原預設</button>
+                                <span class="legend-item safe-legend">可以分享</span>
+                                <span class="legend-item unsafe-legend">先留著</span>
+                                <button class="color-rules-reset" onclick="window.__resetColorRules()">回到原本的</button>
                             </div>
                             <div class="color-swatches-grid" id="color-swatches-grid">
                                 <!-- Rendered by JS -->
                             </div>
-                            <p class="color-rules-hint">點擊色票切換「可 / 不可公開」</p>
+                            <p class="color-rules-hint">點一下，決定這個顏色可不可以分享</p>
                         </div>
                     </div>
 
-                    <button id="analyze-batch-btn" class="primary-btn">開始批量辨識</button>
+                    <button id="analyze-batch-btn" class="primary-btn">開始看這些照片</button>
 
                     <!-- Batch Organize Area -->
                     <div id="organize-area" class="organize-area hidden">
-                        <h3>依結果分類整理原始圖片</h3>
+                        <h3>整理好，放到這些地方</h3>
                         <div class="input-group">
-                            <label for="safe-folder">可公開存放資料夾 (Safe)</label>
+                            <label for="safe-folder">可以分享的，放這裡</label>
                             <input type="text" id="safe-folder" placeholder="例如：/Users/.../safe_images">
                         </div>
                         <div class="input-group">
-                            <label for="unsafe-folder">不可公開存放資料夾 (Unsafe)</label>
+                            <label for="unsafe-folder">先留著的，放這裡</label>
                             <input type="text" id="unsafe-folder" placeholder="例如：/Users/.../unsafe_images">
                         </div>
-                        <button id="organize-btn" class="secondary-btn">複製檔案並歸檔</button>
+                        <button id="organize-btn" class="secondary-btn">複製一份，整理好</button>
                     </div>
                 </div>
             </section>
@@ -145,7 +145,7 @@
                 <!-- Loading Overlay -->
                 <div id="loading-overlay" class="loading-overlay hidden">
                     <div class="spinner"></div>
-                    <p id="loading-text">正在用 AI 深度辨識中...</p>
+                    <p id="loading-text">正在一張一張看過去…</p>
 
                     <!-- 新增進度條區域 -->
                     <div class="progress-container">
@@ -161,15 +161,15 @@
                     <!-- 即時統計摘要 -->
                     <div class="batch-stats-summary">
                         <div class="stat-item success">
-                            <span class="label">已成功</span>
+                            <span class="label">看完了</span>
                             <strong id="stream-success-count" class="value">0</strong>
                         </div>
                         <div class="stat-item failed">
-                            <span class="label">失敗</span>
+                            <span class="label">沒看成</span>
                             <strong id="stream-failed-count" class="value">0</strong>
                         </div>
                         <div class="stat-item pending">
-                            <span class="label">剩餘</span>
+                            <span class="label">還剩</span>
                             <strong id="stream-pending-count" class="value">0</strong>
                         </div>
                     </div>
@@ -178,26 +178,26 @@
                 <!-- Empty State -->
                 <div id="empty-state" class="empty-state">
                     <div class="placeholder-icon">👁️</div>
-                    <p>尚未載入圖片，請從左側上傳或指定批量資料夾</p>
+                    <p>還沒有照片。從左邊挑一張，<br>或指定一整場活動的資料夾。</p>
                 </div>
 
                 <!-- Batch Overview (shown after all images processed) -->
                 <div id="batch-overview" class="batch-overview hidden">
                     <div class="overview-header">
                         <div class="overview-stats">
-                            <span class="ov-total">共 <strong id="ov-total">0</strong> 張</span>
-                            <span class="ov-badge ov-safe">Safe: <strong id="ov-safe">0</strong></span>
-                            <span class="ov-badge ov-unsafe">Unsafe: <strong id="ov-unsafe">0</strong></span>
+                            <span class="ov-total">看過 <strong id="ov-total">0</strong> 張</span>
+                            <span class="ov-badge ov-safe">可以分享 <strong id="ov-safe">0</strong></span>
+                            <span class="ov-badge ov-unsafe">先留著 <strong id="ov-unsafe">0</strong></span>
                         </div>
                         <div class="view-mode-toggle">
-                            <button id="btn-view-thumbnail" class="view-mode-btn active" onclick="window.__setOverviewMode('thumbnail')" title="縮圖顯示">⊞ 縮圖</button>
+                            <button id="btn-view-thumbnail" class="view-mode-btn active" onclick="window.__setOverviewMode('thumbnail')" title="照片牆">⊞ 照片牆</button>
                             <button id="btn-view-list" class="view-mode-btn" onclick="window.__setOverviewMode('list')" title="列表顯示">☰ 列表</button>
                         </div>
                     </div>
                     <div id="overview-content" class="overview-content"></div>
                     <div class="overview-footer">
                         <button class="finalize-btn" id="overview-finalize-btn" onclick="window.__finalizeReview()">
-                            🚀 確認並批次歸檔
+                            就這樣，整理好
                         </button>
                     </div>
                 </div>
@@ -208,22 +208,22 @@
                 <!-- Split Viewer -->
                 <div id="split-viewer" class="split-viewer hidden">
                     <!-- Fullscreen close button -->
-                    <button class="fs-close-btn" id="fs-close-btn" onclick="window.__exitFullscreen()" title="離開全螢幕">✕ 離開全螢幕</button>
+                    <button class="fs-close-btn" id="fs-close-btn" onclick="window.__exitFullscreen()" title="關掉全螢幕">✕ 關掉</button>
 
                     <div class="viewer-nav" id="viewer-nav">
-                        <button class="back-to-overview-btn hidden" id="back-to-overview-btn" onclick="window.__backToOverview()">← 返回總覽</button>
+                        <button class="back-to-overview-btn hidden" id="back-to-overview-btn" onclick="window.__backToOverview()">← 回到照片牆</button>
                         <button class="nav-btn" id="prev-btn">◀</button>
                         <span class="page-indicator" id="page-indicator">1 / 1</span>
                         <button class="nav-btn" id="next-btn">▶</button>
                     </div>
 
                     <div class="viewer-images">
-                        <div class="image-box" onclick="window.__toggleFullscreen()" title="點擊放大 / 縮小">
-                            <div class="image-label">原圖 <span class="fs-hint">🔍 點擊全螢幕</span></div>
+                        <div class="image-box" onclick="window.__toggleFullscreen()" title="點一下放大或縮小">
+                            <div class="image-label">原本的照片 <span class="fs-hint">🔍 點一下放大</span></div>
                             <img id="original-img" src="" alt="原始圖片">
                         </div>
-                        <div class="image-box" onclick="window.__toggleFullscreen()" title="點擊放大 / 縮小">
-                            <div class="image-label">AI 標註圖 <span class="fs-hint">🔍 點擊全螢幕</span></div>
+                        <div class="image-box" onclick="window.__toggleFullscreen()" title="點一下放大或縮小">
+                            <div class="image-label">標好記號的 <span class="fs-hint">🔍 點一下放大</span></div>
                             <img id="annotated-img" src="" alt="後製標註圖片">
                         </div>
                     </div>
@@ -231,22 +231,22 @@
                     <!-- AI Result Details -->
                     <div class="result-details">
                         <div class="result-header">
-                            <div class="status-badge" id="safety-badge">安全性未定</div>
+                            <div class="status-badge" id="safety-badge">還沒看</div>
                             <h3 id="file-name-display">--</h3>
                         </div>
-                        <p class="reason-text" id="moderation-reason">等待分析...</p>
+                        <p class="reason-text" id="moderation-reason">還沒開始看</p>
 
                         <div class="stats-grid">
                             <div class="stat-card">
-                                <span class="stat-label">發現人臉</span>
+                                <span class="stat-label">入鏡的人</span>
                                 <strong class="stat-value" id="face-count">0</strong>
                             </div>
                             <div class="stat-card">
-                                <span class="stat-label">發現名牌</span>
+                                <span class="stat-label">找到的帶子</span>
                                 <strong class="stat-value" id="strap-count">0</strong>
                             </div>
                             <div class="stat-card">
-                                <span class="stat-label">帶子顏色</span>
+                                <span class="stat-label">帶子的顏色</span>
                                 <strong class="stat-value" id="strap-color">無</strong>
                             </div>
                         </div>
@@ -254,10 +254,10 @@
                         <!-- Human Decision Buttons -->
                         <div class="decision-buttons" id="decision-buttons" style="display:none;">
                             <button class="decision-btn" id="btn-set-safe" onclick="window.__setDecision('safe')">
-                                ✅ 設為 Safe
+                                ✅ 可以分享
                             </button>
                             <button class="decision-btn" id="btn-set-unsafe" onclick="window.__setDecision('unsafe')">
-                                ❌ 設為 Unsafe
+                                🤲 先留著
                             </button>
                         </div>
                     </div>
@@ -266,16 +266,16 @@
                 <!-- Review Summary Panel -->
                 <div id="review-summary" class="review-summary" style="display:none;">
                     <div class="review-summary-header">
-                        <h3>📋 裁決清單</h3>
+                        <h3>📋 你的決定</h3>
                         <div class="review-counts">
-                            <span class="safe-count" id="review-safe-count">Safe: 0</span>
-                            <span class="unsafe-count" id="review-unsafe-count">Unsafe: 0</span>
+                            <span class="safe-count" id="review-safe-count">可以分享 0</span>
+                            <span class="unsafe-count" id="review-unsafe-count">先留著 0</span>
                         </div>
                     </div>
                     <div class="review-list" id="review-list"></div>
                     <div class="finalize-section">
                         <button class="finalize-btn" id="finalize-btn" onclick="window.__finalizeReview()">
-                            🚀 確認並批次歸檔
+                            就這樣，整理好
                         </button>
                     </div>
                 </div>

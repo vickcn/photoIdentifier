@@ -1,13 +1,55 @@
+/* =========================================================
+   溫度 / Warmth
+   不是機械感，是紙、是手寫、是把笑容好好收起來的地方。
+   ========================================================= */
 :root {
-    --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
-    --glass-bg: rgba(255, 255, 255, 0.05);
-    --glass-border: rgba(255, 255, 255, 0.1);
-    --accent-color: #6366f1;
-    --accent-hover: #4f46e5;
-    --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
-    --success-color: #10b981;
-    --danger-color: #ef4444;
+    /* 紙 — 相簿內頁，不是螢幕 */
+    --paper-base:  #FBF6EF;
+    --paper-sunk:  #F3E9DB;
+    --paper-print: #FFFFFF;
+    --paper-edge:  #E8DCCC;
+
+    /* 墨 — 暖色，永遠不用純黑 */
+    --ink-strong:  #3B322B;
+    --ink-body:    #6B5D52;
+    --ink-quiet:   #9A8B7D;
+    --ink-onwarm:  #FFF8F0;
+
+    /* 暖陽 — 體育館的光、午後的太陽 */
+    --sun-core:    #C96A3F;
+    --sun-lift:    #E08050;
+    --sun-wash:    #F7E4D8;
+
+    /* 青草 — 可以分享 */
+    --sage-core:   #6B8F5E;
+    --sage-wash:   #E6EFE0;
+
+    /* 陶土 — 先留著。是照顧，不是警報 */
+    --clay-core:   #B5705E;
+    --clay-wash:   #F5E3DD;
+
+    /* 麥穗 — 提醒 */
+    --wheat-core:  #C08A3E;
+    --wheat-wash:  #F6EAD4;
+
+    /* 影子帶著暖褐，不是黑 */
+    --shadow-soft: 0 6px 22px rgba(90, 70, 50, 0.07);
+    --shadow-lift: 0 4px 14px rgba(90, 70, 50, 0.16);
+    --shadow-hold: 0 3px 12px rgba(90, 70, 50, 0.13);
+
+    --font-sans:  'Noto Sans TC', system-ui, -apple-system, sans-serif;
+    --font-serif: 'Noto Serif TC', Georgia, 'Times New Roman', serif;
+
+    /* 舊變數名沿用，讓既有規則自動換上暖色 */
+    --bg-gradient:     linear-gradient(168deg, #FBF6EF 0%, #F6EFE4 100%);
+    --glass-bg:        var(--paper-print);
+    --glass-border:    var(--paper-edge);
+    --accent-color:    var(--sun-core);
+    --accent-hover:    var(--sun-lift);
+    --text-primary:    var(--ink-strong);
+    --text-secondary:  var(--ink-quiet);
+    --success-color:   var(--sage-core);
+    --danger-color:    var(--clay-core);
 }
 
 * {
@@ -17,13 +59,15 @@
 }
 
 body {
-    font-family: 'Inter', 'Noto Sans TC', sans-serif;
+    font-family: var(--font-sans);
     background: var(--bg-gradient);
-    color: var(--text-primary);
+    background-attachment: fixed;
+    color: var(--ink-body);
     min-height: 100vh;
     display: flex;
     justify-content: center;
     padding: 2rem;
+    -webkit-font-smoothing: antialiased;
 }
 
 .app-container {
@@ -35,35 +79,51 @@ body {
     gap: 2rem;
 }
 
-/* Glassmorphism Utilities */
+/* 紙張面板 — 不再是玻璃 */
 .glass-header, .glass-panel {
-    background: var(--glass-bg);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid var(--glass-border);
-    border-radius: 1rem;
+    background: var(--paper-print);
+    border: 1px solid var(--paper-edge);
+    border-radius: 1.35rem;
     padding: 2rem;
-    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    box-shadow: var(--shadow-soft);
+}
+
+/* 招呼區 — 一頁相簿的封面 */
+.glass-header {
+    background: var(--paper-sunk);
+    border-color: transparent;
+    box-shadow: none;
+    padding: 2.75rem 2.5rem 2.5rem;
 }
 
 .glass-header h1 {
-    font-size: 2rem;
-    font-weight: 700;
-    margin-bottom: 0.5rem;
+    font-family: var(--font-serif);
+    font-size: 2.35rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    line-height: 1.5;
+    color: var(--ink-strong);
+    margin-bottom: 0.85rem;
 }
 
 .glass-header h1 span {
-    color: var(--accent-color);
-    font-size: 1.2rem;
+    font-family: var(--font-sans);
+    color: var(--sun-core);
+    font-size: 0.82rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
     vertical-align: middle;
-    margin-left: 0.5rem;
-    padding: 0.2rem 0.6rem;
-    background: rgba(99, 102, 241, 0.1);
-    border-radius: 0.5rem;
+    margin-left: 0.85rem;
+    padding: 0.4rem 0.85rem;
+    background: var(--sun-wash);
+    border-radius: 999px;
 }
 
 .glass-header p {
-    color: var(--text-secondary);
+    color: var(--ink-body);
+    font-size: 1rem;
+    line-height: 1.9;
+    max-width: 46rem;
 }
 
 .main-content {
@@ -101,11 +161,11 @@ body {
 
 .tab-btn:hover {
     color: var(--text-primary);
-    background: rgba(255,255,255,0.05);
+    background: rgba(59, 50, 43, 0.045);
 }
 
 .tab-btn.active {
-    color: var(--text-primary);
+    color: var(--ink-onwarm);
     background: var(--accent-color);
 }
 
@@ -132,7 +192,7 @@ body {
 
 .upload-area:hover, .upload-area.dragover {
     border-color: var(--accent-color);
-    background: rgba(99, 102, 241, 0.05);
+    background: rgba(201, 106, 63, 0.06);
 }
 
 .upload-icon {
@@ -158,7 +218,7 @@ body {
     display: block;
     margin-bottom: 0.5rem;
     font-size: 0.875rem;
-    color: var(--text-muted);
+    color: var(--ink-body);
 }
 
 .input-with-button {
@@ -171,9 +231,9 @@ body {
 }
 
 .inline-btn {
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
+    background: var(--paper-sunk);
+    border: 1px solid var(--paper-edge);
+    color: var(--ink-strong);
     padding: 0 0.75rem;
     border-radius: 8px;
     cursor: pointer;
@@ -183,12 +243,12 @@ body {
 }
 
 .inline-btn:hover {
-    background: rgba(255, 255, 255, 0.2);
-    border-color: var(--primary-light);
+    background: rgba(59, 50, 43, 0.16);
+    border-color: var(--sun-core);
 }
 
 .input-group input {
-    background: rgba(0,0,0,0.2);
+    background: rgba(59, 50, 43, 0.056);
     border: 1px solid var(--glass-border);
     border-radius: 0.5rem;
     padding: 0.8rem;
@@ -230,7 +290,7 @@ button:disabled {
 
 .primary-btn {
     background: var(--accent-color);
-    color: white;
+    color: var(--ink-onwarm);
     width: 100%;
 }
 
@@ -247,7 +307,7 @@ button:disabled {
 }
 
 .secondary-btn:hover:not(:disabled) {
-    background: rgba(99, 102, 241, 0.1);
+    background: rgba(201, 106, 63, 0.10);
 }
 
 /* Viewer Panel */
@@ -296,7 +356,7 @@ button:disabled {
 }
 
 .nav-btn:hover:not(:disabled) {
-    background: rgba(255,255,255,0.1);
+    background: rgba(59, 50, 43, 0.085);
 }
 
 .page-indicator {
@@ -319,7 +379,7 @@ button:disabled {
     position: relative;
     border-radius: 0.5rem;
     overflow: hidden;
-    background: rgba(0,0,0,0.3);
+    background: rgba(59, 50, 43, 0.084);
     aspect-ratio: 4/3;
     display: flex;
     align-items: center;
@@ -336,7 +396,7 @@ button:disabled {
     position: absolute;
     top: 0.5rem;
     left: 0.5rem;
-    background: rgba(0,0,0,0.6);
+    background: rgba(59, 50, 43, 0.168);
     padding: 0.2rem 0.6rem;
     border-radius: 0.25rem;
     font-size: 0.8rem;
@@ -344,7 +404,7 @@ button:disabled {
 }
 
 .result-details {
-    background: rgba(0,0,0,0.2);
+    background: rgba(59, 50, 43, 0.056);
     border-radius: 0.75rem;
     padding: 1.5rem;
     border: 1px solid var(--glass-border);
@@ -364,8 +424,8 @@ button:disabled {
     font-size: 0.9rem;
 }
 
-.status-safe { background: rgba(16, 185, 129, 0.2); color: var(--success-color); border: 1px solid var(--success-color); }
-.status-unsafe { background: rgba(239, 68, 68, 0.2); color: var(--danger-color); border: 1px solid var(--danger-color); }
+.status-safe { background: rgba(107, 143, 94, 0.2); color: var(--success-color); border: 1px solid var(--success-color); }
+.status-unsafe { background: rgba(181, 112, 94, 0.2); color: var(--danger-color); border: 1px solid var(--danger-color); }
 
 .reason-text {
     color: var(--text-secondary);
@@ -380,7 +440,7 @@ button:disabled {
 }
 
 .stat-card {
-    background: rgba(255,255,255,0.03);
+    background: rgba(59, 50, 43, 0.028);
     padding: 1rem;
     border-radius: 0.5rem;
     text-align: center;
@@ -403,7 +463,7 @@ button:disabled {
 .loading-overlay {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(15, 23, 42, 0.8);
+    background: rgba(251, 246, 239, 0.88);
     backdrop-filter: blur(4px);
     border-radius: 1rem;
     display: flex;
@@ -416,7 +476,7 @@ button:disabled {
 .spinner {
     width: 50px;
     height: 50px;
-    border: 3px solid rgba(255,255,255,0.1);
+    border: 3px solid rgba(59, 50, 43, 0.085);
     border-radius: 50%;
     border-top-color: var(--accent-color);
     animation: spin 1s ease-in-out infinite;
@@ -446,7 +506,7 @@ button:disabled {
     border-left: 4px solid var(--accent-color);
     padding: 1rem 1.5rem;
     border-radius: 0.5rem;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    box-shadow: 0 4px 12px rgba(90, 70, 50, 0.22);
     transform: translateY(100px);
     opacity: 0;
     transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
@@ -464,7 +524,7 @@ button:disabled {
 /* Batch Source Selector */
 .source-selector {
     display: flex;
-    background: rgba(0,0,0,0.2);
+    background: rgba(59, 50, 43, 0.056);
     padding: 0.3rem;
     border-radius: 0.75rem;
     margin-bottom: 0.5rem;
@@ -493,13 +553,13 @@ button:disabled {
 
 .radio-tab input:checked + span {
     background: var(--accent-color);
-    color: white;
-    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+    color: var(--ink-onwarm);
+    box-shadow: 0 4px 12px rgba(201, 106, 63, 0.22);
 }
 
 .drive-auth-status {
     padding: 1.5rem;
-    background: rgba(255,255,255,0.03);
+    background: rgba(59, 50, 43, 0.028);
     border-radius: 0.75rem;
     border: 1px solid var(--glass-border);
     text-align: center;
@@ -530,24 +590,24 @@ button:disabled {
     margin-bottom: 8px;
     font-size: 0.9rem;
     font-weight: 500;
-    color: #fff;
+    color: var(--ink-onwarm);
 }
 
 .progress-track {
     width: 100%;
     height: 10px;
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(59, 50, 43, 0.085);
     border-radius: 5px;
     overflow: hidden;
     position: relative;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(59, 50, 43, 0.085);
 }
 
 .progress-fill {
     height: 100%;
     width: 0%;
-    background: linear-gradient(90deg, #6366f1 0%, #a855f7 100%);
-    box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
+    background: linear-gradient(90deg, var(--sun-core) 0%, #E2A46B 100%);
+    box-shadow: 0 0 10px rgba(201, 106, 63, 0.45);
     transition: width 0.3s ease;
 }
 
@@ -562,10 +622,10 @@ button:disabled {
 
 .stat-item {
     padding: 12px;
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(59, 50, 43, 0.045);
     border-radius: 12px;
     text-align: center;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(59, 50, 43, 0.085);
 }
 
 .stat-item .label {
@@ -584,13 +644,7 @@ button:disabled {
 
 .stat-item.success .value { color: var(--success-color); }
 .stat-item.failed .value { color: var(--danger-color); }
-.stat-item.pending .value { color: #ffd740; }
-
-
-    flex-direction: column;
-    gap: 1.5rem;
-    animation: fadeIn 0.3s ease;
-}
+.stat-item.pending .value { color: var(--wheat-core); }
 
 .split-viewer.fullscreen-mode .viewer-images {
     flex: 1;
@@ -601,7 +655,7 @@ button:disabled {
 .split-viewer.fullscreen-mode .image-box {
     aspect-ratio: auto;
     height: 100%;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(59, 50, 43, 0.14);
 }
 
 .split-viewer.fullscreen-mode .image-box img {
@@ -609,7 +663,7 @@ button:disabled {
 }
 
 .split-viewer.fullscreen-mode .viewer-nav {
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(59, 50, 43, 0.045);
     padding: 1rem;
     border-radius: 1rem;
     width: fit-content;
@@ -621,7 +675,7 @@ button:disabled {
     top: 2rem;
     right: 2rem;
     background: var(--danger-color);
-    color: white;
+    color: var(--ink-onwarm);
     width: 40px;
     height: 40px;
     border-radius: 50%;
@@ -630,7 +684,7 @@ button:disabled {
     justify-content: center;
     font-size: 1.5rem;
     cursor: pointer;
-    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    box-shadow: 0 4px 12px rgba(181, 112, 94, 0.3);
     z-index: 2001;
 }
 
@@ -656,7 +710,7 @@ button:disabled {
     font-weight: 600;
     font-size: 0.95rem;
     border: 2px solid transparent;
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(59, 50, 43, 0.045);
     color: var(--text-secondary);
     cursor: pointer;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -669,7 +723,7 @@ button:disabled {
     position: absolute;
     top: 0; left: -100%; right: 0; bottom: 0;
     width: 300%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+    background: linear-gradient(90deg, transparent, rgba(59, 50, 43, 0.085), transparent);
     transition: left 0.5s ease;
 }
 
@@ -678,23 +732,23 @@ button:disabled {
 }
 
 .decision-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(59, 50, 43, 0.085);
     color: var(--text-primary);
     transform: translateY(-1px);
 }
 
 .decision-btn.active-safe {
-    background: rgba(16, 185, 129, 0.15);
+    background: rgba(107, 143, 94, 0.15);
     border-color: var(--success-color);
     color: var(--success-color);
-    box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+    box-shadow: 0 0 20px rgba(107, 143, 94, 0.15);
 }
 
 .decision-btn.active-unsafe {
-    background: rgba(239, 68, 68, 0.15);
+    background: rgba(181, 112, 94, 0.15);
     border-color: var(--danger-color);
     color: var(--danger-color);
-    box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
+    box-shadow: 0 0 20px rgba(181, 112, 94, 0.15);
 }
 
 /* Override Badge */
@@ -706,16 +760,16 @@ button:disabled {
     border-radius: 2rem;
     font-size: 0.75rem;
     font-weight: 600;
-    background: rgba(251, 191, 36, 0.15);
-    color: #fbbf24;
-    border: 1px solid rgba(251, 191, 36, 0.3);
+    background: rgba(192, 138, 62, 0.15);
+    color: var(--wheat-core);
+    border: 1px solid rgba(192, 138, 62, 0.3);
     margin-left: 0.5rem;
     animation: fadeIn 0.3s ease;
 }
 
 /* Review Summary Panel */
 .review-summary {
-    background: rgba(0, 0, 0, 0.25);
+    background: rgba(59, 50, 43, 0.07);
     border: 1px solid var(--glass-border);
     border-radius: 1rem;
     margin-top: 1.5rem;
@@ -728,7 +782,7 @@ button:disabled {
     justify-content: space-between;
     align-items: center;
     padding: 1rem 1.25rem;
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(59, 50, 43, 0.028);
     border-bottom: 1px solid var(--glass-border);
 }
 
@@ -757,7 +811,7 @@ button:disabled {
 }
 
 .review-counts .pending-count {
-    color: #fbbf24;
+    color: var(--wheat-core);
     font-weight: 600;
 }
 
@@ -765,7 +819,7 @@ button:disabled {
     max-height: 260px;
     overflow-y: auto;
     scrollbar-width: thin;
-    scrollbar-color: rgba(255,255,255,0.15) transparent;
+    scrollbar-color: rgba(59, 50, 43, 0.13) transparent;
 }
 
 .review-list::-webkit-scrollbar {
@@ -773,7 +827,7 @@ button:disabled {
 }
 
 .review-list::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
+    background: rgba(59, 50, 43, 0.13);
     border-radius: 3px;
 }
 
@@ -784,7 +838,7 @@ button:disabled {
     padding: 0.7rem 1.25rem;
     cursor: pointer;
     transition: all 0.2s ease;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(59, 50, 43, 0.028);
 }
 
 .review-item:last-child {
@@ -792,11 +846,11 @@ button:disabled {
 }
 
 .review-item:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(59, 50, 43, 0.045);
 }
 
 .review-item.current {
-    background: rgba(99, 102, 241, 0.1);
+    background: rgba(201, 106, 63, 0.10);
     border-left: 3px solid var(--accent-color);
 }
 
@@ -827,25 +881,25 @@ button:disabled {
 }
 
 .review-item-badge.safe {
-    background: rgba(16, 185, 129, 0.15);
+    background: rgba(107, 143, 94, 0.15);
     color: var(--success-color);
 }
 
 .review-item-badge.unsafe {
-    background: rgba(239, 68, 68, 0.15);
+    background: rgba(181, 112, 94, 0.15);
     color: var(--danger-color);
 }
 
 .review-item-override {
     font-size: 0.7rem;
-    color: #fbbf24;
+    color: var(--wheat-core);
 }
 
 /* Finalize Button */
 .finalize-section {
     padding: 1rem 1.25rem;
     border-top: 1px solid var(--glass-border);
-    background: rgba(255, 255, 255, 0.02);
+    background: rgba(59, 50, 43, 0.022);
 }
 
 .finalize-btn {
@@ -856,11 +910,11 @@ button:disabled {
     font-size: 1rem;
     font-weight: 700;
     cursor: pointer;
-    color: white;
-    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%);
+    color: var(--ink-onwarm);
+    background: linear-gradient(135deg, var(--sun-core) 0%, #D98A56 50%, #E2A46B 100%);
     background-size: 200% 200%;
     animation: gradientShift 3s ease infinite;
-    box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
+    box-shadow: 0 4px 20px rgba(201, 106, 63, 0.22);
     transition: all 0.3s ease;
     position: relative;
     overflow: hidden;
@@ -868,7 +922,7 @@ button:disabled {
 
 .finalize-btn:hover:not(:disabled) {
     transform: translateY(-2px);
-    box-shadow: 0 8px 30px rgba(99, 102, 241, 0.4);
+    box-shadow: 0 8px 30px rgba(201, 106, 63, 0.30);
 }
 
 .finalize-btn:disabled {
@@ -933,7 +987,7 @@ button:disabled {
 
 .image-box:hover {
     transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 8px 25px rgba(90, 70, 50, 0.22);
 }
 
 /* === Fullscreen Mode === */
@@ -944,7 +998,7 @@ button:disabled {
     width: 100vw !important;
     height: 100vh !important;
     z-index: 99999;
-    background: #000;
+    background: #2A241F;
     display: flex !important;
     flex-direction: column;
     border-radius: 0 !important;
@@ -984,19 +1038,19 @@ button:disabled {
     left: 50%;
     transform: translateX(-50%);
     z-index: 100001;
-    background: rgba(40, 40, 50, 0.8);
+    background: rgba(59, 50, 43, 0.86);
     backdrop-filter: blur(15px);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(59, 50, 43, 0.13);
     padding: 0.5rem 1.5rem;
     border-radius: 3rem;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 10px 40px rgba(90, 70, 50, 0.22);
 }
 
 .split-viewer.fullscreen-mode .result-details {
     max-width: 1000px;
     margin: 1rem auto 0;
     width: 100%;
-    background: rgba(255,255,255,0.05);
+    background: rgba(59, 50, 43, 0.045);
     padding: 1.5rem;
     border-radius: 1rem;
 }
@@ -1008,15 +1062,15 @@ button:disabled {
     top: 1.5rem;
     right: 1.5rem;
     z-index: 100002;
-    background: #e11d48;
-    color: white;
+    background: var(--clay-core);
+    color: var(--ink-onwarm);
     border: none;
     border-radius: 0.5rem;
     padding: 0.75rem 1.5rem;
     font-size: 1rem;
     font-weight: 700;
     cursor: pointer;
-    box-shadow: 0 4px 20px rgba(225, 29, 72, 0.4);
+    box-shadow: 0 4px 20px rgba(181, 112, 94, 0.4);
     transition: all 0.2s;
 }
 
@@ -1025,7 +1079,7 @@ button:disabled {
 }
 
 .fs-close-btn:hover {
-    background: #f43f5e;
+    background: #C4806D;
     transform: scale(1.05);
 }
 
@@ -1129,15 +1183,15 @@ button:disabled {
 }
 
 .ov-safe {
-    background: rgba(16, 185, 129, 0.15);
+    background: rgba(107, 143, 94, 0.15);
     color: var(--success-color);
-    border: 1px solid rgba(16, 185, 129, 0.4);
+    border: 1px solid rgba(107, 143, 94, 0.4);
 }
 
 .ov-unsafe {
-    background: rgba(239, 68, 68, 0.15);
+    background: rgba(181, 112, 94, 0.15);
     color: var(--danger-color);
-    border: 1px solid rgba(239, 68, 68, 0.4);
+    border: 1px solid rgba(181, 112, 94, 0.4);
 }
 
 .view-mode-toggle {
@@ -1164,7 +1218,7 @@ button:disabled {
 .view-mode-btn.active {
     background: var(--accent-color);
     border-color: var(--accent-color);
-    color: #fff;
+    color: var(--ink-onwarm);
 }
 
 .overview-content {
@@ -1195,7 +1249,7 @@ button:disabled {
 .thumbnail-item:hover {
     transform: translateY(-3px);
     border-color: var(--accent-color);
-    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.3);
+    box-shadow: 0 6px 20px rgba(201, 106, 63, 0.22);
 }
 
 .thumbnail-item img {
@@ -1211,7 +1265,7 @@ button:disabled {
     left: 0;
     right: 0;
     padding: 0.4rem 0.5rem;
-    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    background: linear-gradient(transparent, rgba(43, 36, 31, 0.7));
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1227,13 +1281,13 @@ button:disabled {
 }
 
 .thumb-badge.safe {
-    background: rgba(16, 185, 129, 0.85);
-    color: #fff;
+    background: rgba(107, 143, 94, 0.85);
+    color: var(--ink-onwarm);
 }
 
 .thumb-badge.unsafe {
-    background: rgba(239, 68, 68, 0.85);
-    color: #fff;
+    background: rgba(181, 112, 94, 0.85);
+    color: var(--ink-onwarm);
 }
 
 .thumb-override {
@@ -1241,7 +1295,7 @@ button:disabled {
     position: absolute;
     top: 0.35rem;
     right: 0.35rem;
-    background: rgba(0,0,0,0.5);
+    background: rgba(59, 50, 43, 0.14);
     border-radius: 50%;
     padding: 0.1rem 0.2rem;
     line-height: 1;
@@ -1253,7 +1307,7 @@ button:disabled {
     left: 0;
     right: 0;
     font-size: 0.65rem;
-    color: rgba(255,255,255,0.85);
+    color: rgba(255, 248, 240, 0.92);
     padding: 1.4rem 0.5rem 0.3rem;
     white-space: nowrap;
     overflow: hidden;
@@ -1282,7 +1336,7 @@ button:disabled {
 }
 
 .overview-list-row:hover {
-    background: rgba(99, 102, 241, 0.1);
+    background: rgba(201, 106, 63, 0.10);
     border-color: var(--accent-color);
 }
 
@@ -1327,15 +1381,15 @@ button:disabled {
 }
 
 .list-row-badge.safe {
-    background: rgba(16, 185, 129, 0.15);
+    background: rgba(107, 143, 94, 0.15);
     color: var(--success-color);
-    border: 1px solid rgba(16, 185, 129, 0.4);
+    border: 1px solid rgba(107, 143, 94, 0.4);
 }
 
 .list-row-badge.unsafe {
-    background: rgba(239, 68, 68, 0.15);
+    background: rgba(181, 112, 94, 0.15);
     color: var(--danger-color);
-    border: 1px solid rgba(239, 68, 68, 0.4);
+    border: 1px solid rgba(181, 112, 94, 0.4);
 }
 
 .overview-footer {
@@ -1369,7 +1423,7 @@ button:disabled {
 /* === Temp Folder Management === */
 .temp-folder-mgmt {
     margin-top: 0.5rem;
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(59, 50, 43, 0.028);
     border: 1px solid var(--glass-border);
     border-radius: 0.65rem;
     padding: 0.6rem 0.75rem;
@@ -1418,7 +1472,7 @@ button:disabled {
 
 .temp-select {
     flex: 1;
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(59, 50, 43, 0.045);
     border: 1px solid var(--glass-border);
     color: var(--text-primary);
     padding: 0.3rem 0.5rem;
@@ -1428,13 +1482,13 @@ button:disabled {
 }
 
 .temp-select option {
-    background: #1e1b4b;
+    background: var(--paper-print);
     color: var(--text-primary);
 }
 
 .danger-btn {
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.4);
+    background: rgba(181, 112, 94, 0.1);
+    border: 1px solid rgba(181, 112, 94, 0.4);
     color: var(--danger-color);
     padding: 0.3rem 0.7rem;
     border-radius: 0.4rem;
@@ -1445,7 +1499,7 @@ button:disabled {
 }
 
 .danger-btn:hover {
-    background: rgba(239, 68, 68, 0.25);
+    background: rgba(181, 112, 94, 0.25);
 }
 
 /* === Color Rules Panel === */
@@ -1457,7 +1511,7 @@ button:disabled {
 
 .color-rules-toggle {
     width: 100%;
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(59, 50, 43, 0.035);
     border: none;
     color: var(--text-secondary);
     padding: 0.55rem 0.85rem;
@@ -1470,7 +1524,7 @@ button:disabled {
 }
 
 .color-rules-toggle:hover {
-    background: rgba(99, 102, 241, 0.1);
+    background: rgba(201, 106, 63, 0.10);
     color: var(--text-primary);
 }
 
@@ -1501,15 +1555,15 @@ button:disabled {
 }
 
 .safe-legend {
-    background: rgba(99, 102, 241, 0.2);
+    background: rgba(201, 106, 63, 0.16);
     color: var(--accent-color);
-    border: 1px solid rgba(99, 102, 241, 0.5);
+    border: 1px solid rgba(201, 106, 63, 0.45);
 }
 
 .unsafe-legend {
-    background: rgba(239, 68, 68, 0.15);
+    background: rgba(181, 112, 94, 0.15);
     color: var(--danger-color);
-    border: 1px solid rgba(239, 68, 68, 0.4);
+    border: 1px solid rgba(181, 112, 94, 0.4);
 }
 
 .color-rules-reset {
@@ -1545,27 +1599,27 @@ button:disabled {
     cursor: pointer;
     border: 2px solid transparent;
     transition: all 0.15s;
-    background: rgba(255,255,255,0.03);
+    background: rgba(59, 50, 43, 0.028);
 }
 
 .color-swatch:hover {
-    background: rgba(255,255,255,0.07);
+    background: rgba(59, 50, 43, 0.06);
     transform: translateY(-1px);
 }
 
 .swatch-safe {
-    border-color: rgba(99, 102, 241, 0.6);
+    border-color: rgba(201, 106, 63, 0.55);
 }
 
 .swatch-unsafe {
-    border-color: rgba(239, 68, 68, 0.35);
+    border-color: rgba(181, 112, 94, 0.35);
 }
 
 .swatch-color {
     width: 2rem;
     height: 2rem;
     border-radius: 0.35rem;
-    border: 1px solid rgba(255,255,255,0.15);
+    border: 1px solid rgba(59, 50, 43, 0.13);
     flex-shrink: 0;
 }
 
@@ -1596,3 +1650,126 @@ button:disabled {
     opacity: 0.7;
 }
 
+
+/* =========================================================
+   溫度的收尾
+   襯線的標題、沖印出來的照片、不喊叫的狀態。
+   ========================================================= */
+
+/* 標題用襯線 — 襯線裡有手的痕跡 */
+.review-summary-header h3,
+.organize-area h3,
+.empty-state p {
+    font-family: var(--font-serif);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
+
+.empty-state p {
+    font-size: 1.05rem;
+    line-height: 2;
+    color: var(--ink-quiet);
+}
+
+.placeholder-icon { opacity: 0.35; }
+
+/* 狀態不喊叫 —— 用洗過的顏色，不用高飽和 */
+.status-safe {
+    background: var(--sage-wash);
+    color: var(--sage-core);
+    border: 1px solid rgba(107, 143, 94, 0.35);
+}
+
+.status-unsafe {
+    background: var(--clay-wash);
+    color: var(--clay-core);
+    border: 1px solid rgba(181, 112, 94, 0.35);
+}
+
+.status-badge {
+    font-family: var(--font-sans);
+    font-weight: 500;
+    letter-spacing: 0.03em;
+}
+
+/* 照片是沖印出來的，不是資料列 —— 白色相紙邊 + 暖影 */
+.thumbnail-grid {
+    grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
+    gap: 1rem;
+}
+
+.thumbnail-item {
+    background: var(--paper-print);
+    border: 1px solid var(--paper-edge);
+    border-radius: 8px;
+    padding: 7px 7px 26px;
+    overflow: visible;
+    box-shadow: var(--shadow-hold);
+}
+
+.thumbnail-item img {
+    border-radius: 4px;
+    height: calc(100% - 0px);
+}
+
+.thumbnail-item:hover {
+    transform: translateY(-3px) rotate(-0.4deg);
+    border-color: var(--sun-core);
+    box-shadow: 0 10px 26px rgba(90, 70, 50, 0.16);
+}
+
+/* 說明落在相紙的白邊上，不再壓在照片上 */
+.thumbnail-overlay {
+    bottom: 6px;
+    left: 8px;
+    right: 8px;
+    padding: 0;
+    background: none;
+}
+
+.thumbnail-name {
+    color: var(--ink-quiet);
+}
+
+.thumb-badge {
+    font-weight: 500;
+    padding: 0.18rem 0.5rem;
+}
+
+.thumb-badge.safe   { background: var(--sage-wash); color: var(--sage-core); }
+.thumb-badge.unsafe { background: var(--clay-wash); color: var(--clay-core); }
+
+.thumb-override {
+    background: var(--sun-wash);
+    color: var(--sun-core);
+    padding: 0.15rem 0.3rem;
+    box-shadow: var(--shadow-hold);
+}
+
+/* 決定是溫和的動作 */
+.decision-btn.active-safe {
+    background: var(--sage-wash);
+    color: var(--sage-core);
+    border-color: var(--sage-core);
+}
+
+.decision-btn.active-unsafe {
+    background: var(--clay-wash);
+    color: var(--clay-core);
+    border-color: var(--clay-core);
+}
+
+.review-item-badge.safe   { background: var(--sage-wash); color: var(--sage-core); }
+.review-item-badge.unsafe { background: var(--clay-wash); color: var(--clay-core); }
+.review-counts .safe-count   { color: var(--sage-core); }
+.review-counts .unsafe-count { color: var(--clay-core); }
+
+.ov-badge   { font-weight: 500; }
+.ov-safe    { background: var(--sage-wash); color: var(--sage-core); }
+.ov-unsafe  { background: var(--clay-wash); color: var(--clay-core); }
+.overview-stats strong { font-family: var(--font-serif); font-size: 1.15em; }
+
+/* 全螢幕：暖炭底，照片還是主角 */
+.split-viewer.fullscreen-mode .image-label {
+    color: rgba(255, 248, 240, 0.75);
+}
