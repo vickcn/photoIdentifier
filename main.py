@@ -18,6 +18,11 @@ from pydantic import BaseModel, ValidationError
 import os
 import uuid
 
+try:
+    from src.face.detector import detect_face_bboxes_from_image_bytes
+except Exception:
+    detect_face_bboxes_from_image_bytes = None
+
 DEFAULT_MAX_UPLOAD_SIZE_MB = 25
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
@@ -228,7 +233,18 @@ async def analyze_photo(file: UploadFile = File(...), collaborative_memory: str 
 
         b64_image = base64.b64encode(image_bytes).decode('utf-8')
 
-        return await analyze_brand_strap_image(b64_image, file.content_type, collaborative_memory=collaborative_memory)
+        local_face_bboxes = None
+        if detect_face_bboxes_from_image_bytes is not None:
+            try:
+                local_face_bboxes = detect_face_bboxes_from_image_bytes(image_bytes)
+            except Exception:
+                local_face_bboxes = None
+        return await analyze_brand_strap_image(
+            b64_image,
+            file.content_type,
+            collaborative_memory=collaborative_memory,
+            local_face_bboxes=local_face_bboxes,
+        )
 
     except HTTPException:
         raise

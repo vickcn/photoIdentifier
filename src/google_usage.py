@@ -134,7 +134,80 @@ def _dedup_bboxes(bboxes: list, confidences: list) -> tuple[list, list]:
     return new_bboxes, new_confs
 
 
-async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rules: list | None = None, collaborative_memory: str | None = None) -> PhotoAnalysisResult:
+def _format_face_bbox_hint(face_bboxes: list[list[int]]) -> str:
+    if not face_bboxes:
+        return ""
+
+    lines = "\n".join(
+        f"       - face_{idx}: [ymin={bbox[0]}, xmin={bbox[1]}, ymax={bbox[2]}, xmax={bbox[3]}]"
+        for idx, bbox in enumerate(face_bboxes[:5])
+    )
+    return f"""
+    【本地人臉偵測輔助】：
+    系統已先用本地 face detector 找到以下人臉區域。這些 bbox 是高可信度參考，請優先以這些臉的位置判斷 strap 是否屬於某個人。
+{lines}
+
+    判斷 strap 時請遵守：
+    - strap 通常位於某張臉的下方，延伸到頸部、肩膀或胸前區域
+    - 若 strap 與任何一張臉都沒有合理的上下與左右關係，可信度應降低
+    - 不可把遠離所有臉部的細長物體或衣服色塊當成名牌帶子
+"""
+
+
+def _strap_matches_any_face(strap_bbox: list[int], face_bboxes: list[list[int]]) -> bool:
+    strap_ymin, strap_xmin, strap_ymax, strap_xmax = strap_bbox
+    strap_center_x = (strap_xmin + strap_xmax) / 2
+    strap_center_y = (strap_ymin + strap_ymax) / 2
+
+    for face_ymin, face_xmin, face_ymax, face_xmax in face_bboxes:
+        face_center_x = (face_xmin + face_xmax) / 2
+        face_center_y = (face_ymin + face_ymax) / 2
+        face_width = max(1, face_xmax - face_xmin)
+        face_height = max(1, face_ymax - face_ymin)
+
+        within_horizontal_band = (face_xmin - face_width * 0.6) <= strap_center_x <= (face_xmax + face_width * 0.6)
+        below_face = strap_center_y >= face_center_y
+        not_too_far_below = strap_ymin <= face_ymax + face_height * 1.8
+        overlaps_neck_band = strap_ymin <= face_ymax + face_height * 0.6
+        near_face_center = abs(strap_center_x - face_center_x) <= face_width * 1.1
+
+        if within_horizontal_band and below_face and not_too_far_below and (overlaps_neck_band or near_face_center):
+            return True
+
+    return False
+
+
+def _filter_straps_by_faces(result_json: dict, face_bboxes: list[list[int]]) -> None:
+    strap_bboxes = result_json.get("strap_bboxes")
+    strap_confidences = result_json.get("strap_confidences")
+    if not isinstance(strap_bboxes, list) or not isinstance(strap_confidences, list):
+        return
+
+    filtered_pairs = [
+        (bbox, conf)
+        for bbox, conf in zip(strap_bboxes, strap_confidences)
+        if _strap_matches_any_face(bbox, face_bboxes)
+    ]
+
+    if len(filtered_pairs) == len(strap_bboxes):
+        return
+
+    result_json["strap_bboxes"] = [bbox for bbox, _ in filtered_pairs]
+    result_json["strap_confidences"] = [conf for _, conf in filtered_pairs]
+    result_json["has_brand_strap"] = bool(filtered_pairs)
+    if not filtered_pairs:
+        result_json["strap_color"] = None
+        result_json["has_unsafe_strap"] = False
+        result_json["moderation_reason"] = "系統覆寫：偵測到的帶子未落在任何人臉下方合理區域，改判為無有效名牌帶子。"
+
+
+async def analyze_brand_strap_image(
+    b64_image: str,
+    content_type: str,
+    color_rules: list | None = None,
+    collaborative_memory: str | None = None,
+    local_face_bboxes: list[list[int]] | None = None,
+) -> PhotoAnalysisResult:
     """
     單次 LLM 呼叫取得所有偵測結果，再由系統邏輯分三段 if 判定：
       1. 有不可公開帶子 → private
@@ -159,10 +232,12 @@ async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rul
     {collaborative_memory.strip()}
 
     """
+    face_hint_section = _format_face_bbox_hint(local_face_bboxes or [])
 
     prompt = f"""
     你是一個專業的圖片審核系統。請分析這張圖片，並回傳純 JSON 格式的結果，不要任何 markdown 標記。
 {collaborative_section}
+{face_hint_section}
     【辨識目標】：
     1. 偵測圖片中「所有」清晰可見的人臉（⚠️最多列出前 5 個最清晰的人臉）：
        - bbox: [ymin, xmin, ymax, xmax]，以 0 到 1000 的整數表示
@@ -255,6 +330,9 @@ async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rul
             result_json["strap_bboxes"], result_json["strap_confidences"]
         )
 
+    if local_face_bboxes:
+        _filter_straps_by_faces(result_json, local_face_bboxes)
+
     # 【雙重保險】以 color_rules 強制覆寫帶子安全判定（避免 AI 偶發幻覺）
     if result_json.get("has_brand_strap") and color_rules:
         color = result_json.get("strap_color") or ""
@@ -290,8 +368,8 @@ async def analyze_brand_strap_image(b64_image: str, content_type: str, color_rul
         reason = result_json.get("moderation_reason", "系統判定：可公開")
 
     return PhotoAnalysisResult(
-        has_face=bool(result_json.get("has_face", False)),
-        face_bboxes=result_json.get("face_bboxes", []),
+        has_face=bool(result_json.get("has_face", False) or local_face_bboxes),
+        face_bboxes=result_json.get("face_bboxes", []) or (local_face_bboxes or []),
         face_confidences=result_json.get("face_confidences", []),
         has_brand_strap=bool(result_json.get("has_brand_strap", False)),
         strap_bboxes=result_json.get("strap_bboxes", []),
