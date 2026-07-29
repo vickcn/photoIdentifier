@@ -127,6 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentTempFolder = null;
 
     let batchSelectedFiles = [];
+    let config = null;
 
     function getBatchUploadLimits() {
         return {
@@ -1218,8 +1219,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // === Google Picker Integration ===
     let pickerApiLoaded = false;
     let oauthToken = null;
-    let config = null;
-
     // Fetch config on load
     async function fetchConfig() {
         try {
