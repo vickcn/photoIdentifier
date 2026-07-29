@@ -512,7 +512,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // update stats
             updateStatsUI(singleSelectedFile.name, data.analysis);
-            showToast('分析完成！');
+            showToast('看完這張了');
 
         } catch (error) {
             showToast(error.message, 'error');
@@ -526,13 +526,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const status = analysis.moderation_status || (analysis.is_safe_for_public ? 'public' : 'private');
         if (status === 'public') {
-            safetyBadge.textContent = '可公開 (Safe)';
+            safetyBadge.textContent = '可以分享';
             safetyBadge.className = 'status-badge status-safe';
         } else if (status === 'pending') {
-            safetyBadge.textContent = '待人員判定 (Pending)';
+            safetyBadge.textContent = '之後再看';
             safetyBadge.className = 'status-badge status-pending';
         } else {
-            safetyBadge.textContent = '不可公開 (Unsafe)';
+            safetyBadge.textContent = '先留著';
             safetyBadge.className = 'status-badge status-unsafe';
         }
 
@@ -549,7 +549,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const badge = document.createElement('span');
             badge.id = 'override-indicator';
             badge.className = 'override-badge';
-            badge.textContent = '🔄 已覆寫';
+            badge.textContent = '✏️ 你改過';
             safetyBadge.parentElement.appendChild(badge);
         }
     }
@@ -598,7 +598,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (source === 'local') {
             const inputDir = inputFolder.value.trim();
             if (!inputDir) {
-                showToast('請填寫來源資料夾路徑', 'error');
+                showToast('請先告訴我這場活動的照片放在哪裡', 'error');
                 return;
             }
             body = {
@@ -612,7 +612,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const fId = driveFolderId.value.trim();
             const tId = driveTargetId.value.trim();
             if (!fId) {
-                showToast('請填寫 Google Drive 資料夾 ID', 'error');
+                showToast('請先選一個 Google 雲端資料夾', 'error');
                 return;
             }
             endpoint = '/batch_drive_stream/'; // 切換到串流 API
@@ -640,7 +640,7 @@ document.addEventListener('DOMContentLoaded', () => {
         splitViewer.classList.add('hidden');
         emptyState.classList.remove('hidden');
         showLoading(true);
-        document.getElementById('loading-text').textContent = '正在啟動批量辨識引擎...';
+        document.getElementById('loading-text').textContent = '正在翻開這場活動的照片…';
 
         try {
             const response = await fetch(endpoint, {
@@ -651,7 +651,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!response.ok) {
                 const err = await response.json();
-                throw new Error(err.detail || '批量辨識啟動失敗');
+                throw new Error(err.detail || '沒能開始，再試一次好嗎');
             }
 
             // 處理串流結果
@@ -697,7 +697,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else if (data.status === 'error') {
                             failedCount++;
                             totalImages = data.total || totalImages;
-                            showToast(`${data.file_name || data.file} 辨識出錯`, 'error');
+                            showToast(`${data.file_name || data.file} 這張沒看成`, 'error');
                         } else if (data.results && Array.isArray(data.results)) {
                             // 本機批次模式：一次性完整 JSON 回應
                             totalImages = data.total || data.results.length;
@@ -712,7 +712,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     successCount++;
                                 } else {
                                     failedCount++;
-                                    showToast(`${item.file} 辨識出錯`, 'error');
+                                    showToast(`${item.file} 這張沒看成`, 'error');
                                 }
                             });
                         }
@@ -726,7 +726,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            showToast(`批量處理完成！成功：${successCount}，失敗：${failedCount}`);
+            showToast(`看完了。${successCount} 張看過${failedCount ? `，${failedCount} 張沒看成` : ''}`);
 
             if (source === 'local') {
                 organizeArea.classList.remove('hidden');
@@ -744,7 +744,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(e.message, 'error');
         } finally {
             showLoading(false);
-            document.getElementById('loading-text').textContent = '正在用 AI 深度辨識中...';
+            document.getElementById('loading-text').textContent = '正在一張一張看過去…';
         }
     });
 
@@ -801,13 +801,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // 用 user_decision 覆寫 status badge（確保顯示的是用戶目前有效決定）
         const ud = currentData.user_decision;
         if (ud === 'safe') {
-            safetyBadge.textContent = '可公開 (Safe)';
+            safetyBadge.textContent = '可以分享';
             safetyBadge.className = 'status-badge status-safe';
         } else if (ud === 'pending') {
-            safetyBadge.textContent = '待人員判定 (Pending)';
+            safetyBadge.textContent = '之後再看';
             safetyBadge.className = 'status-badge status-pending';
         } else if (ud === 'unsafe') {
-            safetyBadge.textContent = '不可公開 (Unsafe)';
+            safetyBadge.textContent = '先留著';
             safetyBadge.className = 'status-badge status-unsafe';
         }
 
@@ -865,7 +865,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const fileName = item.file_name || item.file || `圖片 ${idx + 1}`;
             const src = getItemImgSrc(item);
             const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
-            const badgeText = decision === 'safe' ? 'Safe' : decision === 'pending' ? 'Pending' : 'Unsafe';
+            const badgeText = decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
             html += `<div class="thumbnail-item" data-idx="${idx}" title="${fileName}">
                 <img src="${src}" alt="${fileName}" loading="lazy">
                 <div class="thumbnail-overlay">
@@ -890,7 +890,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const fileName = item.file_name || item.file || `圖片 ${idx + 1}`;
             const src = getItemImgSrc(item);
             const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
-            const badgeText = decision === 'safe' ? 'Safe' : decision === 'pending' ? 'Pending' : 'Unsafe';
+            const badgeText = decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
             html += `<div class="overview-list-row" data-idx="${idx}">
                 <span class="list-row-num">#${idx + 1}</span>
                 <img class="list-row-thumb" src="${src}" alt="${fileName}" loading="lazy">
@@ -943,7 +943,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Check for auth success in URL
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('auth') === 'success') {
-        showToast('Google Drive 連結成功！');
+        showToast('雲端連結好了');
         // 自動切換到批次模式
         tabBtns[1].click();
         document.querySelector('input[value="drive"]').checked = true;
@@ -997,20 +997,20 @@ document.addEventListener('DOMContentLoaded', () => {
         renderDecisionButtons();
 
         if (decision === 'safe') {
-            safetyBadge.textContent = '可公開 (Safe)';
+            safetyBadge.textContent = '可以分享';
             safetyBadge.className = 'status-badge status-safe';
         } else if (decision === 'pending') {
-            safetyBadge.textContent = '待人員判定 (Pending)';
+            safetyBadge.textContent = '之後再看';
             safetyBadge.className = 'status-badge status-pending';
         } else {
-            safetyBadge.textContent = '不可公開 (Unsafe)';
+            safetyBadge.textContent = '先留著';
             safetyBadge.className = 'status-badge status-unsafe';
         }
 
         updateOverrideIndicator(currentData);
 
-        const toastText = decision === 'safe' ? '✅ Safe' : decision === 'pending' ? '⏳ Pending' : '❌ Unsafe';
-        showToast(`已將此圖設為 ${toastText}`);
+        const toastText = decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
+        showToast(`已經改成「${toastText}」`);
     };
 
     function renderReviewSummary() {
@@ -1029,7 +1029,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const fileName = item.file_name || item.file || `圖片 ${idx + 1}`;
             const currentClass = idx === currentIndex ? ' current' : '';
             const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
-            const badgeText = decision === 'safe' ? 'Safe' : decision === 'pending' ? 'Pending' : 'Unsafe';
+            const badgeText = decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
 
             html += `<div class="review-item${currentClass}" data-idx="${idx}">
                 <span class="review-item-index">#${idx + 1}</span>
@@ -1040,9 +1040,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         reviewList.innerHTML = html;
-        reviewSafeCount.textContent = `Safe: ${safeC}`;
-        reviewPendingCount.textContent = `Pending: ${pendingC}`;
-        reviewUnsafeCount.textContent = `Unsafe: ${unsafeC}`;
+        reviewSafeCount.textContent = `可以分享 ${safeC}`;
+        reviewPendingCount.textContent = `之後再看 ${pendingC}`;
+        reviewUnsafeCount.textContent = `先留著 ${unsafeC}`;
 
         // 點擊跳轉
         reviewList.querySelectorAll('.review-item').forEach(el => {
@@ -1068,7 +1068,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.__finalizeReview = async function () {
         if (currentBatchResults.length === 0) {
-            showToast('沒有可歸檔的結果', 'error');
+            showToast('還沒有可以整理的照片', 'error');
             return;
         }
 
@@ -1076,7 +1076,7 @@ document.addEventListener('DOMContentLoaded', () => {
             [document.getElementById('overview-finalize-btn'), finalizeBtn].forEach(btn => {
                 if (!btn) return;
                 btn.disabled = busy;
-                btn.textContent = busy ? '⏳ 處理中...' : '✅ 確認批次辨識結果';
+                btn.textContent = busy ? '整理中…' : '就這樣，整理好';
             });
         }
 
@@ -1105,7 +1105,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             pending_folder: pending || null
                         })
                     });
-                    if (!res.ok) throw new Error('歸檔失敗');
+                    if (!res.ok) throw new Error('沒能整理好');
                     const data = await res.json();
                     showToast(data.message);
                 } catch (e) {
@@ -1137,7 +1137,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                     if (!res.ok) {
                         const err = await res.json();
-                        throw new Error(err.detail || '歸檔失敗');
+                        throw new Error(err.detail || '沒能整理好');
                     }
                     const data = await res.json();
                     showToast(`✅ ${data.message}`);
