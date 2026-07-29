@@ -16,6 +16,7 @@
     <!-- Google API & Identity Services for Picker -->
     <script src="https://apis.google.com/js/api.js" async defer></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
 </head>
 
 <body>
@@ -212,6 +213,13 @@
                     </div>
                     <div id="overview-content" class="overview-content"></div>
                     <div class="overview-footer">
+                        <label class="download-option">
+                            <input type="checkbox" id="include-annotated-download" checked>
+                            下載時包含後製圖
+                        </label>
+                        <button class="secondary-btn" id="download-batch-results-btn" type="button">
+                            下載辨識結果
+                        </button>
                         <button class="finalize-btn" id="overview-finalize-btn" onclick="window.__finalizeReview()">
                             就這樣，整理好
                         </button>

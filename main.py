@@ -28,6 +28,7 @@ DEFAULT_BATCH_UPLOAD_MAX_FILES = 3
 DEFAULT_BATCH_UPLOAD_MAX_FILE_MB = 2
 DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 4
 DEFAULT_BATCH_UPLOAD_CONCURRENCY = 2
+DEFAULT_BATCH_DOWNLOAD_MAX_MB = 8
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ def load_config() -> dict[str, Any]:
         "batch_upload_max_file_mb": DEFAULT_BATCH_UPLOAD_MAX_FILE_MB,
         "batch_upload_max_total_mb": DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB,
         "batch_upload_concurrency": DEFAULT_BATCH_UPLOAD_CONCURRENCY,
+        "batch_download_max_mb": DEFAULT_BATCH_DOWNLOAD_MAX_MB,
     }
     raw_config: dict[str, Any] = {}
     if CONFIG_PATH.exists():
@@ -87,6 +89,7 @@ def load_config() -> dict[str, Any]:
         ("batch_upload_max_file_mb", "BATCH_UPLOAD_MAX_FILE_MB", DEFAULT_BATCH_UPLOAD_MAX_FILE_MB, 1, 20),
         ("batch_upload_max_total_mb", "BATCH_UPLOAD_MAX_TOTAL_MB", DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB, 1, 100),
         ("batch_upload_concurrency", "BATCH_UPLOAD_CONCURRENCY", DEFAULT_BATCH_UPLOAD_CONCURRENCY, 1, 10),
+        ("batch_download_max_mb", "BATCH_DOWNLOAD_MAX_MB", DEFAULT_BATCH_DOWNLOAD_MAX_MB, 1, 100),
     ):
         config[key] = _read_positive_int(
             os.environ.get(env_key, raw_config.get(key, default)),
@@ -113,6 +116,7 @@ BATCH_UPLOAD_MAX_FILES = CONFIG["batch_upload_max_files"]
 BATCH_UPLOAD_MAX_FILE_MB = CONFIG["batch_upload_max_file_mb"]
 BATCH_UPLOAD_MAX_TOTAL_MB = CONFIG["batch_upload_max_total_mb"]
 BATCH_UPLOAD_CONCURRENCY = CONFIG["batch_upload_concurrency"]
+BATCH_DOWNLOAD_MAX_MB = CONFIG["batch_download_max_mb"]
 BATCH_UPLOAD_MAX_FILE_BYTES = BATCH_UPLOAD_MAX_FILE_MB * 1024 * 1024
 BATCH_UPLOAD_MAX_TOTAL_BYTES = BATCH_UPLOAD_MAX_TOTAL_MB * 1024 * 1024
 
@@ -234,6 +238,7 @@ async def get_frontend_config():
         "batch_upload_max_file_mb": BATCH_UPLOAD_MAX_FILE_MB,
         "batch_upload_max_total_mb": BATCH_UPLOAD_MAX_TOTAL_MB,
         "batch_upload_concurrency": BATCH_UPLOAD_CONCURRENCY,
+        "batch_download_max_mb": BATCH_DOWNLOAD_MAX_MB,
     }
 
 @app.get("/api/user/me")

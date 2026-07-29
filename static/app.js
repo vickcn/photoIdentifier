@@ -127,6 +127,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentTempFolder = null;
 
     let batchSelectedFiles = [];
+
+    const downloadBatchResultsBtn = document.getElementById('download-batch-results-btn');
+    const includeAnnotatedDownload = document.getElementById('include-annotated-download');
     let config = null;
 
     function getBatchUploadLimits() {
@@ -876,6 +879,104 @@ document.addEventListener('DOMContentLoaded', () => {
             '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
         })[character]);
     }
+
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function base64ByteLength(value) {
+        if (!value) return 0;
+        const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+        return Math.max(0, Math.floor(value.length * 3 / 4) - padding);
+    }
+
+    function safeDownloadName(value, fallback) {
+        const name = String(value || fallback).split(/[\\/]/).pop();
+        return name.replace(/[^a-zA-Z0-9._-]/g, '_') || fallback;
+    }
+
+    function buildBatchResultExport() {
+        return {
+            exported_at: new Date().toISOString(),
+            session_id: window._currentSessionId || null,
+            batch_mode: batchMode,
+            image_count: currentBatchResults.length,
+            results: currentBatchResults.map((item, index) => {
+                const { original_image_b64, drawn_image_b64, ...result } = item;
+                return {
+                    index: index + 1,
+                    ...result,
+                    annotated_image_available: Boolean(drawn_image_b64),
+                };
+            }),
+        };
+    }
+
+    async function downloadBatchResults() {
+        if (currentBatchResults.length === 0) {
+            showToast('目前沒有可下載的辨識結果', 'error');
+            return;
+        }
+
+        const exportData = buildBatchResultExport();
+        const json = JSON.stringify(exportData, null, 2);
+        const jsonBlob = new Blob([json], { type: 'application/json;charset=utf-8' });
+        const wantsImages = Boolean(includeAnnotatedDownload?.checked);
+        const imageBytes = currentBatchResults.reduce(
+            (total, item) => total + base64ByteLength(item.drawn_image_b64),
+            0,
+        );
+        const maxBytes = (config?.batch_download_max_mb || 8) * 1024 * 1024;
+
+        if (!wantsImages) {
+            downloadBlob(jsonBlob, `batch_results_${Date.now()}.json`);
+            showToast('已下載 JSON 辨識結果', 'success');
+            return;
+        }
+
+        if (imageBytes + jsonBlob.size > maxBytes || typeof JSZip === 'undefined') {
+            downloadBlob(jsonBlob, `batch_results_${Date.now()}.json`);
+            const reason = typeof JSZip === 'undefined' ? '壓縮元件未載入' : `後製圖超過 ${config?.batch_download_max_mb || 8}MB 上限`;
+            showToast(`${reason}，已自動改下載 JSON；後製圖請改用雲端模式`, 'error');
+            return;
+        }
+
+        downloadBatchResultsBtn.disabled = true;
+        try {
+            const zip = new JSZip();
+            zip.file('result.json', json);
+            const annotated = zip.folder('annotated');
+            currentBatchResults.forEach((item, index) => {
+                if (!item.drawn_image_b64) return;
+                const sourceName = item.file_name || item.file || `image_${index + 1}.jpg`;
+                const safeName = safeDownloadName(sourceName, `image_${index + 1}.jpg`).replace(/\.[^.]+$/, '');
+                annotated.file(`annotated_${safeName}.jpg`, item.drawn_image_b64, { base64: true });
+            });
+            const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 4 } });
+            if (zipBlob.size > maxBytes) {
+                downloadBlob(jsonBlob, `batch_results_${Date.now()}.json`);
+                showToast(`結果包超過 ${config?.batch_download_max_mb || 8}MB 上限，已自動改下載 JSON；後製圖請改用雲端模式`, 'error');
+                return;
+            }
+            downloadBlob(zipBlob, `batch_results_${Date.now()}.zip`);
+            showToast('已下載 JSON 與後製圖 ZIP', 'success');
+        } catch (error) {
+            console.error('Batch result export failed:', error);
+            downloadBlob(jsonBlob, `batch_results_${Date.now()}.json`);
+            showToast('後製圖打包失敗，已自動改下載 JSON', 'error');
+        } finally {
+            downloadBatchResultsBtn.disabled = false;
+        }
+    }
+
+    downloadBatchResultsBtn?.addEventListener('click', downloadBatchResults);
 
     function renderThumbnailGrid(container) {
         let html = '<div class="thumbnail-grid">';

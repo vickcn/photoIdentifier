@@ -6,5 +6,6 @@
   "batch_upload_max_file_mb": 2,
   "batch_upload_max_total_mb": 4,
   "batch_upload_concurrency": 2,
+  "batch_download_max_mb": 8,
   "request_timeout": 600
 }

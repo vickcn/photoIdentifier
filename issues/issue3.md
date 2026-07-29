@@ -86,6 +86,7 @@
 - `BATCH_UPLOAD_MAX_FILE_MB`：批次單檔大小上限
 - `BATCH_UPLOAD_MAX_TOTAL_MB`：批次總大小上限
 - `BATCH_UPLOAD_CONCURRENCY`：批次預設併發數
+- `BATCH_DOWNLOAD_MAX_MB`：瀏覽器端完整結果 ZIP 上限；超過時只下載 JSON 並引導改用雲端模式
 - `VERTEX_API_KEY`：Vertex AI 呼叫金鑰
 - `SESSION_SECRET`：FastAPI session 加密金鑰
 - `GOOGLE_CLIENT_ID`：Google OAuth client id
@@ -111,6 +112,7 @@
 - [x] 上傳前會檢查檔案數量、單檔與總大小上限
 - [x] 超過上限會直接提示改用雲端模式
 - [x] 後端以 NDJSON 逐筆回傳結果，不建立長期暫存資料夾
+- [x] 批次結果可下載 JSON；勾選後製圖時輸出 ZIP，超過容量上限自動 fallback 為 JSON
 - [ ] Vercel 上可正常部署與完成實圖辨識
 
 ## 風險

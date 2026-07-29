@@ -22,6 +22,7 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(response.json()["batch_upload_max_file_mb"], main.BATCH_UPLOAD_MAX_FILE_MB)
         self.assertEqual(response.json()["batch_upload_max_total_mb"], main.BATCH_UPLOAD_MAX_TOTAL_MB)
         self.assertEqual(response.json()["batch_upload_concurrency"], main.BATCH_UPLOAD_CONCURRENCY)
+        self.assertEqual(response.json()["batch_download_max_mb"], main.BATCH_DOWNLOAD_MAX_MB)
 
     def test_load_config_prefers_env_over_config_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -33,6 +34,7 @@ class BatchUploadApiTests(unittest.TestCase):
                         "batch_upload_max_file_mb": 7,
                         "batch_upload_max_total_mb": 21,
                         "batch_upload_concurrency": 5,
+                        "batch_download_max_mb": 30,
                     }
                 ),
                 encoding="utf-8",
@@ -46,6 +48,7 @@ class BatchUploadApiTests(unittest.TestCase):
                         "BATCH_UPLOAD_MAX_FILE_MB": "2",
                         "BATCH_UPLOAD_MAX_TOTAL_MB": "4",
                         "BATCH_UPLOAD_CONCURRENCY": "2",
+                        "BATCH_DOWNLOAD_MAX_MB": "8",
                     },
                     clear=False,
                 ),
@@ -56,6 +59,7 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(config["batch_upload_max_file_mb"], 2)
         self.assertEqual(config["batch_upload_max_total_mb"], 4)
         self.assertEqual(config["batch_upload_concurrency"], 2)
+        self.assertEqual(config["batch_download_max_mb"], 8)
 
     def test_batch_upload_stream_accepts_multiple_images(self):
         async def fake_batch_stream(images, **kwargs):
