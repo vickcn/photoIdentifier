@@ -200,6 +200,31 @@ body::before {
     margin-top: 0.5rem;
 }
 
+.batch-upload-area {
+    padding: 2rem 1rem;
+}
+
+.batch-file-summary,
+.batch-cloud-guidance {
+    border: 1px solid var(--paper-edge);
+    border-radius: 14px;
+    padding: 0.9rem 1rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    background: var(--surface-muted);
+}
+
+.batch-file-summary strong {
+    color: var(--text-primary);
+}
+
+.batch-cloud-guidance {
+    display: grid;
+    gap: 0.75rem;
+    border-color: rgba(192, 138, 62, 0.35);
+    background: rgba(192, 138, 62, 0.08);
+}
+
 /* Inputs & Buttons */
 .input-group {
     display: flex;

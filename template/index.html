@@ -62,20 +62,16 @@
 
                     <!-- Local Batch Inputs -->
                     <div id="local-batch-inputs">
-                        <div class="input-group">
-                            <label for="batch-input-folder">這場活動的照片放在哪裡</label>
-                            <input type="text" id="batch-input-folder" placeholder="例如：/Users/.../data">
+                        <div class="upload-area batch-upload-area" id="batch-drop-zone">
+                            <input type="file" id="batch-file-input" accept="image/jpeg, image/png, image/webp" multiple hidden>
+                            <div class="upload-icon">📚</div>
+                            <p>把這場活動的照片拖進來，或點一下挑選</p>
+                            <span class="sub-text" id="batch-upload-limits">最多 3 張，單檔 2MB、合計 4MB 以內</span>
                         </div>
-                        <!-- Temp folder management (shown when review_temp_* folders exist) -->
-                        <div id="temp-folder-mgmt" class="temp-folder-mgmt hidden">
-                            <div class="temp-mgmt-header">
-                                <span class="temp-mgmt-label">📁 標好記號的暫存資料夾</span>
-                                <button class="icon-btn" id="btn-refresh-temp" onclick="window.__refreshTempFolders()" title="重新整理列表">↻</button>
-                            </div>
-                            <div class="temp-select-row">
-                                <select id="temp-folder-select" class="temp-select"></select>
-                                <button class="danger-btn" id="btn-clear-temp" onclick="window.__clearSelectedTempFolder()">清掉</button>
-                            </div>
+                        <div id="batch-file-summary" class="batch-file-summary hidden"></div>
+                        <div id="batch-cloud-guidance" class="batch-cloud-guidance hidden">
+                            <p>照片較多或較大時，改用自己的 Google 雲端資料夾比較穩定。</p>
+                            <button type="button" id="switch-to-drive-btn" class="secondary-btn">改用 Google 雲端</button>
                         </div>
                         <button id="btn-add-memory-local" class="secondary-btn" style="width: 100%; margin-top: 1rem;">📝 加一點提醒</button>
                     </div>
@@ -113,7 +109,7 @@
                     </div>
                     <div class="input-group row-group">
                         <label for="batch-concurrency">一次看幾張</label>
-                        <input type="number" id="batch-concurrency" value="3" min="1" max="10">
+                        <input type="number" id="batch-concurrency" value="2" min="1" max="10">
                     </div>
 
                     <!-- Color Rules Panel -->

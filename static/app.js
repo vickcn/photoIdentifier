@@ -15,7 +15,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const driveBatchInputs = document.getElementById('drive-batch-inputs');
     const googleLoginBtn = document.getElementById('google-login-btn');
 
-    const inputFolder = document.getElementById('batch-input-folder');
+    const batchDropZone = document.getElementById('batch-drop-zone');
+    const batchFileInput = document.getElementById('batch-file-input');
+    const batchFileSummary = document.getElementById('batch-file-summary');
+    const batchCloudGuidance = document.getElementById('batch-cloud-guidance');
     const batchConcurrency = document.getElementById('batch-concurrency');
     const analyzeBatchBtn = document.getElementById('analyze-batch-btn');
     const organizeArea = document.getElementById('organize-area');
@@ -123,53 +126,61 @@ document.addEventListener('DOMContentLoaded', () => {
     let batchOverviewMode = localStorage.getItem('batchOverviewMode') || 'thumbnail';
     let currentTempFolder = null;
 
-    // === Temp Folder Management ===
-    const tempFolderMgmt = document.getElementById('temp-folder-mgmt');
-    const tempFolderSelect = document.getElementById('temp-folder-select');
+    let batchSelectedFiles = [];
 
-    async function refreshTempFolders(inputDir) {
-        if (!inputDir) return;
-        try {
-            const res = await fetch(`/review_temp_folders/?input_folder=${encodeURIComponent(inputDir)}`);
-            if (!res.ok) return;
-            const data = await res.json();
-            const folders = data.folders || [];
-            if (folders.length === 0) {
-                tempFolderMgmt.classList.add('hidden');
-                return;
-            }
-            tempFolderSelect.innerHTML = folders.map(f =>
-                `<option value="${f.name}">${f.name}  (${f.size_mb} MB)</option>`
-            ).join('');
-            tempFolderMgmt.classList.remove('hidden');
-        } catch (e) {
-            console.warn('Failed to load temp folders', e);
-        }
+    function getBatchUploadLimits() {
+        return {
+            maxFiles: config?.batch_upload_max_files || 3,
+            maxFileBytes: (config?.batch_upload_max_file_mb || 2) * 1024 * 1024,
+            maxTotalBytes: (config?.batch_upload_max_total_mb || 4) * 1024 * 1024,
+            defaultConcurrency: config?.batch_upload_concurrency || 2,
+        };
     }
 
-    window.__refreshTempFolders = () => refreshTempFolders(inputFolder.value.trim());
+    function validateBatchFiles(files) {
+        const limits = getBatchUploadLimits();
+        if (files.length > limits.maxFiles) return `一次最多選 ${limits.maxFiles} 張照片`;
+        const oversized = files.find(file => file.size > limits.maxFileBytes);
+        if (oversized) return `${oversized.name} 超過單檔大小限制`;
+        const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+        if (totalBytes > limits.maxTotalBytes) return '選取照片的總大小超過限制';
+        return null;
+    }
 
-    window.__clearSelectedTempFolder = async function () {
-        const inputDir = inputFolder.value.trim();
-        const folderName = tempFolderSelect.value;
-        if (!inputDir || !folderName) return;
-        if (!confirm(`確定要刪除暫存資料夾「${folderName}」嗎？`)) return;
-        try {
-            const res = await fetch('/delete_review_temp/', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ input_folder: inputDir, folder_name: folderName })
-            });
-            if (!res.ok) throw new Error((await res.json()).detail);
-            showToast('暫存資料夾已刪除');
-            refreshTempFolders(inputDir);
-        } catch (e) {
-            showToast(e.message, 'error');
+    function selectBatchFiles(files) {
+        const images = Array.from(files).filter(file => file.type.startsWith('image/'));
+        const error = validateBatchFiles(images);
+        batchCloudGuidance.classList.toggle('hidden', !error);
+        if (error) {
+            batchSelectedFiles = [];
+            batchFileSummary.classList.add('hidden');
+            showToast(`${error}，請減少檔案或改用 Google 雲端`, 'error');
+            return;
         }
-    };
+        batchSelectedFiles = images;
+        const totalMb = images.reduce((sum, file) => sum + file.size, 0) / 1024 / 1024;
+        batchFileSummary.innerHTML = `<strong>已選 ${images.length} 張</strong>，合計 ${totalMb.toFixed(2)} MB`;
+        batchFileSummary.classList.toggle('hidden', images.length === 0);
+    }
 
-    // Refresh when user leaves input folder field
-    inputFolder.addEventListener('blur', () => refreshTempFolders(inputFolder.value.trim()));
+    batchDropZone.addEventListener('click', () => batchFileInput.click());
+    batchFileInput.addEventListener('change', () => selectBatchFiles(batchFileInput.files));
+    batchDropZone.addEventListener('dragover', event => {
+        event.preventDefault();
+        batchDropZone.classList.add('dragover');
+    });
+    batchDropZone.addEventListener('dragleave', () => batchDropZone.classList.remove('dragover'));
+    batchDropZone.addEventListener('drop', event => {
+        event.preventDefault();
+        batchDropZone.classList.remove('dragover');
+        selectBatchFiles(event.dataTransfer.files);
+    });
+    document.getElementById('switch-to-drive-btn').addEventListener('click', () => {
+        const driveRadio = document.querySelector('input[name="batch-source"][value="drive"]');
+        driveRadio.checked = true;
+        driveRadio.dispatchEvent(new Event('change'));
+    });
+    batchConcurrency.value = String(getBatchUploadLimits().defaultConcurrency);
 
     // === Color Rules ===
     const DEFAULT_COLOR_SWATCHES = [
@@ -585,29 +596,31 @@ document.addEventListener('DOMContentLoaded', () => {
     // === Batch Mode Handling ===
     analyzeBatchBtn.addEventListener('click', async () => {
         const source = document.querySelector('input[name="batch-source"]:checked').value;
-        batchMode = source;
+        batchMode = source === 'local' ? 'upload' : source;
         const currentConcurrency = parseInt(batchConcurrency.value) || 3;
 
         // Generate session_id for metrics tracking
         const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         window._currentSessionId = sessionId;
 
-        let endpoint = '/batch/';
+        let endpoint = '/batch_upload_stream/';
         let body = {};
+        let requestOptions;
 
         if (source === 'local') {
-            const inputDir = inputFolder.value.trim();
-            if (!inputDir) {
-                showToast('請先告訴我這場活動的照片放在哪裡', 'error');
+            const validationError = validateBatchFiles(batchSelectedFiles);
+            if (batchSelectedFiles.length === 0 || validationError) {
+                showToast(validationError || '請先選擇這場活動的照片', 'error');
                 return;
             }
-            body = {
-                input_folder: inputDir,
-                concurrency: currentConcurrency,
-                color_rules: colorSwatches,
-                session_id: sessionId,
-                collaborative_memory: window._collaborativeMemories?.local || null,
-            };
+            const formData = new FormData();
+            batchSelectedFiles.forEach(file => formData.append('files', file, file.name));
+            formData.append('concurrency', String(currentConcurrency));
+            formData.append('color_rules_json', JSON.stringify(colorSwatches));
+            formData.append('session_id', sessionId);
+            const memory = window._collaborativeMemories?.local;
+            if (memory) formData.append('collaborative_memory', memory);
+            requestOptions = { method: 'POST', body: formData };
         } else {
             const fId = driveFolderId.value.trim();
             const tId = driveTargetId.value.trim();
@@ -623,6 +636,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 color_rules: colorSwatches,
                 session_id: sessionId,
                 collaborative_memory: window._collaborativeMemories?.drive || null,
+            };
+            requestOptions = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
             };
         }
 
@@ -643,11 +661,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('loading-text').textContent = '正在翻開這場活動的照片…';
 
         try {
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
+            const response = await fetch(endpoint, requestOptions);
 
             if (!response.ok) {
                 const err = await response.json();
@@ -729,8 +743,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(`看完了。${successCount} 張看過${failedCount ? `，${failedCount} 張沒看成` : ''}`);
 
             if (source === 'local') {
-                organizeArea.classList.remove('hidden');
-                refreshTempFolders(inputFolder.value.trim());
+                organizeArea.classList.add('hidden');
             } else {
                 organizeArea.classList.add('hidden');
             }
@@ -857,12 +870,18 @@ document.addEventListener('DOMContentLoaded', () => {
         return `/local_file/?path=${encodeURIComponent(item.original_path)}`;
     }
 
+    function escapeHtml(value) {
+        return String(value).replace(/[&<>'"]/g, character => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+        })[character]);
+    }
+
     function renderThumbnailGrid(container) {
         let html = '<div class="thumbnail-grid">';
         currentBatchResults.forEach((item, idx) => {
             const decision = item.user_decision || 'private';
             const isOverride = item.user_decision !== item.ai_decision;
-            const fileName = item.file_name || item.file || `圖片 ${idx + 1}`;
+            const fileName = escapeHtml(item.file_name || item.file || `圖片 ${idx + 1}`);
             const src = getItemImgSrc(item);
             const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
             const badgeText = decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
@@ -887,7 +906,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentBatchResults.forEach((item, idx) => {
             const decision = item.user_decision || 'private';
             const isOverride = item.user_decision !== item.ai_decision;
-            const fileName = item.file_name || item.file || `圖片 ${idx + 1}`;
+            const fileName = escapeHtml(item.file_name || item.file || `圖片 ${idx + 1}`);
             const src = getItemImgSrc(item);
             const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
             const badgeText = decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
@@ -1080,7 +1099,9 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        if (batchMode === 'local') {
+        if (batchMode === 'upload') {
+            window.__showMetricsSummary();
+        } else if (batchMode === 'local') {
             const safe = safeFolder.value.trim();
             const unsafe = unsafeFolder.value.trim();
             const pending = document.getElementById('pending-folder').value.trim();
@@ -1205,6 +1226,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/config');
             config = await res.json();
             console.log("Config loaded:", !!config.google_client_id);
+            document.getElementById('batch-upload-limits').textContent =
+                `最多 ${config.batch_upload_max_files} 張，單檔 ${config.batch_upload_max_file_mb}MB、合計 ${config.batch_upload_max_total_mb}MB 以內`;
+            batchConcurrency.value = String(config.batch_upload_concurrency || 2);
         } catch (e) {
             console.error("Failed to fetch config", e);
         }

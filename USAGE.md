@@ -17,17 +17,23 @@
 
 ---
 
-## 📂 大量處理：本機資料夾模式
+## 📂 大量處理：本機多檔上傳
 
-如果您電腦裡有一整個資料夾的照片需要處理：
+如果您電腦裡有多張照片需要處理：
 
-1.  切換至 **「批量處理」** 分頁。
-2.  選擇 **「💻 本機資料夾」**。
-3.  **輸入路徑**：
-    *   **來源**：請複製您電腦資料夾的完整路徑（例如 `/Users/yourname/Desktop/photos`）。
-    *   **輸出**：設定一個用來存放標註後結果的資料夾。
-4.  **開始辨識**：點擊「開始批量辨識」，程式會並行處理所有圖片。
-5.  **分類整理**：辨識完成後，點擊 **「📦 執行分類整理」**，程式會自動依照安全規則將您的「原始圖」搬移至 `Safe_Results` 與 `Unsafe_Results` 子資料夾。
+1. 切換至 **「批量處理」** 分頁。
+2. 選擇 **「這台電腦」**。
+3. 一次選取或拖入多張 JPG、PNG、WEBP 圖片。
+4. 點擊開始辨識，系統會逐張顯示進度與標註結果。
+
+系統預設最多接受 3 張、單檔 2MB、合計 4MB；實際限制以畫面顯示為準。超過限制時，請改用 Google 雲端資料夾模式。上傳模式不接受伺服器本機路徑，也不會在部署端建立長期暫存資料夾。
+
+如果同一份程式要同時支援 `Vercel` 與本機執行，建議把批次上傳限制與預設併發放在環境變數管理。讀取優先順序是：`環境變數 -> config.json -> 程式預設值`。
+
+- `BATCH_UPLOAD_MAX_FILES`
+- `BATCH_UPLOAD_MAX_FILE_MB`
+- `BATCH_UPLOAD_MAX_TOTAL_MB`
+- `BATCH_UPLOAD_CONCURRENCY`
 
 ---
 
@@ -41,6 +47,19 @@
     *   打開您的雲端硬碟資料夾，複製網址列最後一段的字串（即 ID）。
     *   輸入 **來源資料夾 ID** 與 **輸出資料夾 ID**。
 4.  **智慧處理**：點擊開始後，AI 會直接從雲端抓圖，標註完畢後**自動依照分類**存回您的雲端資料夾，不需要您再手動搬移。
+
+### 相關設定與排錯
+
+Google OAuth、Google Picker、Google Drive API、API key restriction、OAuth client、project number 這些專有名詞可直接寫在專案文件中，方便排錯與溝通。
+
+若遇到登入失敗、Picker 403、redirect URI 不符、scope 或 session 不一致等問題，建議優先引用 `$google-api-session-patterns`，再依該 skill 的通則檢查：
+
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_API_KEY`
+- `GOOGLE_PROJECT_NUMBER`
+- `GOOGLE_REDIRECT_URI`
+- `SESSION_SECRET`
 
 ---
 

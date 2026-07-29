@@ -24,44 +24,97 @@ except Exception:
     detect_face_bboxes_from_image_bytes = None
 
 DEFAULT_MAX_UPLOAD_SIZE_MB = 25
+DEFAULT_BATCH_UPLOAD_MAX_FILES = 3
+DEFAULT_BATCH_UPLOAD_MAX_FILE_MB = 2
+DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 4
+DEFAULT_BATCH_UPLOAD_CONCURRENCY = 2
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 
 
-def load_config() -> dict[str, Any]:
-    config = {"max_upload_size_mb": DEFAULT_MAX_UPLOAD_SIZE_MB}
-    if not CONFIG_PATH.exists():
-        return config
-
+def _read_positive_int(
+    raw_value: Any,
+    *,
+    key_name: str,
+    default: int,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
     try:
-        with CONFIG_PATH.open("r", encoding="utf-8") as f:
-            raw_config = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        logger.warning("config.json 讀取失敗，改用預設設定。")
-        return config
-
-    if not isinstance(raw_config, dict):
-        logger.warning("config.json 格式錯誤（非物件），改用預設設定。")
-        return config
-
-    max_upload_size_mb = raw_config.get("max_upload_size_mb", DEFAULT_MAX_UPLOAD_SIZE_MB)
-    try:
-        max_upload_size_mb = int(max_upload_size_mb)
-        if max_upload_size_mb <= 0:
+        value = int(raw_value)
+        if value < minimum:
             raise ValueError
+        if maximum is not None and value > maximum:
+            raise ValueError
+        return value
     except (TypeError, ValueError):
-        logger.warning("max_upload_size_mb 無效，改用預設 25MB。")
-        max_upload_size_mb = DEFAULT_MAX_UPLOAD_SIZE_MB
+        if maximum is None:
+            logger.warning("%s 無效，改用預設值 %s。", key_name, default)
+        else:
+            logger.warning("%s 無效，改用預設值 %s（允許範圍 %s-%s）。", key_name, default, minimum, maximum)
+        return default
 
-    config["max_upload_size_mb"] = max_upload_size_mb
+
+def load_config() -> dict[str, Any]:
+    config = {
+        "max_upload_size_mb": DEFAULT_MAX_UPLOAD_SIZE_MB,
+        "batch_upload_max_files": DEFAULT_BATCH_UPLOAD_MAX_FILES,
+        "batch_upload_max_file_mb": DEFAULT_BATCH_UPLOAD_MAX_FILE_MB,
+        "batch_upload_max_total_mb": DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB,
+        "batch_upload_concurrency": DEFAULT_BATCH_UPLOAD_CONCURRENCY,
+    }
+    raw_config: dict[str, Any] = {}
+    if CONFIG_PATH.exists():
+        try:
+            with CONFIG_PATH.open("r", encoding="utf-8") as f:
+                loaded_config = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            logger.warning("config.json 讀取失敗，改用預設設定。")
+            loaded_config = {}
+
+        if isinstance(loaded_config, dict):
+            raw_config = loaded_config
+        else:
+            logger.warning("config.json 格式錯誤（非物件），改用預設設定。")
+
+    config["max_upload_size_mb"] = _read_positive_int(
+        os.environ.get("MAX_UPLOAD_SIZE_MB", raw_config.get("max_upload_size_mb", DEFAULT_MAX_UPLOAD_SIZE_MB)),
+        key_name="MAX_UPLOAD_SIZE_MB",
+        default=DEFAULT_MAX_UPLOAD_SIZE_MB,
+    )
+    for key, env_key, default, minimum, maximum in (
+        ("batch_upload_max_files", "BATCH_UPLOAD_MAX_FILES", DEFAULT_BATCH_UPLOAD_MAX_FILES, 1, 20),
+        ("batch_upload_max_file_mb", "BATCH_UPLOAD_MAX_FILE_MB", DEFAULT_BATCH_UPLOAD_MAX_FILE_MB, 1, 20),
+        ("batch_upload_max_total_mb", "BATCH_UPLOAD_MAX_TOTAL_MB", DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB, 1, 100),
+        ("batch_upload_concurrency", "BATCH_UPLOAD_CONCURRENCY", DEFAULT_BATCH_UPLOAD_CONCURRENCY, 1, 10),
+    ):
+        config[key] = _read_positive_int(
+            os.environ.get(env_key, raw_config.get(key, default)),
+            key_name=env_key,
+            default=default,
+            minimum=minimum,
+            maximum=maximum,
+        )
     config["host"] = str(raw_config.get("host", "0.0.0.0") or "0.0.0.0")
-    config["port"] = int(raw_config.get("port", 8000) or 8000)
+    config["port"] = _read_positive_int(
+        raw_config.get("port", 8000) or 8000,
+        key_name="port",
+        default=8000,
+        minimum=1,
+        maximum=65535,
+    )
     return config
 
 
 CONFIG = load_config()
 MAX_UPLOAD_SIZE_MB = CONFIG["max_upload_size_mb"]
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+BATCH_UPLOAD_MAX_FILES = CONFIG["batch_upload_max_files"]
+BATCH_UPLOAD_MAX_FILE_MB = CONFIG["batch_upload_max_file_mb"]
+BATCH_UPLOAD_MAX_TOTAL_MB = CONFIG["batch_upload_max_total_mb"]
+BATCH_UPLOAD_CONCURRENCY = CONFIG["batch_upload_concurrency"]
+BATCH_UPLOAD_MAX_FILE_BYTES = BATCH_UPLOAD_MAX_FILE_MB * 1024 * 1024
+BATCH_UPLOAD_MAX_TOTAL_BYTES = BATCH_UPLOAD_MAX_TOTAL_MB * 1024 * 1024
 
 
 # 1. 初始化 FastAPI 與靜態資源
@@ -82,7 +135,8 @@ app.add_middleware(
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
 from src.google_auth import get_auth_url, exchange_code_for_token, load_user_credentials, token_store, DEFAULT_SCOPES
 from src.metrics import compute_batch_metrics, collect_changed_files, compute_analysis_stats, format_metrics_for_export
-from photoIdentifier import process_and_visualize_photo, batch_process_folder, batch_process_drive, batch_process_drive_stream
+from photoIdentifier import process_and_visualize_photo, batch_process_folder, batch_process_drive, batch_process_drive_stream, batch_process_uploads_stream
+from src.upload_batch import read_upload_batch
 
 # Session storage for batch operations
 _batch_sessions: dict[str, dict] = {}
@@ -175,7 +229,11 @@ async def get_frontend_config():
     return {
         "google_client_id": client_id,
         "google_api_key": os.environ.get("GOOGLE_API_KEY", ""),
-        "google_app_id": project_number or client_id
+        "google_app_id": project_number or client_id,
+        "batch_upload_max_files": BATCH_UPLOAD_MAX_FILES,
+        "batch_upload_max_file_mb": BATCH_UPLOAD_MAX_FILE_MB,
+        "batch_upload_max_total_mb": BATCH_UPLOAD_MAX_TOTAL_MB,
+        "batch_upload_concurrency": BATCH_UPLOAD_CONCURRENCY,
     }
 
 @app.get("/api/user/me")
@@ -237,7 +295,10 @@ async def analyze_photo(file: UploadFile = File(...), collaborative_memory: str 
         local_face_bboxes = None
         if detect_face_bboxes_from_image_bytes is not None:
             try:
-                local_face_bboxes = detect_face_bboxes_from_image_bytes(image_bytes)
+                local_face_bboxes = await run_in_threadpool(
+                    detect_face_bboxes_from_image_bytes,
+                    image_bytes,
+                )
             except Exception:
                 local_face_bboxes = None
         return await analyze_brand_strap_image(
@@ -314,10 +375,82 @@ async def analyze_with_image(
 
 class BatchRequest(BaseModel):
     input_folder: str
-    concurrency: int = 3
+    concurrency: int = BATCH_UPLOAD_CONCURRENCY
     color_rules: Optional[list] = None
     session_id: Optional[str] = None
     collaborative_memory: Optional[str] = None
+
+
+@app.post("/batch_upload_stream/")
+async def batch_upload_stream(
+    files: list[UploadFile] = File(...),
+    concurrency: int = Form(BATCH_UPLOAD_CONCURRENCY),
+    color_rules_json: Optional[str] = Form(None),
+    session_id: Optional[str] = Form(None),
+    collaborative_memory: Optional[str] = Form(None),
+):
+    if concurrency < 1 or concurrency > 10:
+        raise HTTPException(status_code=400, detail="一次處理張數必須介於 1 到 10")
+
+    try:
+        color_rules = json.loads(color_rules_json) if color_rules_json else None
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="顏色規則格式錯誤") from exc
+    if color_rules is not None and not isinstance(color_rules, list):
+        raise HTTPException(status_code=400, detail="顏色規則必須是陣列")
+
+    images = await read_upload_batch(
+        files,
+        max_files=BATCH_UPLOAD_MAX_FILES,
+        max_file_bytes=BATCH_UPLOAD_MAX_FILE_BYTES,
+        max_total_bytes=BATCH_UPLOAD_MAX_TOTAL_BYTES,
+    )
+    current_session_id = session_id or str(uuid.uuid4())
+    start_time = datetime.now()
+    _batch_sessions[current_session_id] = {
+        "session_id": current_session_id,
+        "batch_mode": "upload",
+        "start_time": start_time.isoformat(),
+        "end_time": None,
+        "results": [],
+        "processing_info": {
+            "file_count": len(images),
+            "concurrency": concurrency,
+        },
+        "completed": False,
+    }
+
+    async def event_generator():
+        try:
+            async for chunk in batch_process_uploads_stream(
+                images,
+                concurrency=concurrency,
+                color_rules=color_rules,
+                collaborative_memory=collaborative_memory,
+            ):
+                if chunk.get("status") == "ok":
+                    _batch_sessions[current_session_id]["results"].append(chunk)
+                yield json.dumps({**chunk, "session_id": current_session_id}, ensure_ascii=False) + "\n"
+
+            _batch_sessions[current_session_id]["end_time"] = datetime.now().isoformat()
+            _batch_sessions[current_session_id]["completed"] = True
+            yield json.dumps(
+                {
+                    "status": "completed",
+                    "session_id": current_session_id,
+                    "message": f"批次處理完成，共 {len(images)} 張圖片",
+                },
+                ensure_ascii=False,
+            ) + "\n"
+        except Exception as exc:
+            _batch_sessions[current_session_id]["end_time"] = datetime.now().isoformat()
+            logger.exception("Upload batch stream error: %s", exc)
+            yield json.dumps(
+                {"status": "error", "session_id": current_session_id, "error": "批次處理中斷"},
+                ensure_ascii=False,
+            ) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 @app.post("/batch/")
 async def batch_visualize(req: BatchRequest):

@@ -2,5 +2,9 @@
   "host": "0.0.0.0",
   "port": 6419,
   "max_upload_size_mb": 25,
+  "batch_upload_max_files": 3,
+  "batch_upload_max_file_mb": 2,
+  "batch_upload_max_total_mb": 4,
+  "batch_upload_concurrency": 2,
   "request_timeout": 600
 }

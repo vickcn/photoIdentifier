@@ -10,6 +10,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
 from src.aoi import draw_bboxes_on_image
+from src.upload_batch import UploadedImage
 
 try:
     from src.face.detector import detect_face_bboxes_from_image_bytes
@@ -52,12 +53,15 @@ async def process_and_visualize_photo(image_bytes: bytes, content_type: str = "i
     2. 將圖片送往 Google Vertex AI 進行邏輯判斷與物件偵測
     3. 解析出 bbox 座標後，將邊界框畫上圖片
     """
-    processed_image_bytes = resize_image_if_needed(image_bytes)
+    processed_image_bytes = await asyncio.to_thread(resize_image_if_needed, image_bytes)
     b64_image = base64.b64encode(processed_image_bytes).decode('utf-8')
     local_face_bboxes = None
     if detect_face_bboxes_from_image_bytes is not None:
         try:
-            local_face_bboxes = detect_face_bboxes_from_image_bytes(processed_image_bytes)
+            local_face_bboxes = await asyncio.to_thread(
+                detect_face_bboxes_from_image_bytes,
+                processed_image_bytes,
+            )
         except Exception:
             local_face_bboxes = None
     analysis_result = await analyze_brand_strap_image(
@@ -68,7 +72,8 @@ async def process_and_visualize_photo(image_bytes: bytes, content_type: str = "i
         local_face_bboxes=local_face_bboxes,
     )
     
-    drawn_image_bytes = draw_bboxes_on_image(
+    drawn_image_bytes = await asyncio.to_thread(
+        draw_bboxes_on_image,
         image_bytes=processed_image_bytes,
         face_bboxes=analysis_result.face_bboxes,
         strap_bboxes=analysis_result.strap_bboxes,
@@ -131,6 +136,40 @@ async def batch_process_folder(
     tasks = [process_one(f) for f in image_files]
     results = await asyncio.gather(*tasks)
     return list(results)
+
+
+async def batch_process_uploads_stream(
+    images: list[UploadedImage],
+    concurrency: int = 3,
+    color_rules: list | None = None,
+    collaborative_memory: str | None = None,
+):
+    """辨識已驗證的上傳圖片，依完成順序逐筆回傳 NDJSON 所需資料。"""
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def process_one(image: UploadedImage) -> dict:
+        async with semaphore:
+            try:
+                result, drawn_bytes = await process_and_visualize_photo(
+                    image.content,
+                    image.content_type,
+                    color_rules=color_rules,
+                    collaborative_memory=collaborative_memory,
+                )
+                return {
+                    "status": "ok",
+                    "file_name": image.filename,
+                    "result": result.model_dump(),
+                    "original_image_b64": base64.b64encode(image.content).decode("ascii"),
+                    "drawn_image_b64": base64.b64encode(drawn_bytes).decode("ascii"),
+                }
+            except Exception as exc:
+                return {"status": "error", "file_name": image.filename, "error": str(exc)}
+
+    tasks = [asyncio.create_task(process_one(image)) for image in images]
+    total = len(tasks)
+    for index, task in enumerate(asyncio.as_completed(tasks), start=1):
+        yield {**await task, "index": index, "total": total}
 
 
 async def batch_process_drive(
