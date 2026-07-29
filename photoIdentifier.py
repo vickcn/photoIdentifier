@@ -6,8 +6,6 @@ import json
 from PIL import Image
 from pathlib import Path
 from typing import Tuple, List, Optional
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
 from src.aoi import draw_bboxes_on_image
 from src.upload_batch import UploadedImage
@@ -184,6 +182,9 @@ async def batch_process_drive(
     如果 target_folder_id 有給，則會在內部自動建立 [Safe_Results] 與 [Unsafe_Results]
     並將標註圖分類存放。
     """
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+
     drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
     
     # 1. 解析輸出資料夾（自動分類歸檔）
