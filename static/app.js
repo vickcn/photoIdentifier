@@ -1231,6 +1231,10 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('伺服器未設定 Google Client ID', 'error');
             return;
         }
+        if (!config.google_app_id) {
+            showToast('伺服器未設定 Google Project Number', 'error');
+            return;
+        }
 
         // 若已有 token（由伺服器端 OAuth 同步或先前 Picker 授權取得），直接開啟 Picker
         if (oauthToken) {

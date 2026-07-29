@@ -171,10 +171,11 @@ async def read_root(request: Request):
 async def get_frontend_config():
     """提供前端啟動 Google Picker 所需的公開 ID (不含 Secret)"""
     client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+    project_number = os.environ.get("GOOGLE_PROJECT_NUMBER", "")
     return {
         "google_client_id": client_id,
         "google_api_key": os.environ.get("GOOGLE_API_KEY", ""),
-        "google_app_id": client_id  # 使用完整 client_id，而非分割版本
+        "google_app_id": project_number or client_id
     }
 
 @app.get("/api/user/me")
