@@ -5,11 +5,18 @@
       "src": "main.py",
       "use": "@vercel/python",
       "config": {
-        "maxDuration": 600,
-        "runtime": "python3.12"
+        "maxDuration": 300,
+        "runtime": "python3.12",
+        "excludeFiles": "{data/**,data_batch/**,tmp/**,tmp_face/**,tests/**,issues/**}"
       }
     }
   ],
+  "env": {
+    "FACE_CLUSTERING_ENABLED": "true",
+    "FACE_MODEL_NAME": "buffalo_l",
+    "FACE_MODEL_ROOT": "/tmp/insightface",
+    "VERCEL_SUPPORT_LARGE_FUNCTIONS": "1"
+  },
   "rewrites": [
     {
       "source": "/static/(.*)",

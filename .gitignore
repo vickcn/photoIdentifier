@@ -224,6 +224,8 @@ report_20250902*
 !tests/test_upload_batch.py
 !tests/test_batch_upload_api.py
 !tests/test_photo_processing_threadpool.py
+!tests/test_face_workspace.py
+!tests/test_face_workspace_api.py
 !issues/
 !issues/issue3.md
 !config.json

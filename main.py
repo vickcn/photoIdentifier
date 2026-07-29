@@ -1,7 +1,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from datetime import datetime
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Request
@@ -29,6 +29,7 @@ DEFAULT_BATCH_UPLOAD_MAX_FILE_MB = 2
 DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 4
 DEFAULT_BATCH_UPLOAD_CONCURRENCY = 2
 DEFAULT_BATCH_DOWNLOAD_MAX_MB = 8
+DEFAULT_FACE_CLUSTERING_ENABLED = True
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,19 @@ def _read_positive_int(
         return default
 
 
+def _read_bool(raw_value: Any, *, key_name: str, default: bool) -> bool:
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, str):
+        normalized = raw_value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    logger.warning("%s 無效，改用預設值 %s。", key_name, default)
+    return default
+
+
 def load_config() -> dict[str, Any]:
     config = {
         "max_upload_size_mb": DEFAULT_MAX_UPLOAD_SIZE_MB,
@@ -64,6 +78,7 @@ def load_config() -> dict[str, Any]:
         "batch_upload_max_total_mb": DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB,
         "batch_upload_concurrency": DEFAULT_BATCH_UPLOAD_CONCURRENCY,
         "batch_download_max_mb": DEFAULT_BATCH_DOWNLOAD_MAX_MB,
+        "face_clustering_enabled": DEFAULT_FACE_CLUSTERING_ENABLED,
     }
     raw_config: dict[str, Any] = {}
     if CONFIG_PATH.exists():
@@ -83,6 +98,14 @@ def load_config() -> dict[str, Any]:
         os.environ.get("MAX_UPLOAD_SIZE_MB", raw_config.get("max_upload_size_mb", DEFAULT_MAX_UPLOAD_SIZE_MB)),
         key_name="MAX_UPLOAD_SIZE_MB",
         default=DEFAULT_MAX_UPLOAD_SIZE_MB,
+    )
+    config["face_clustering_enabled"] = _read_bool(
+        os.environ.get(
+            "FACE_CLUSTERING_ENABLED",
+            raw_config.get("face_clustering_enabled", DEFAULT_FACE_CLUSTERING_ENABLED),
+        ),
+        key_name="FACE_CLUSTERING_ENABLED",
+        default=DEFAULT_FACE_CLUSTERING_ENABLED,
     )
     for key, env_key, default, minimum, maximum in (
         ("batch_upload_max_files", "BATCH_UPLOAD_MAX_FILES", DEFAULT_BATCH_UPLOAD_MAX_FILES, 1, 20),
@@ -117,6 +140,7 @@ BATCH_UPLOAD_MAX_FILE_MB = CONFIG["batch_upload_max_file_mb"]
 BATCH_UPLOAD_MAX_TOTAL_MB = CONFIG["batch_upload_max_total_mb"]
 BATCH_UPLOAD_CONCURRENCY = CONFIG["batch_upload_concurrency"]
 BATCH_DOWNLOAD_MAX_MB = CONFIG["batch_download_max_mb"]
+FACE_CLUSTERING_ENABLED = CONFIG["face_clustering_enabled"]
 BATCH_UPLOAD_MAX_FILE_BYTES = BATCH_UPLOAD_MAX_FILE_MB * 1024 * 1024
 BATCH_UPLOAD_MAX_TOTAL_BYTES = BATCH_UPLOAD_MAX_TOTAL_MB * 1024 * 1024
 
@@ -144,6 +168,76 @@ from src.upload_batch import read_upload_batch
 
 # Session storage for batch operations
 _batch_sessions: dict[str, dict] = {}
+_active_batch_owners: dict[str, str] = {}
+
+
+def _get_client_id(request: Request) -> str:
+    client_id = request.session.get("client_id")
+    if not client_id:
+        client_id = str(uuid.uuid4())
+        request.session["client_id"] = client_id
+    return client_id
+
+
+def _acquire_batch_slot(request: Request, session_id: str) -> str:
+    owner_id = _get_client_id(request)
+    active_session_id = _active_batch_owners.get(owner_id)
+    if active_session_id:
+        raise HTTPException(
+            status_code=409,
+            detail="另一個頁籤正在處理照片，請等它完成後再試。",
+        )
+
+    existing = _batch_sessions.get(session_id)
+    if existing is not None:
+        if existing.get("owner_id") != owner_id:
+            raise HTTPException(status_code=404, detail="找不到這場活動的辨識紀錄")
+        raise HTTPException(status_code=409, detail="這場活動已經建立，請勿重複送出。")
+
+    _active_batch_owners[owner_id] = session_id
+    return owner_id
+
+
+def _release_batch_slot(owner_id: str, session_id: str) -> None:
+    if _active_batch_owners.get(owner_id) == session_id:
+        _active_batch_owners.pop(owner_id, None)
+
+
+def _owned_batch_session(request: Request, session_id: str) -> dict[str, Any]:
+    session = _batch_sessions.get(session_id)
+    if session is None or session.get("owner_id") != _get_client_id(request):
+        # Deliberately hide whether another user's session exists.
+        raise HTTPException(status_code=404, detail="找不到這場活動的辨識紀錄")
+    return session
+
+
+async def _classify_session_faces(session_id: str) -> dict[str, Any]:
+    session = _batch_sessions[session_id]
+    if not FACE_CLUSTERING_ENABLED:
+        session["face_clusters"] = []
+        session["face_clustering"] = {
+            "available": False,
+            "reason": "disabled",
+            "cluster_count": 0,
+            "message": "此部署環境未啟用人臉分群；可在本機模式開啟完整功能。",
+        }
+        return session["face_clustering"]
+    try:
+        from src.face.workspace import classify_batch_results, serialize_face_clusters
+
+        clusters = await run_in_threadpool(classify_batch_results, session.get("results", []))
+        serialized = serialize_face_clusters(clusters)
+        session["face_clusters"] = serialized
+        session["face_clustering"] = {"available": True, "cluster_count": len(serialized)}
+    except Exception as exc:
+        logger.warning("Face clustering unavailable session=%s error=%s", session_id, exc)
+        session["face_clusters"] = []
+        session["face_clustering"] = {
+            "available": False,
+            "cluster_count": 0,
+            "message": "此執行環境未啟用人臉分群，照片審核結果不受影響。",
+        }
+    return session["face_clustering"]
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +333,7 @@ async def get_frontend_config():
         "batch_upload_max_total_mb": BATCH_UPLOAD_MAX_TOTAL_MB,
         "batch_upload_concurrency": BATCH_UPLOAD_CONCURRENCY,
         "batch_download_max_mb": BATCH_DOWNLOAD_MAX_MB,
+        "face_clustering_enabled": FACE_CLUSTERING_ENABLED,
     }
 
 @app.get("/api/user/me")
@@ -388,6 +483,7 @@ class BatchRequest(BaseModel):
 
 @app.post("/batch_upload_stream/")
 async def batch_upload_stream(
+    request: Request,
     files: list[UploadFile] = File(...),
     concurrency: int = Form(BATCH_UPLOAD_CONCURRENCY),
     color_rules_json: Optional[str] = Form(None),
@@ -404,16 +500,22 @@ async def batch_upload_stream(
     if color_rules is not None and not isinstance(color_rules, list):
         raise HTTPException(status_code=400, detail="顏色規則必須是陣列")
 
-    images = await read_upload_batch(
-        files,
-        max_files=BATCH_UPLOAD_MAX_FILES,
-        max_file_bytes=BATCH_UPLOAD_MAX_FILE_BYTES,
-        max_total_bytes=BATCH_UPLOAD_MAX_TOTAL_BYTES,
-    )
     current_session_id = session_id or str(uuid.uuid4())
+    owner_id = _acquire_batch_slot(request, current_session_id)
+    try:
+        images = await read_upload_batch(
+            files,
+            max_files=BATCH_UPLOAD_MAX_FILES,
+            max_file_bytes=BATCH_UPLOAD_MAX_FILE_BYTES,
+            max_total_bytes=BATCH_UPLOAD_MAX_TOTAL_BYTES,
+        )
+    except Exception:
+        _release_batch_slot(owner_id, current_session_id)
+        raise
     start_time = datetime.now()
     _batch_sessions[current_session_id] = {
         "session_id": current_session_id,
+        "owner_id": owner_id,
         "batch_mode": "upload",
         "start_time": start_time.isoformat(),
         "end_time": None,
@@ -439,11 +541,14 @@ async def batch_upload_stream(
 
             _batch_sessions[current_session_id]["end_time"] = datetime.now().isoformat()
             _batch_sessions[current_session_id]["completed"] = True
+            face_clustering = await _classify_session_faces(current_session_id)
             yield json.dumps(
                 {
                     "status": "completed",
                     "session_id": current_session_id,
                     "message": f"批次處理完成，共 {len(images)} 張圖片",
+                    "face_clustering": face_clustering,
+                    "face_clusters": _batch_sessions[current_session_id]["face_clusters"],
                 },
                 ensure_ascii=False,
             ) + "\n"
@@ -454,11 +559,13 @@ async def batch_upload_stream(
                 {"status": "error", "session_id": current_session_id, "error": "批次處理中斷"},
                 ensure_ascii=False,
             ) + "\n"
+        finally:
+            _release_batch_slot(owner_id, current_session_id)
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 @app.post("/batch/")
-async def batch_visualize(req: BatchRequest):
+async def batch_visualize(req: BatchRequest, request: Request):
     input_path = Path(req.input_folder)
     if not input_path.exists() or not input_path.is_dir():
         raise HTTPException(status_code=400, detail=f"資料夾不存在：{req.input_folder}")
@@ -468,11 +575,13 @@ async def batch_visualize(req: BatchRequest):
 
     # 生成或使用提供的 session_id
     session_id = req.session_id or str(uuid.uuid4())
+    owner_id = _acquire_batch_slot(request, session_id)
     start_time = datetime.now()
 
     # 初始化 session storage
     _batch_sessions[session_id] = {
         "session_id": session_id,
+        "owner_id": owner_id,
         "batch_mode": "local",
         "start_time": start_time.isoformat(),
         "end_time": None,
@@ -499,6 +608,7 @@ async def batch_visualize(req: BatchRequest):
         _batch_sessions[session_id]["results"] = results
         _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
         _batch_sessions[session_id]["completed"] = True
+        face_clustering = await _classify_session_faces(session_id)
 
         return {
             "session_id": session_id,
@@ -507,11 +617,15 @@ async def batch_visualize(req: BatchRequest):
             "failed": len(err),
             "temp_folder": temp_folder,
             "results": results,
+            "face_clustering": face_clustering,
+            "face_clusters": _batch_sessions[session_id]["face_clusters"],
         }
     except Exception as e:
         logger.exception("Batch processing error: %s", e)
         _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
         raise HTTPException(status_code=500, detail="批量辨識失敗") from e
+    finally:
+        _release_batch_slot(owner_id, session_id)
 
 
 class DriveBatchRequest(BaseModel):
@@ -592,11 +706,13 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
 
         # 生成或使用提供的 session_id
         session_id = req.session_id or str(uuid.uuid4())
+        owner_id = _acquire_batch_slot(request, session_id)
         start_time = datetime.now()
 
         # 初始化 session storage
         _batch_sessions[session_id] = {
             "session_id": session_id,
+            "owner_id": owner_id,
             "batch_mode": "drive",
             "start_time": start_time.isoformat(),
             "end_time": None,
@@ -630,19 +746,26 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                 # 標記完成
                 _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
                 _batch_sessions[session_id]["completed"] = True
+                face_clustering = await _classify_session_faces(session_id)
                 yield json.dumps({
                     "status": "completed",
                     "session_id": session_id,
-                    "message": f"批次處理完成，共 {len(_batch_sessions[session_id]['results'])} 個結果"
+                    "message": f"批次處理完成，共 {len(_batch_sessions[session_id]['results'])} 個結果",
+                    "face_clustering": face_clustering,
+                    "face_clusters": _batch_sessions[session_id]["face_clusters"],
                 }, ensure_ascii=False) + "\n"
 
             except Exception as inner_e:
                 _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
                 yield json.dumps({"status": "error", "error": f"串流中斷: {str(inner_e)}"}, ensure_ascii=False) + "\n"
+            finally:
+                _release_batch_slot(owner_id, session_id)
 
         return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
     except Exception as e:
+        if "owner_id" in locals() and "session_id" in locals():
+            _release_batch_slot(owner_id, session_id)
         logger.exception("Drive batch stream error: %s", e)
         if "找不到使用者憑證" in str(e):
              raise HTTPException(status_code=401, detail="Google 授權已失效，請重新連結。")
@@ -894,14 +1017,43 @@ class BatchSummaryRequest(BaseModel):
     session_id: str
 
 
+class FaceClusterUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    status: Optional[Literal["unconfirmed", "pending", "confirmed", "merged"]] = None
+    notes: Optional[str] = None
+
+
+@app.get("/face_clusters/{session_id}")
+async def get_face_clusters(session_id: str, request: Request):
+    session = _owned_batch_session(request, session_id)
+    return {"session_id": session_id, "clusters": session.get("face_clusters", [])}
+
+
+@app.patch("/face_clusters/{session_id}/{cluster_id}")
+async def update_face_cluster(session_id: str, cluster_id: str, req: FaceClusterUpdateRequest, request: Request):
+    session = _owned_batch_session(request, session_id)
+
+    cluster = next(
+        (item for item in session.get("face_clusters", []) if item.get("cluster_id") == cluster_id),
+        None,
+    )
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="找不到指定的人物群組")
+
+    updates = req.model_dump(exclude_none=True)
+    if "display_name" in updates:
+        updates["display_name"] = updates["display_name"].strip() or cluster["display_name"]
+    if "notes" in updates:
+        updates["notes"] = updates["notes"].strip()
+    cluster.update(updates)
+    return {"session_id": session_id, "cluster": cluster}
+
+
 @app.post("/batch_summary/")
-async def get_batch_summary(req: BatchSummaryRequest):
+async def get_batch_summary(req: BatchSummaryRequest, request: Request):
     """獲取批次處理的綜合指標與混淆矩陣"""
     session_id = req.session_id
-    if session_id not in _batch_sessions:
-        raise HTTPException(status_code=404, detail=f"找不到會話 {session_id}")
-
-    session_data = _batch_sessions[session_id]
+    session_data = _owned_batch_session(request, session_id)
     results = session_data.get("results", [])
 
     if not results:
@@ -929,13 +1081,10 @@ async def get_batch_summary(req: BatchSummaryRequest):
 
 
 @app.post("/batch_summary_export/")
-async def export_batch_summary(req: BatchSummaryRequest):
+async def export_batch_summary(req: BatchSummaryRequest, request: Request):
     """匯出批次指標為 JSON 格式"""
     session_id = req.session_id
-    if session_id not in _batch_sessions:
-        raise HTTPException(status_code=404, detail=f"找不到會話 {session_id}")
-
-    session_data = _batch_sessions[session_id]
+    session_data = _owned_batch_session(request, session_id)
     results = session_data.get("results", [])
 
     if not results:
@@ -963,10 +1112,13 @@ async def export_batch_summary(req: BatchSummaryRequest):
 
 
 @app.get("/batch_sessions/")
-async def list_batch_sessions():
+async def list_batch_sessions(request: Request):
     """列出所有活躍的批次會話"""
     sessions = []
+    owner_id = _get_client_id(request)
     for session_id, session_data in _batch_sessions.items():
+        if session_data.get("owner_id") != owner_id:
+            continue
         sessions.append({
             "session_id": session_id,
             "batch_mode": session_data.get("batch_mode"),

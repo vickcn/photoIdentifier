@@ -125,6 +125,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let batchOverviewActive = false;
     let batchOverviewMode = localStorage.getItem('batchOverviewMode') || 'thumbnail';
     let currentTempFolder = null;
+    let currentFaceClusters = [];
+    let selectedFaceClusterId = null;
+    let faceClusteringInfo = null;
 
     let batchSelectedFiles = [];
 
@@ -412,13 +415,117 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => toastEl.classList.remove('show'), 3000);
     }
 
+    let loadingControlStates = null;
+    const sharedBusyKey = 'photoIdentifier.sharedBusy';
+    const tabId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    const sharedBusyTtlMs = 120000;
+    let sharedBusyHeartbeat = null;
+    let localOperationBusy = false;
+    let releaseWebLock = null;
+
+    function readSharedBusy() {
+        try {
+            const value = JSON.parse(localStorage.getItem(sharedBusyKey) || 'null');
+            if (!value || value.expiresAt <= Date.now()) {
+                if (value) localStorage.removeItem(sharedBusyKey);
+                return null;
+            }
+            return value;
+        } catch (error) {
+            localStorage.removeItem(sharedBusyKey);
+            return null;
+        }
+    }
+
+    function writeSharedBusy(label) {
+        localStorage.setItem(sharedBusyKey, JSON.stringify({
+            tabId,
+            label,
+            expiresAt: Date.now() + sharedBusyTtlMs,
+        }));
+    }
+
+    async function beginSharedBusy(label) {
+        if (navigator.locks) {
+            const acquired = await new Promise(resolve => {
+                navigator.locks.request(sharedBusyKey, { ifAvailable: true }, lock => {
+                    resolve(Boolean(lock));
+                    if (!lock) return undefined;
+                    return new Promise(release => { releaseWebLock = release; });
+                }).catch(() => resolve(null));
+            });
+            if (acquired === false) {
+                showToast('另一個頁籤正在處理照片，請稍候', 'error');
+                return false;
+            }
+            // null means Web Locks failed; continue with the storage lease fallback.
+        }
+        const active = readSharedBusy();
+        if (active && active.tabId !== tabId) {
+            releaseWebLock?.();
+            releaseWebLock = null;
+            showToast(`另一個頁籤正在${active.label || '處理照片'}，請稍候`, 'error');
+            return false;
+        }
+        localOperationBusy = true;
+        writeSharedBusy(label);
+        sharedBusyHeartbeat = window.setInterval(() => writeSharedBusy(label), 20000);
+        return true;
+    }
+
+    function endSharedBusy() {
+        localOperationBusy = false;
+        if (sharedBusyHeartbeat) window.clearInterval(sharedBusyHeartbeat);
+        sharedBusyHeartbeat = null;
+        const active = readSharedBusy();
+        if (active?.tabId === tabId) localStorage.removeItem(sharedBusyKey);
+        releaseWebLock?.();
+        releaseWebLock = null;
+    }
+
+    function syncRemoteBusyState() {
+        if (localOperationBusy) return;
+        const active = readSharedBusy();
+        const remoteBusy = Boolean(active && active.tabId !== tabId);
+        showLoading(remoteBusy);
+        if (remoteBusy) {
+            document.getElementById('loading-text').textContent =
+                `另一個頁籤正在${active.label || '處理照片'}，完成後即可繼續…`;
+        } else {
+            document.getElementById('loading-text').textContent = '正在一張一張看過去…';
+        }
+    }
+
+    window.addEventListener('storage', event => {
+        if (event.key === sharedBusyKey) syncRemoteBusyState();
+    });
+    window.setInterval(syncRemoteBusyState, 5000);
+    window.addEventListener('pagehide', endSharedBusy);
+
     function showLoading(show) {
         if (show) {
+            if (!loadingControlStates) {
+                loadingControlStates = new Map();
+                document.querySelectorAll('button, input, select, textarea').forEach(control => {
+                    loadingControlStates.set(control, control.disabled);
+                    control.disabled = true;
+                });
+            }
+            document.body.classList.add('app-busy');
+            document.body.setAttribute('aria-busy', 'true');
             loadingOverlay.classList.remove('hidden');
         } else {
             loadingOverlay.classList.add('hidden');
+            document.body.classList.remove('app-busy');
+            document.body.removeAttribute('aria-busy');
+            loadingControlStates?.forEach((wasDisabled, control) => {
+                control.disabled = wasDisabled;
+            });
+            loadingControlStates = null;
         }
     }
+
+    syncRemoteBusyState();
 
     // === Tab Switching ===
     tabBtns.forEach(btn => {
@@ -500,6 +607,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     analyzeSingleBtn.addEventListener('click', async () => {
         if (!singleSelectedFile) return;
+        if (!(await beginSharedBusy('辨識照片'))) return;
 
         showLoading(true);
         const formData = new FormData();
@@ -533,6 +641,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(error.message, 'error');
         } finally {
             showLoading(false);
+            endSharedBusy();
         }
     });
 
@@ -648,9 +757,14 @@ document.addEventListener('DOMContentLoaded', () => {
             };
         }
 
+        if (!(await beginSharedBusy('辨識整場活動'))) return;
+
         // Reset and Show Progress UI
         updateProgressUI(0, 0, 0, 0);
         currentBatchResults = [];
+        currentFaceClusters = [];
+        selectedFaceClusterId = null;
+        faceClusteringInfo = null;
         batchOverviewActive = false;
         window._currentMetrics = null;
         window._currentSessionId = sessionId;
@@ -716,6 +830,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             failedCount++;
                             totalImages = data.total || totalImages;
                             showToast(`${data.file_name || data.file} 這張沒看成`, 'error');
+                        } else if (data.status === 'completed') {
+                            currentFaceClusters = Array.isArray(data.face_clusters) ? data.face_clusters : [];
+                            faceClusteringInfo = data.face_clustering || null;
+                            selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
                         } else if (data.results && Array.isArray(data.results)) {
                             // 本機批次模式：一次性完整 JSON 回應
                             totalImages = data.total || data.results.length;
@@ -733,6 +851,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                     showToast(`${item.file} 這張沒看成`, 'error');
                                 }
                             });
+                            currentFaceClusters = Array.isArray(data.face_clusters) ? data.face_clusters : [];
+                            faceClusteringInfo = data.face_clustering || null;
+                            selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
                         }
 
                         // 更新 UI 進度
@@ -741,6 +862,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     } catch (err) {
                         console.error('JSON parsing data error:', line, err);
                     }
+                }
+            }
+
+            // 一次性 JSON（本機資料夾模式）通常不以換行結尾，需處理最後的 buffer。
+            if (buffer.trim()) {
+                const data = JSON.parse(buffer);
+                if (data.results && Array.isArray(data.results)) {
+                    totalImages = data.total || data.results.length;
+                    if (data.temp_folder) currentTempFolder = data.temp_folder;
+                    if (data.session_id) window._currentSessionId = data.session_id;
+                    data.results.forEach(item => {
+                        if (item.status === 'ok') {
+                            const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
+                            item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                            item.ai_decision = item.ai_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                            currentBatchResults.push(item);
+                            successCount++;
+                        } else {
+                            failedCount++;
+                            showToast(`${item.file} 這張沒看成`, 'error');
+                        }
+                    });
+                    currentFaceClusters = Array.isArray(data.face_clusters) ? data.face_clusters : [];
+                    faceClusteringInfo = data.face_clustering || null;
+                    selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
+                    updateProgressUI(successCount + failedCount, totalImages, successCount, failedCount);
                 }
             }
 
@@ -761,6 +908,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(e.message, 'error');
         } finally {
             showLoading(false);
+            endSharedBusy();
             document.getElementById('loading-text').textContent = '正在一張一張看過去…';
         }
     });
@@ -856,14 +1004,120 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('ov-unsafe').textContent = unsafeC;
         document.getElementById('ov-pending').textContent = pendingC;
 
-        document.getElementById('btn-view-thumbnail').classList.toggle('active', batchOverviewMode === 'thumbnail');
-        document.getElementById('btn-view-list').classList.toggle('active', batchOverviewMode === 'list');
-
         const content = document.getElementById('overview-content');
-        if (batchOverviewMode === 'thumbnail') {
+        const viewToggle = document.querySelector('.view-mode-toggle');
+        if (currentFaceClusters.length > 0) {
+            viewToggle?.classList.add('hidden');
+            renderFaceWorkspace(content);
+        } else if (faceClusteringInfo && faceClusteringInfo.available === false) {
+            viewToggle?.classList.remove('hidden');
+            content.innerHTML = `<div class="face-workspace-notice">
+                <strong>人物分群目前未啟用</strong>
+                <span>${escapeHtml(faceClusteringInfo.message || '目前先顯示照片審核結果。')}</span>
+            </div>`;
+            const photoContent = document.createElement('div');
+            content.appendChild(photoContent);
+            if (batchOverviewMode === 'thumbnail') renderThumbnailGrid(photoContent);
+            else renderOverviewList(photoContent);
+        } else if (batchOverviewMode === 'thumbnail') {
+            viewToggle?.classList.remove('hidden');
             renderThumbnailGrid(content);
         } else {
+            viewToggle?.classList.remove('hidden');
             renderOverviewList(content);
+        }
+    }
+
+    function statusLabel(status) {
+        return ({ unconfirmed: '未命名', pending: '待確認', confirmed: '已確認', merged: '已合併' })[status] || '待確認';
+    }
+
+    function findResultIndex(fileName) {
+        return currentBatchResults.findIndex(item => (item.file_name || item.file) === fileName);
+    }
+
+    function renderFaceWorkspace(container) {
+        const selected = currentFaceClusters.find(cluster => cluster.cluster_id === selectedFaceClusterId) || currentFaceClusters[0];
+        if (!selected) return;
+        selectedFaceClusterId = selected.cluster_id;
+        const clusterItems = currentFaceClusters.map(cluster => `
+            <button class="face-cluster-item ${cluster.cluster_id === selected.cluster_id ? 'selected' : ''}"
+                    type="button" data-cluster-id="${escapeHtml(cluster.cluster_id)}">
+                <span class="face-cluster-avatar">${String(cluster.display_name || '人').trim().charAt(0) || '人'}</span>
+                <span class="face-cluster-copy">
+                    <strong>${escapeHtml(cluster.display_name)}</strong>
+                    <small>${cluster.photo_count} 張照片 · ${cluster.face_count} 張臉</small>
+                </span>
+                <span class="face-cluster-status status-${escapeHtml(cluster.status)}">${statusLabel(cluster.status)}</span>
+            </button>`).join('');
+        const evidence = (selected.evidence_photos || []).map(item => {
+            const resultIndex = findResultIndex(item.file_name);
+            const source = item.image_b64 ? `data:image/jpeg;base64,${item.image_b64}` : (resultIndex >= 0 ? getItemImgSrc(currentBatchResults[resultIndex]) : '');
+            return `<button class="face-evidence-card" type="button" data-result-index="${resultIndex}" ${resultIndex < 0 ? 'disabled' : ''}>
+                ${source ? `<img src="${source}" alt="${escapeHtml(item.file_name)}" loading="lazy">` : '<span class="face-evidence-missing">無預覽</span>'}
+                <span>${escapeHtml(item.file_name)}</span>
+                <small>信心 ${(Number(item.score || 0) * 100).toFixed(0)}%</small>
+            </button>`;
+        }).join('');
+        container.innerHTML = `<section class="face-workspace" aria-label="人物分類工作台">
+            <aside class="face-cluster-list-panel">
+                <div class="face-panel-heading"><span>人物群組</span><strong>${currentFaceClusters.length}</strong></div>
+                <div class="face-cluster-list">${clusterItems}</div>
+            </aside>
+            <main class="face-evidence-panel">
+                <div class="face-panel-heading"><span>${escapeHtml(selected.display_name)} 的出現位置</span><small>${selected.photo_count} 張照片</small></div>
+                <div class="face-evidence-grid">${evidence || '<p class="face-empty-copy">沒有可顯示的證據照片</p>'}</div>
+            </main>
+            <aside class="face-decision-panel">
+                <div class="face-panel-heading"><span>確認人物</span></div>
+                <label>人物名稱<input id="face-cluster-name" value="${escapeHtml(selected.display_name)}" maxlength="80"></label>
+                <label>確認狀態<select id="face-cluster-status">
+                    <option value="unconfirmed" ${selected.status === 'unconfirmed' ? 'selected' : ''}>未命名</option>
+                    <option value="pending" ${selected.status === 'pending' ? 'selected' : ''}>待確認</option>
+                    <option value="confirmed" ${selected.status === 'confirmed' ? 'selected' : ''}>已確認</option>
+                </select></label>
+                <label>備註<textarea id="face-cluster-notes" rows="4" maxlength="500" placeholder="例如：講師、工作人員">${escapeHtml(selected.notes || '')}</textarea></label>
+                <button id="save-face-cluster-btn" class="face-save-btn" type="button">儲存這個人物</button>
+                <small class="face-save-hint">流水 ID：${escapeHtml(selected.cluster_id)}</small>
+            </aside>
+        </section>`;
+
+        container.querySelectorAll('.face-cluster-item').forEach(button => {
+            button.addEventListener('click', () => {
+                selectedFaceClusterId = button.dataset.clusterId;
+                renderFaceWorkspace(container);
+            });
+        });
+        container.querySelectorAll('.face-evidence-card').forEach(button => {
+            button.addEventListener('click', () => {
+                const resultIndex = Number(button.dataset.resultIndex);
+                if (resultIndex >= 0) openReviewFromOverview(resultIndex);
+            });
+        });
+        document.getElementById('save-face-cluster-btn')?.addEventListener('click', saveSelectedFaceCluster);
+    }
+
+    async function saveSelectedFaceCluster() {
+        const cluster = currentFaceClusters.find(item => item.cluster_id === selectedFaceClusterId);
+        if (!cluster) return;
+        const update = {
+            display_name: document.getElementById('face-cluster-name').value.trim() || cluster.display_name,
+            status: document.getElementById('face-cluster-status').value,
+            notes: document.getElementById('face-cluster-notes').value.trim(),
+        };
+        Object.assign(cluster, update);
+        renderBatchOverview();
+        try {
+            const response = await fetch(`/face_clusters/${encodeURIComponent(window._currentSessionId)}/${encodeURIComponent(cluster.cluster_id)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(update),
+            });
+            if (!response.ok) throw new Error('server update failed');
+            showToast(`已儲存「${update.display_name}」`);
+        } catch (error) {
+            console.warn('Face cluster update stayed in browser only:', error);
+            showToast('名稱已保留在這次下載資料中；伺服器同步失敗', 'error');
         }
     }
 
@@ -908,6 +1162,7 @@ document.addEventListener('DOMContentLoaded', () => {
             session_id: window._currentSessionId || null,
             batch_mode: batchMode,
             image_count: currentBatchResults.length,
+            face_clusters: currentFaceClusters,
             results: currentBatchResults.map((item, index) => {
                 const { original_image_b64, drawn_image_b64, ...result } = item;
                 return {
@@ -949,6 +1204,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         downloadBatchResultsBtn.disabled = true;
+        showLoading(true);
+        document.getElementById('loading-text').textContent = '正在整理下載內容…';
         try {
             const zip = new JSZip();
             zip.file('result.json', json);
@@ -972,6 +1229,8 @@ document.addEventListener('DOMContentLoaded', () => {
             downloadBlob(jsonBlob, `batch_results_${Date.now()}.json`);
             showToast('後製圖打包失敗，已自動改下載 JSON', 'error');
         } finally {
+            showLoading(false);
+            document.getElementById('loading-text').textContent = '正在一張一張看過去…';
             downloadBatchResultsBtn.disabled = false;
         }
     }
@@ -1217,6 +1476,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }));
 
                 setBusy(true);
+                showLoading(true);
+                document.getElementById('loading-text').textContent = '正在整理照片…';
                 try {
                     const res = await fetch('/organize_batch/', {
                         method: 'POST',
@@ -1234,6 +1495,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (e) {
                     showToast(e.message, 'error');
                 } finally {
+                    showLoading(false);
+                    document.getElementById('loading-text').textContent = '正在一張一張看過去…';
                     setBusy(false);
                 }
             }
@@ -1252,6 +1515,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }));
 
                 setBusy(true);
+                showLoading(true);
+                document.getElementById('loading-text').textContent = '正在整理雲端照片…';
                 try {
                     const res = await fetch('/finalize_review/', {
                         method: 'POST',
@@ -1267,6 +1532,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (e) {
                     showToast(e.message, 'error');
                 } finally {
+                    showLoading(false);
+                    document.getElementById('loading-text').textContent = '正在一張一張看過去…';
                     setBusy(false);
                 }
             }
@@ -1287,6 +1554,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         organizeBtn.disabled = true;
         organizeBtn.textContent = '複製中...';
+        showLoading(true);
+        document.getElementById('loading-text').textContent = '正在複製並整理照片…';
 
         try {
             const res = await fetch('/organize_batch/', {
@@ -1312,6 +1581,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             showToast(e.message, 'error');
         } finally {
+            showLoading(false);
+            document.getElementById('loading-text').textContent = '正在一張一張看過去…';
             organizeBtn.disabled = false;
             organizeBtn.textContent = '複製檔案並歸檔';
         }
