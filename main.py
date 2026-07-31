@@ -18,10 +18,7 @@ from pydantic import BaseModel, ValidationError
 import os
 import uuid
 
-try:
-    from src.face.detector import detect_face_bboxes_from_image_bytes
-except Exception:
-    detect_face_bboxes_from_image_bytes = None
+from src.insight_api_client import cluster_batch_results, detect_normalized_bboxes
 
 DEFAULT_MAX_UPLOAD_SIZE_MB = 25
 DEFAULT_BATCH_UPLOAD_MAX_FILES = 3
@@ -219,23 +216,20 @@ async def _classify_session_faces(session_id: str) -> dict[str, Any]:
             "available": False,
             "reason": "disabled",
             "cluster_count": 0,
-            "message": "此部署環境未啟用人臉分群；可在本機模式開啟完整功能。",
+            "message": "此部署環境未啟用人臉分群。",
         }
         return session["face_clustering"]
     try:
-        from src.face.workspace import classify_batch_results, serialize_face_clusters
-
-        clusters = await run_in_threadpool(classify_batch_results, session.get("results", []))
-        serialized = serialize_face_clusters(clusters)
-        session["face_clusters"] = serialized
-        session["face_clustering"] = {"available": True, "cluster_count": len(serialized)}
+        clusters = await cluster_batch_results(session.get("results", []))
+        session["face_clusters"] = clusters
+        session["face_clustering"] = {"available": True, "cluster_count": len(clusters)}
     except Exception as exc:
         logger.warning("Face clustering unavailable session=%s error=%s", session_id, exc)
         session["face_clusters"] = []
         session["face_clustering"] = {
             "available": False,
             "cluster_count": 0,
-            "message": "此執行環境未啟用人臉分群，照片審核結果不受影響。",
+            "message": "人臉分類服務目前無法使用，請檢查 classifier API。",
         }
     return session["face_clustering"]
 
@@ -392,15 +386,11 @@ async def analyze_photo(file: UploadFile = File(...), collaborative_memory: str 
 
         b64_image = base64.b64encode(image_bytes).decode('utf-8')
 
-        local_face_bboxes = None
-        if detect_face_bboxes_from_image_bytes is not None:
-            try:
-                local_face_bboxes = await run_in_threadpool(
-                    detect_face_bboxes_from_image_bytes,
-                    image_bytes,
-                )
-            except Exception:
-                local_face_bboxes = None
+        local_face_bboxes = await detect_normalized_bboxes(
+            image_bytes,
+            file.filename or "image.jpg",
+            file.content_type,
+        )
         return await analyze_brand_strap_image(
             b64_image,
             file.content_type,

@@ -10,8 +10,3 @@ itsdangerous
 httpx
 jinja2
 Pillow
-insightface>=1.0.1,<2
-onnxruntime>=1.23,<2
-opencv-python-headless>=4.10,<5
-numpy>=1.26,<3
-scikit-learn>=1.7,<2

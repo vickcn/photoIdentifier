@@ -37,18 +37,13 @@
 
 ### 人臉分群執行環境
 
-主 Vercel 服務預設設定 `FACE_CLUSTERING_ENABLED=true`，使用 CPU 執行 InsightFace。部署同時設定 `VERCEL_SUPPORT_LARGE_FUNCTIONS=1`，以容納 ONNX Runtime、OpenCV 與 `buffalo_l` 模型所需空間。模型初始化或推論失敗時，系統會降級為一般照片公開性審核。
+主 Vercel 服務只負責呼叫獨立的 `classifier` API，不再內建 InsightFace、ONNX Runtime、OpenCV 或本地 embedding 分群。部署時請確認以下伺服器端環境變數已設定：
 
-本機需要完整的人臉分群時：
+- `FACE_CLUSTERING_ENABLED=true`
+- `INSIGHT_API_URL`
+- `INSIGHT_API_KEY`
 
-```bash
-source ~/tchop/bin/activate
-python -m pip install -r requirements.txt
-export FACE_CLUSTERING_ENABLED=true
-python main.py
-```
-
-設定優先順序同樣是 `環境變數 -> config.json -> 程式預設值`。Vercel 使用 `/tmp/insightface` 作為 instance-local 模型快取；冷 instance 可能需要重新下載模型，因此第一次分群會比後續請求慢。
+若 classifier API 暫時不可用，系統會降級為一般照片公開性審核。
 
 ---
 

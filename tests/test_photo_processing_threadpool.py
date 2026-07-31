@@ -31,7 +31,7 @@ class PhotoProcessingThreadpoolTests(unittest.IsolatedAsyncioTestCase):
         def fake_resize(image_bytes):
             return b"processed"
 
-        def fake_detect(image_bytes):
+        async def fake_detect(image_bytes, **kwargs):
             return [[1, 2, 3, 4]]
 
         def fake_draw(**kwargs):
@@ -40,7 +40,7 @@ class PhotoProcessingThreadpoolTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(photoIdentifier.asyncio, "to_thread", fake_to_thread),
             patch.object(photoIdentifier, "resize_image_if_needed", fake_resize),
-            patch.object(photoIdentifier, "detect_face_bboxes_from_image_bytes", fake_detect),
+            patch.object(photoIdentifier, "detect_normalized_bboxes", fake_detect),
             patch.object(photoIdentifier, "draw_bboxes_on_image", fake_draw),
             patch.object(photoIdentifier, "analyze_brand_strap_image", fake_analyze),
         ):
@@ -52,7 +52,6 @@ class PhotoProcessingThreadpoolTests(unittest.IsolatedAsyncioTestCase):
             calls,
             [
                 "fake_resize",
-                "fake_detect",
                 "fake_draw",
             ],
         )

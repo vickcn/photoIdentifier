@@ -8,12 +8,8 @@ from pathlib import Path
 from typing import Tuple, List, Optional
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
 from src.aoi import draw_bboxes_on_image
+from src.insight_api_client import detect_normalized_bboxes
 from src.upload_batch import UploadedImage
-
-try:
-    from src.face.detector import detect_face_bboxes_from_image_bytes
-except Exception:
-    detect_face_bboxes_from_image_bytes = None
 
 # 讀取 config.json 中的 request_timeout 設定
 try:
@@ -53,15 +49,10 @@ async def process_and_visualize_photo(image_bytes: bytes, content_type: str = "i
     """
     processed_image_bytes = await asyncio.to_thread(resize_image_if_needed, image_bytes)
     b64_image = base64.b64encode(processed_image_bytes).decode('utf-8')
-    local_face_bboxes = None
-    if detect_face_bboxes_from_image_bytes is not None:
-        try:
-            local_face_bboxes = await asyncio.to_thread(
-                detect_face_bboxes_from_image_bytes,
-                processed_image_bytes,
-            )
-        except Exception:
-            local_face_bboxes = None
+    local_face_bboxes = await detect_normalized_bboxes(
+        processed_image_bytes,
+        content_type=content_type,
+    )
     analysis_result = await analyze_brand_strap_image(
         b64_image,
         content_type,

@@ -13,8 +13,6 @@
   ],
   "env": {
     "FACE_CLUSTERING_ENABLED": "true",
-    "FACE_MODEL_NAME": "buffalo_l",
-    "FACE_MODEL_ROOT": "/tmp/insightface",
     "VERCEL_SUPPORT_LARGE_FUNCTIONS": "1"
   },
   "rewrites": [
