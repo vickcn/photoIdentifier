@@ -20,6 +20,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const batchFileSummary = document.getElementById('batch-file-summary');
     const batchCloudGuidance = document.getElementById('batch-cloud-guidance');
     const batchConcurrency = document.getElementById('batch-concurrency');
+    const faceClusterEpsInput = document.getElementById('face-cluster-eps');
+    const faceClusterMinSamplesInput = document.getElementById('face-cluster-min-samples');
     const analyzeBatchBtn = document.getElementById('analyze-batch-btn');
     const organizeArea = document.getElementById('organize-area');
     const safeFolder = document.getElementById('safe-folder');
@@ -135,6 +137,52 @@ document.addEventListener('DOMContentLoaded', () => {
     const includeAnnotatedDownload = document.getElementById('include-annotated-download');
     let config = null;
 
+    function isBusy() {
+        return localOperationBusy || loadingControlStates !== null;
+    }
+
+    function getFaceClusterDefaults() {
+        return {
+            eps: Number(config?.face_cluster_default_eps ?? 0.35),
+            minSamples: Number(config?.face_cluster_default_min_samples ?? 2),
+            epsMin: Number(config?.face_cluster_eps_min ?? 0.05),
+            epsMax: Number(config?.face_cluster_eps_max ?? 1.5),
+            minSamplesMax: config?.batch_upload_max_files || 3,
+        };
+    }
+
+    function syncFaceClusterSummary() {
+        const summary = document.getElementById('cluster-settings-summary');
+        if (!summary) return;
+        const eps = Number(faceClusterEpsInput.value || getFaceClusterDefaults().eps);
+        const minSamples = Number(faceClusterMinSamplesInput.value || getFaceClusterDefaults().minSamples);
+        summary.textContent = `DBSCAN: eps ${eps.toFixed(2)}, min_samples ${minSamples}`;
+    }
+
+    function applyFaceClusterDefaults() {
+        const defaults = getFaceClusterDefaults();
+        faceClusterEpsInput.min = String(defaults.epsMin);
+        faceClusterEpsInput.max = String(defaults.epsMax);
+        faceClusterEpsInput.value = String(defaults.eps);
+        faceClusterMinSamplesInput.min = '1';
+        faceClusterMinSamplesInput.max = String(defaults.minSamplesMax);
+        faceClusterMinSamplesInput.value = String(defaults.minSamples);
+        syncFaceClusterSummary();
+    }
+
+    function readFaceClusterParams() {
+        const defaults = getFaceClusterDefaults();
+        const eps = Number(faceClusterEpsInput.value || defaults.eps);
+        const minSamples = Number(faceClusterMinSamplesInput.value || defaults.minSamples);
+        if (!Number.isFinite(eps) || eps < defaults.epsMin || eps > defaults.epsMax) {
+            throw new Error(`分群 eps 必須介於 ${defaults.epsMin} 到 ${defaults.epsMax}`);
+        }
+        if (!Number.isInteger(minSamples) || minSamples < 1 || minSamples > defaults.minSamplesMax) {
+            throw new Error(`分群 min_samples 必須介於 1 到 ${defaults.minSamplesMax}`);
+        }
+        return { eps, minSamples };
+    }
+
     function getBatchUploadLimits() {
         return {
             maxFiles: config?.batch_upload_max_files || 3,
@@ -188,6 +236,17 @@ document.addEventListener('DOMContentLoaded', () => {
         driveRadio.dispatchEvent(new Event('change'));
     });
     batchConcurrency.value = String(getBatchUploadLimits().defaultConcurrency);
+    faceClusterEpsInput.addEventListener('input', syncFaceClusterSummary);
+    faceClusterMinSamplesInput.addEventListener('input', syncFaceClusterSummary);
+
+    window.__toggleClusterSettings = function () {
+        const body = document.getElementById('cluster-settings-body');
+        const arrow = document.getElementById('cluster-settings-arrow');
+        const collapsed = body.classList.toggle('hidden');
+        arrow.textContent = collapsed ? '▼' : '▲';
+    };
+
+    document.getElementById('btn-toggle-cluster-settings').addEventListener('click', window.__toggleClusterSettings);
 
     // === Color Rules ===
     const DEFAULT_COLOR_SWATCHES = [
@@ -246,6 +305,8 @@ document.addEventListener('DOMContentLoaded', () => {
         saveColorSwatches();
         renderColorSwatches();
     };
+
+    applyFaceClusterDefaults();
 
     // Review Elements
     const decisionButtons = document.getElementById('decision-buttons');
@@ -446,6 +507,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function beginSharedBusy(label) {
+        if (isBusy()) return false;
         if (navigator.locks) {
             const acquired = await new Promise(resolve => {
                 navigator.locks.request(sharedBusyKey, { ifAvailable: true }, lock => {
@@ -496,10 +558,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function handlePollError(error) {
+        console.warn('Busy state sync failed:', error);
+    }
+
     window.addEventListener('storage', event => {
         if (event.key === sharedBusyKey) syncRemoteBusyState();
     });
-    window.setInterval(syncRemoteBusyState, 5000);
+    window.setInterval(() => {
+        try {
+            syncRemoteBusyState();
+        } catch (error) {
+            handlePollError(error);
+        }
+    }, 5000);
     window.addEventListener('pagehide', endSharedBusy);
 
     function showLoading(show) {
@@ -711,6 +783,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const source = document.querySelector('input[name="batch-source"]:checked').value;
         batchMode = source === 'local' ? 'upload' : source;
         const currentConcurrency = parseInt(batchConcurrency.value) || 3;
+        let faceClusterParams;
+
+        try {
+            faceClusterParams = readFaceClusterParams();
+        } catch (error) {
+            showToast(error.message, 'error');
+            return;
+        }
 
         // Generate session_id for metrics tracking
         const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
@@ -731,6 +811,8 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('concurrency', String(currentConcurrency));
             formData.append('color_rules_json', JSON.stringify(colorSwatches));
             formData.append('session_id', sessionId);
+            formData.append('face_cluster_eps', String(faceClusterParams.eps));
+            formData.append('face_cluster_min_samples', String(faceClusterParams.minSamples));
             const memory = window._collaborativeMemories?.local;
             if (memory) formData.append('collaborative_memory', memory);
             requestOptions = { method: 'POST', body: formData };
@@ -748,6 +830,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 concurrency: currentConcurrency,
                 color_rules: colorSwatches,
                 session_id: sessionId,
+                face_cluster_eps: faceClusterParams.eps,
+                face_cluster_min_samples: faceClusterParams.minSamples,
                 collaborative_memory: window._collaborativeMemories?.drive || null,
             };
             requestOptions = {
@@ -1600,6 +1684,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('batch-upload-limits').textContent =
                 `最多 ${config.batch_upload_max_files} 張，單檔 ${config.batch_upload_max_file_mb}MB、合計 ${config.batch_upload_max_total_mb}MB 以內`;
             batchConcurrency.value = String(config.batch_upload_concurrency || 2);
+            applyFaceClusterDefaults();
         } catch (e) {
             console.error("Failed to fetch config", e);
         }

@@ -29,6 +29,8 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(response.json()["batch_upload_max_total_mb"], main.BATCH_UPLOAD_MAX_TOTAL_MB)
         self.assertEqual(response.json()["batch_upload_concurrency"], main.BATCH_UPLOAD_CONCURRENCY)
         self.assertEqual(response.json()["batch_download_max_mb"], main.BATCH_DOWNLOAD_MAX_MB)
+        self.assertEqual(response.json()["face_cluster_default_eps"], main.DEFAULT_CLUSTER_EPS)
+        self.assertEqual(response.json()["face_cluster_default_min_samples"], main.DEFAULT_CLUSTER_MIN_SAMPLES)
 
     def test_load_config_prefers_env_over_config_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -123,6 +125,49 @@ class BatchUploadApiTests(unittest.TestCase):
         other_response = TestClient(main.app).get("/face_clusters/upload-test")
         self.assertEqual(own_response.status_code, 200)
         self.assertEqual(other_response.status_code, 404)
+
+    def test_batch_upload_stream_passes_face_cluster_params_into_session_processing(self):
+        async def fake_batch_stream(images, **kwargs):
+            for index, image in enumerate(images, start=1):
+                yield {
+                    "status": "ok",
+                    "file_name": image.filename,
+                    "total": len(images),
+                    "index": index,
+                    "result": {"moderation_status": "public", "is_safe_for_public": True},
+                    "original_image_b64": "b3JpZ2luYWw=",
+                    "drawn_image_b64": "ZHJhd24=",
+                }
+
+        async def fake_classify_session_faces(session_id):
+            info = main._batch_sessions[session_id]["processing_info"]
+            self.assertEqual(info["face_cluster_eps"], 0.42)
+            self.assertEqual(info["face_cluster_min_samples"], 3)
+            main._batch_sessions[session_id]["face_clusters"] = []
+            return {"available": True, "cluster_count": 0, "eps": 0.42, "min_samples": 3}
+
+        with (
+            patch.object(main, "batch_process_uploads_stream", fake_batch_stream, create=True),
+            patch.object(main, "_classify_session_faces", fake_classify_session_faces),
+        ):
+            response = self.client.post(
+                "/batch_upload_stream/",
+                files=[
+                    ("files", ("one.jpg", b"one", "image/jpeg")),
+                    ("files", ("two.jpg", b"two", "image/jpeg")),
+                ],
+                data={
+                    "concurrency": "2",
+                    "session_id": "upload-test",
+                    "face_cluster_eps": "0.42",
+                    "face_cluster_min_samples": "3",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(events[-1]["face_clustering"]["eps"], 0.42)
+        self.assertEqual(events[-1]["face_clustering"]["min_samples"], 3)
 
     def test_vercel_deployment_defaults_face_clustering_on(self):
         vercel_config = json.loads((Path(__file__).parents[1] / "vercel.json").read_text(encoding="utf-8"))

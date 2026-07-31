@@ -9,6 +9,9 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
+DEFAULT_CLUSTER_EPS = 0.35
+DEFAULT_CLUSTER_MIN_SAMPLES = 2
+
 
 class InsightApiClient:
     def __init__(self, base_url: str | None = None, api_key: str | None = None) -> None:
@@ -27,8 +30,8 @@ class InsightApiClient:
         self,
         images: Sequence[tuple[str, bytes, str]],
         *,
-        eps: float = 0.35,
-        min_samples: int = 2,
+        eps: float = DEFAULT_CLUSTER_EPS,
+        min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
     ) -> dict:
         files = [("files", (name, data, content_type)) for name, data, content_type in images]
         return await self._post(
@@ -65,7 +68,12 @@ async def detect_normalized_bboxes(
     ]
 
 
-async def cluster_batch_results(results: list[dict]) -> list[dict]:
+async def cluster_batch_results(
+    results: list[dict],
+    *,
+    eps: float = DEFAULT_CLUSTER_EPS,
+    min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
+) -> list[dict]:
     images: list[tuple[str, bytes, str]] = []
     source_by_name: dict[str, dict] = {}
     for index, result in enumerate(results, start=1):
@@ -84,7 +92,7 @@ async def cluster_batch_results(results: list[dict]) -> list[dict]:
 
     if not images:
         return []
-    response = await InsightApiClient().cluster(images)
+    response = await InsightApiClient().cluster(images, eps=eps, min_samples=min_samples)
     grouped: dict[tuple[str, int], list[dict]] = {}
     noise_index = 0
     for image in response.get("images", []):

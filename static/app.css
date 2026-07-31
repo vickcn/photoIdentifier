@@ -225,6 +225,64 @@ body::before {
     background: rgba(192, 138, 62, 0.08);
 }
 
+.cluster-settings-panel,
+.color-rules-panel {
+    border: 1px solid var(--paper-edge);
+    border-radius: 16px;
+    background: var(--surface-soft);
+    overflow: hidden;
+}
+
+.cluster-settings-toggle,
+.color-rules-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.95rem 1rem;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.2s ease;
+}
+
+.cluster-settings-toggle:hover,
+.color-rules-toggle:hover {
+    background: rgba(201, 106, 63, 0.06);
+}
+
+.cluster-settings-summary {
+    margin-left: auto;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.cluster-settings-arrow,
+.color-rules-arrow {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+}
+
+.cluster-settings-body,
+.color-rules-body {
+    padding: 0 1rem 1rem;
+}
+
+.cluster-settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+}
+
+.cluster-settings-hint {
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
 /* Inputs & Buttons */
 .input-group {
     display: flex;

@@ -18,7 +18,12 @@ from pydantic import BaseModel, ValidationError
 import os
 import uuid
 
-from src.insight_api_client import cluster_batch_results, detect_normalized_bboxes
+from src.insight_api_client import (
+    DEFAULT_CLUSTER_EPS,
+    DEFAULT_CLUSTER_MIN_SAMPLES,
+    cluster_batch_results,
+    detect_normalized_bboxes,
+)
 
 DEFAULT_MAX_UPLOAD_SIZE_MB = 25
 DEFAULT_BATCH_UPLOAD_MAX_FILES = 3
@@ -27,6 +32,8 @@ DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 4
 DEFAULT_BATCH_UPLOAD_CONCURRENCY = 2
 DEFAULT_BATCH_DOWNLOAD_MAX_MB = 8
 DEFAULT_FACE_CLUSTERING_ENABLED = True
+FACE_CLUSTER_EPS_MIN = 0.05
+FACE_CLUSTER_EPS_MAX = 1.5
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 
@@ -65,6 +72,29 @@ def _read_bool(raw_value: Any, *, key_name: str, default: bool) -> bool:
             return False
     logger.warning("%s 無效，改用預設值 %s。", key_name, default)
     return default
+
+
+def _read_face_cluster_params(raw_eps: Any, raw_min_samples: Any) -> tuple[float, int]:
+    try:
+        eps = float(raw_eps)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="分群 eps 必須是數字") from exc
+    if not FACE_CLUSTER_EPS_MIN <= eps <= FACE_CLUSTER_EPS_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"分群 eps 必須介於 {FACE_CLUSTER_EPS_MIN} 到 {FACE_CLUSTER_EPS_MAX}",
+        )
+
+    try:
+        min_samples = int(raw_min_samples)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="分群 min_samples 必須是整數") from exc
+    if not 1 <= min_samples <= BATCH_UPLOAD_MAX_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"分群 min_samples 必須介於 1 到 {BATCH_UPLOAD_MAX_FILES}",
+        )
+    return eps, min_samples
 
 
 def load_config() -> dict[str, Any]:
@@ -220,9 +250,17 @@ async def _classify_session_faces(session_id: str) -> dict[str, Any]:
         }
         return session["face_clustering"]
     try:
-        clusters = await cluster_batch_results(session.get("results", []))
+        processing_info = session.get("processing_info", {})
+        eps = float(processing_info.get("face_cluster_eps", DEFAULT_CLUSTER_EPS))
+        min_samples = int(processing_info.get("face_cluster_min_samples", DEFAULT_CLUSTER_MIN_SAMPLES))
+        clusters = await cluster_batch_results(session.get("results", []), eps=eps, min_samples=min_samples)
         session["face_clusters"] = clusters
-        session["face_clustering"] = {"available": True, "cluster_count": len(clusters)}
+        session["face_clustering"] = {
+            "available": True,
+            "cluster_count": len(clusters),
+            "eps": eps,
+            "min_samples": min_samples,
+        }
     except Exception as exc:
         logger.warning("Face clustering unavailable session=%s error=%s", session_id, exc)
         session["face_clusters"] = []
@@ -328,6 +366,10 @@ async def get_frontend_config():
         "batch_upload_concurrency": BATCH_UPLOAD_CONCURRENCY,
         "batch_download_max_mb": BATCH_DOWNLOAD_MAX_MB,
         "face_clustering_enabled": FACE_CLUSTERING_ENABLED,
+        "face_cluster_default_eps": DEFAULT_CLUSTER_EPS,
+        "face_cluster_default_min_samples": DEFAULT_CLUSTER_MIN_SAMPLES,
+        "face_cluster_eps_min": FACE_CLUSTER_EPS_MIN,
+        "face_cluster_eps_max": FACE_CLUSTER_EPS_MAX,
     }
 
 @app.get("/api/user/me")
@@ -469,6 +511,8 @@ class BatchRequest(BaseModel):
     color_rules: Optional[list] = None
     session_id: Optional[str] = None
     collaborative_memory: Optional[str] = None
+    face_cluster_eps: float = DEFAULT_CLUSTER_EPS
+    face_cluster_min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES
 
 
 @app.post("/batch_upload_stream/")
@@ -479,6 +523,8 @@ async def batch_upload_stream(
     color_rules_json: Optional[str] = Form(None),
     session_id: Optional[str] = Form(None),
     collaborative_memory: Optional[str] = Form(None),
+    face_cluster_eps: float = Form(DEFAULT_CLUSTER_EPS),
+    face_cluster_min_samples: int = Form(DEFAULT_CLUSTER_MIN_SAMPLES),
 ):
     if concurrency < 1 or concurrency > 10:
         raise HTTPException(status_code=400, detail="一次處理張數必須介於 1 到 10")
@@ -489,6 +535,10 @@ async def batch_upload_stream(
         raise HTTPException(status_code=400, detail="顏色規則格式錯誤") from exc
     if color_rules is not None and not isinstance(color_rules, list):
         raise HTTPException(status_code=400, detail="顏色規則必須是陣列")
+    face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
+        face_cluster_eps,
+        face_cluster_min_samples,
+    )
 
     current_session_id = session_id or str(uuid.uuid4())
     owner_id = _acquire_batch_slot(request, current_session_id)
@@ -513,6 +563,8 @@ async def batch_upload_stream(
         "processing_info": {
             "file_count": len(images),
             "concurrency": concurrency,
+            "face_cluster_eps": face_cluster_eps,
+            "face_cluster_min_samples": face_cluster_min_samples,
         },
         "completed": False,
     }
@@ -562,6 +614,10 @@ async def batch_visualize(req: BatchRequest, request: Request):
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     temp_folder = str(input_path / f"review_temp_{ts}")
+    face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
+        req.face_cluster_eps,
+        req.face_cluster_min_samples,
+    )
 
     # 生成或使用提供的 session_id
     session_id = req.session_id or str(uuid.uuid4())
@@ -579,6 +635,8 @@ async def batch_visualize(req: BatchRequest, request: Request):
         "processing_info": {
             "input_folder": req.input_folder,
             "concurrency": req.concurrency,
+            "face_cluster_eps": face_cluster_eps,
+            "face_cluster_min_samples": face_cluster_min_samples,
         },
         "completed": False
     }
@@ -625,6 +683,8 @@ class DriveBatchRequest(BaseModel):
     color_rules: Optional[list] = None
     session_id: Optional[str] = None
     collaborative_memory: Optional[str] = None
+    face_cluster_eps: float = DEFAULT_CLUSTER_EPS
+    face_cluster_min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES
 
 @app.post("/batch_drive/")
 async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
@@ -666,6 +726,10 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
 
     try:
         creds = get_drive_credentials(request)
+        face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
+            req.face_cluster_eps,
+            req.face_cluster_min_samples,
+        )
 
         # 1. 獲取協作記憶：優先使用請求提供的，再從遠端讀取
         collaborative_memory = req.collaborative_memory
@@ -710,6 +774,8 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
             "processing_info": {
                 "folder_id": req.folder_id,
                 "concurrency": req.concurrency,
+                "face_cluster_eps": face_cluster_eps,
+                "face_cluster_min_samples": face_cluster_min_samples,
             },
             "completed": False
         }
