@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import patch
 
@@ -80,6 +81,119 @@ class FaceWorkspaceApiTests(unittest.TestCase):
         session_ids = {item["session_id"] for item in response.json()["sessions"]}
         self.assertIn("face-workspace-test", session_ids)
         self.assertNotIn("another-session", session_ids)
+
+    def test_drive_export_requires_owned_batch_session(self):
+        with patch.object(main, "_get_client_id", return_value="owner-b"):
+            response = self.client.post(
+                "/batch_exports/drive",
+                json={
+                    "session_id": "face-workspace-test",
+                    "target_folder_id": "target-1",
+                    "document": {"session_id": "face-workspace-test"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "找不到這場活動的辨識紀錄")
+
+    def test_drive_export_rejects_non_drive_batch(self):
+        with patch.object(main, "_get_client_id", return_value="owner-a"):
+            response = self.client.post(
+                "/batch_exports/drive",
+                json={
+                    "session_id": "face-workspace-test",
+                    "target_folder_id": "target-1",
+                    "document": {"session_id": "face-workspace-test"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Google 雲端", response.json()["detail"])
+
+    def test_drive_export_rejects_mismatched_document_session(self):
+        main._batch_sessions["face-workspace-test"]["batch_mode"] = "drive"
+        with patch.object(main, "_get_client_id", return_value="owner-a"):
+            response = self.client.post(
+                "/batch_exports/drive",
+                json={
+                    "session_id": "face-workspace-test",
+                    "target_folder_id": "target-1",
+                    "document": {"session_id": "another-session"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("session_id", response.json()["detail"])
+
+    def test_drive_export_rejects_documents_over_ten_mb(self):
+        main._batch_sessions["face-workspace-test"]["batch_mode"] = "drive"
+        with patch.object(main, "_get_client_id", return_value="owner-a"):
+            response = self.client.post(
+                "/batch_exports/drive",
+                json={
+                    "session_id": "face-workspace-test",
+                    "target_folder_id": "target-1",
+                    "document": {
+                        "session_id": "face-workspace-test",
+                        "payload": "x" * (10 * 1024 * 1024),
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 413)
+
+    def test_drive_export_requires_google_credentials(self):
+        main._batch_sessions["face-workspace-test"]["batch_mode"] = "drive"
+        with (
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+            patch.object(
+                main,
+                "get_drive_credentials",
+                side_effect=main.HTTPException(status_code=401, detail="尚未登入 Google 帳號"),
+            ),
+        ):
+            response = self.client.post(
+                "/batch_exports/drive",
+                json={
+                    "session_id": "face-workspace-test",
+                    "target_folder_id": "target-1",
+                    "document": {"session_id": "face-workspace-test"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_drive_export_creates_timestamped_json(self):
+        main._batch_sessions["face-workspace-test"]["batch_mode"] = "drive"
+        document = {"session_id": "face-workspace-test", "photos": []}
+        with (
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+            patch.object(main, "get_drive_credentials", return_value=object()),
+            patch.object(
+                main,
+                "_save_json_export_to_drive",
+                return_value={"id": "file-1"},
+                create=True,
+            ) as save,
+        ):
+            response = self.client.post(
+                "/batch_exports/drive",
+                json={
+                    "session_id": "face-workspace-test",
+                    "target_folder_id": "target-1",
+                    "document": document,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertRegex(response.json()["file_name"], r"^photo_people_\d{8}_\d{6}\.json$")
+        self.assertEqual(response.json()["file_id"], "file-1")
+        self.assertEqual(save.call_args.args[1], "target-1")
+        self.assertEqual(save.call_args.args[2], response.json()["file_name"])
+        self.assertEqual(
+            save.call_args.args[3],
+            json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
 
 
 if __name__ == "__main__":

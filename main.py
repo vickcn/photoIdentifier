@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import json
 import logging
 from pathlib import Path
@@ -34,6 +38,9 @@ DEFAULT_BATCH_DOWNLOAD_MAX_MB = 8
 DEFAULT_FACE_CLUSTERING_ENABLED = True
 FACE_CLUSTER_EPS_MIN = 0.05
 FACE_CLUSTER_EPS_MAX = 1.5
+IS_VERCEL = os.getenv("VERCEL") == "1"
+CONFIG_BATCH_UPLOAD_MAX_FILES_CAP = 20 if IS_VERCEL else None
+CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP = 10 if IS_VERCEL else None
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 
@@ -135,10 +142,10 @@ def load_config() -> dict[str, Any]:
         default=DEFAULT_FACE_CLUSTERING_ENABLED,
     )
     for key, env_key, default, minimum, maximum in (
-        ("batch_upload_max_files", "BATCH_UPLOAD_MAX_FILES", DEFAULT_BATCH_UPLOAD_MAX_FILES, 1, 20),
+        ("batch_upload_max_files", "BATCH_UPLOAD_MAX_FILES", DEFAULT_BATCH_UPLOAD_MAX_FILES, 1, CONFIG_BATCH_UPLOAD_MAX_FILES_CAP),
         ("batch_upload_max_file_mb", "BATCH_UPLOAD_MAX_FILE_MB", DEFAULT_BATCH_UPLOAD_MAX_FILE_MB, 1, 20),
         ("batch_upload_max_total_mb", "BATCH_UPLOAD_MAX_TOTAL_MB", DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB, 1, 100),
-        ("batch_upload_concurrency", "BATCH_UPLOAD_CONCURRENCY", DEFAULT_BATCH_UPLOAD_CONCURRENCY, 1, 10),
+        ("batch_upload_concurrency", "BATCH_UPLOAD_CONCURRENCY", DEFAULT_BATCH_UPLOAD_CONCURRENCY, 1, CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP),
         ("batch_download_max_mb", "BATCH_DOWNLOAD_MAX_MB", DEFAULT_BATCH_DOWNLOAD_MAX_MB, 1, 100),
     ):
         config[key] = _read_positive_int(
@@ -526,8 +533,10 @@ async def batch_upload_stream(
     face_cluster_eps: float = Form(DEFAULT_CLUSTER_EPS),
     face_cluster_min_samples: int = Form(DEFAULT_CLUSTER_MIN_SAMPLES),
 ):
-    if concurrency < 1 or concurrency > 10:
-        raise HTTPException(status_code=400, detail="一次處理張數必須介於 1 到 10")
+    if concurrency < 1:
+        raise HTTPException(status_code=400, detail="一次處理張數必須至少為 1")
+    if IS_VERCEL and concurrency > 10:
+        raise HTTPException(status_code=400, detail="Vercel 環境下一次處理張數必須介於 1 到 10")
 
     try:
         color_rules = json.loads(color_rules_json) if color_rules_json else None
@@ -1077,6 +1086,76 @@ class FaceClusterUpdateRequest(BaseModel):
     display_name: Optional[str] = None
     status: Optional[Literal["unconfirmed", "pending", "confirmed", "merged"]] = None
     notes: Optional[str] = None
+
+
+class DriveBatchExportRequest(BaseModel):
+    session_id: str
+    target_folder_id: str
+    document: dict[str, Any]
+
+
+def _save_json_export_to_drive(
+    credentials,
+    target_folder_id: str,
+    file_name: str,
+    content: bytes,
+) -> dict:
+    import io
+
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+
+    drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    media = MediaIoBaseUpload(io.BytesIO(content), mimetype="application/json", resumable=False)
+    return drive_service.files().create(
+        body={
+            "name": file_name,
+            "mimeType": "application/json",
+            "parents": [target_folder_id],
+        },
+        media_body=media,
+        fields="id,name",
+    ).execute()
+
+
+@app.post("/batch_exports/drive")
+async def create_drive_batch_export(req: DriveBatchExportRequest, request: Request):
+    session_id = req.session_id.strip()
+    target_folder_id = req.target_folder_id.strip()
+    if not session_id or not target_folder_id:
+        raise HTTPException(status_code=400, detail="session_id 與 Google 雲端輸出區不可留白")
+
+    session = _owned_batch_session(request, session_id)
+    if session.get("batch_mode") != "drive":
+        raise HTTPException(status_code=400, detail="只有 Google 雲端批次可以備份到輸出區")
+    if req.document.get("session_id") != session_id:
+        raise HTTPException(status_code=400, detail="JSON 文件的 session_id 與批次不一致")
+
+    content = json.dumps(req.document, ensure_ascii=False, indent=2).encode("utf-8")
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="JSON 文件超過 10 MB 上限")
+
+    credentials = get_drive_credentials(request)
+    file_name = f"photo_people_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    try:
+        saved = await run_in_threadpool(
+            _save_json_export_to_drive,
+            credentials,
+            target_folder_id,
+            file_name,
+            content,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Drive relationship export failed session=%s", session_id)
+        raise HTTPException(status_code=500, detail=f"無法將 JSON 備份到 Google 雲端：{exc}") from exc
+
+    return {
+        "status": "created",
+        "file_id": saved.get("id"),
+        "file_name": saved.get("name") or file_name,
+    }
 
 
 @app.get("/face_clusters/{session_id}")

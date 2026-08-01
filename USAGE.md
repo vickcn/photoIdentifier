@@ -15,6 +15,30 @@
     *   **安全指標**：右側會顯示「✅ 適合公開」或「⚠️ 不建議公開」。
     *   **細節資訊**：顯示偵測到的人臉數量與帶子顏色。
 
+### 本機如何開啟
+
+如果你要在本機測試整個介面，先進到專案目錄，啟動 FastAPI：
+
+```bash
+source ~/tchop/bin/activate
+python main.py
+```
+
+預設會開在 `http://localhost:8000`。如果要改 host 或 port，可先設定環境變數再啟動：
+
+```bash
+export HOST=127.0.0.1
+export PORT=8000
+python main.py
+```
+
+本機測試時，單張模式與批量模式都可直接在瀏覽器操作；若要驗證後端 API，也可以先跑測試：
+
+```bash
+source ~/tchop/bin/activate
+python -m pytest
+```
+
 ---
 
 ## 📂 大量處理：本機多檔上傳
@@ -35,9 +59,16 @@
 - `BATCH_UPLOAD_MAX_TOTAL_MB`
 - `BATCH_UPLOAD_CONCURRENCY`
 
+在 **「整場活動」** 模式下，右側有一個預設收合的 **進階分群設定**，可調整 DBSCAN 參數：
+
+- `eps` 越大，越容易把兩張臉併成同一群
+- `min_samples` 越大，分群會越保守
+
+不特別調整時，前端會直接採用後端回傳的預設值。
+
 ### 人臉分群執行環境
 
-主 Vercel 服務只負責呼叫獨立的 `classifier` API，不再內建 InsightFace、ONNX Runtime、OpenCV 或本地 embedding 分群。部署時請確認以下伺服器端環境變數已設定：
+主 `photoIdentifier` 服務只負責呼叫獨立的 `classifier` API，不再內建 InsightFace、ONNX Runtime、OpenCV 或本地 embedding 分群。分群預設值由 `/api/config` 提供，部署時請確認以下伺服器端環境變數已設定：
 
 - `FACE_CLUSTERING_ENABLED=true`
 - `INSIGHT_API_URL`
@@ -57,6 +88,8 @@
     *   打開您的雲端硬碟資料夾，複製網址列最後一段的字串（即 ID）。
     *   輸入 **來源資料夾 ID** 與 **輸出資料夾 ID**。
 4.  **智慧處理**：點擊開始後，AI 會直接從雲端抓圖，標註完畢後**自動依照分類**存回您的雲端資料夾，不需要您再手動搬移。
+
+如果雲端批次與本機批次都正常，但分群結果看起來不對，優先檢查 `eps` / `min_samples` 是否被前端改過，再確認 `INSIGHT_API_URL` 是否指到正確的 Cloud Run 服務。
 
 ### 相關設定與排錯
 

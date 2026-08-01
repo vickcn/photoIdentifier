@@ -12,7 +12,7 @@
         href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Inter:wght@400;500;600;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/lxgw-wenkai-tc@5.2.9/400.css">
-    <link rel="stylesheet" href="/static/app.css">
+    <link rel="stylesheet" href="/static/app.css?v=20260801-photo-people">
     <!-- Google API & Identity Services for Picker -->
     <script src="https://apis.google.com/js/api.js" async defer></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -479,10 +479,32 @@
         </div>
     </div>
 
+    <div id="photo-people-modal" class="modal hidden">
+        <div class="modal-overlay" data-photo-people-modal-action="close"></div>
+        <div class="modal-content photo-people-modal-content" role="dialog" aria-modal="true" aria-labelledby="photo-people-modal-title">
+            <div class="modal-header">
+                <div>
+                    <h3 id="photo-people-modal-title">登記照片裡的人物</h3>
+                    <p id="photo-people-modal-file" class="photo-people-modal-file"></p>
+                </div>
+                <button class="modal-close-btn" type="button" data-photo-people-modal-action="close" aria-label="關閉">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-hint">勾選這張照片中出現的人物；名稱會跟人物角度的編輯結果同步。</p>
+                <div id="photo-people-options" class="photo-people-options"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="secondary-btn" type="button" data-photo-people-modal-action="close">取消</button>
+                <button class="primary-btn" type="button" data-photo-people-modal-action="save">儲存人物關聯</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Notification Toast -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/face_relationships.js?v=20260801-photo-people"></script>
+    <script src="/static/app.js?v=20260801-photo-people"></script>
 </body>
 
 </html>

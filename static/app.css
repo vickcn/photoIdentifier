@@ -1413,23 +1413,54 @@ body.app-busy {
 }
 
 .face-workspace {
-    display: grid;
-    grid-template-columns: minmax(190px, 0.8fr) minmax(300px, 1.8fr) minmax(220px, 0.9fr);
-    min-height: 430px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    padding: 1rem;
     border: 1px solid var(--glass-border);
     border-radius: 1rem;
-    overflow: hidden;
     background: rgba(255, 253, 248, 0.72);
 }
 
-.face-workspace > * {
-    min-width: 0;
-    padding: 1rem;
+.face-workspace-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
 }
 
-.face-cluster-list-panel,
-.face-evidence-panel {
-    border-right: 1px solid var(--glass-border);
+.face-workspace-toolbar > div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+}
+
+.face-workspace-toolbar span {
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+}
+
+.relationship-view-switch {
+    display: inline-flex;
+    gap: 0.25rem;
+    padding: 0.2rem;
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    background: var(--surface-muted);
+}
+
+.relationship-view-switch button {
+    border: 0;
+    border-radius: 999px;
+    padding: 0.4rem 0.8rem;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.relationship-view-switch button.active {
+    background: var(--accent-color);
+    color: #fff;
 }
 
 .face-panel-heading {
@@ -1450,27 +1481,88 @@ body.app-busy {
 .face-cluster-list {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.65rem;
 }
 
-.face-cluster-item {
+.face-person-card {
+    overflow: hidden;
+    border: 1px solid var(--glass-border);
+    border-radius: 0.85rem;
+    background: rgba(255, 255, 255, 0.66);
+    transition: border-color 0.18s, box-shadow 0.18s;
+}
+
+.face-person-card.expanded {
+    border-color: rgba(193, 92, 48, 0.35);
+    box-shadow: 0 8px 20px rgba(91, 65, 47, 0.08);
+}
+
+.face-person-row {
     display: grid;
-    grid-template-columns: 2.25rem minmax(0, 1fr);
-    gap: 0.6rem;
+    grid-template-columns: minmax(220px, 1fr) minmax(260px, 0.75fr);
+    align-items: center;
+    gap: 0.75rem;
+    padding-right: 0.75rem;
+}
+
+.face-person-toggle {
+    display: grid;
+    grid-template-columns: 1rem 2.25rem minmax(0, 1fr);
+    align-items: center;
+    gap: 0.7rem;
     width: 100%;
-    padding: 0.65rem;
-    border: 1px solid transparent;
-    border-radius: 0.75rem;
+    padding: 0.75rem 0.85rem;
+    border: 0;
     background: transparent;
     color: var(--text-primary);
     text-align: left;
     cursor: pointer;
 }
 
-.face-cluster-item:hover,
-.face-cluster-item.selected {
-    border-color: rgba(193, 92, 48, 0.35);
+.face-person-toggle:hover {
     background: rgba(193, 92, 48, 0.08);
+}
+
+.face-person-name-editor {
+    display: flex;
+    min-width: 0;
+    gap: 0.4rem;
+}
+
+.face-person-name-input {
+    min-width: 0;
+    flex: 1;
+    border: 1px solid var(--glass-border);
+    border-radius: 0.6rem;
+    padding: 0.55rem 0.65rem;
+    background: rgba(255, 255, 255, 0.78);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.face-person-name-editor button,
+.photo-relation-actions button {
+    border: 1px solid rgba(193, 92, 48, 0.3);
+    border-radius: 0.6rem;
+    padding: 0.5rem 0.7rem;
+    background: rgba(255, 255, 255, 0.82);
+    color: var(--accent-color);
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.face-person-toggle:focus-visible,
+.face-evidence-card:focus-visible,
+.face-photo-decision button:focus-visible,
+.face-save-btn:focus-visible {
+    outline: 3px solid rgba(193, 92, 48, 0.28);
+    outline-offset: 2px;
+}
+
+.face-cluster-arrow {
+    color: var(--accent-color);
+    font-size: 0.72rem;
 }
 
 .face-cluster-avatar {
@@ -1497,28 +1589,30 @@ body.app-busy {
     white-space: nowrap;
 }
 
-.face-cluster-copy small,
-.face-cluster-status {
+.face-cluster-copy small {
     color: var(--text-secondary);
     font-size: 0.72rem;
 }
 
-.face-cluster-status {
-    grid-column: 2;
-    width: fit-content;
-    padding: 0.12rem 0.42rem;
-    border-radius: 999px;
-    background: rgba(126, 113, 93, 0.1);
+.face-person-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 0.32fr);
+    border-top: 1px solid var(--glass-border);
 }
 
-.face-cluster-status.status-confirmed {
-    background: rgba(36, 126, 88, 0.12);
-    color: #237451;
+.face-evidence-panel,
+.face-decision-panel {
+    min-width: 0;
+    padding: 1rem;
+}
+
+.face-evidence-panel {
+    border-right: 1px solid var(--glass-border);
 }
 
 .face-evidence-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(125px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.75rem;
 }
 
@@ -1535,17 +1629,32 @@ body.app-busy {
     color: var(--text-primary);
     text-align: left;
     cursor: pointer;
+    transition: border-color 0.18s, transform 0.18s, box-shadow 0.18s;
 }
 
-.face-evidence-card:hover {
+.face-evidence-card:hover,
+.face-evidence-card.selected {
     border-color: rgba(193, 92, 48, 0.45);
     transform: translateY(-2px);
 }
 
-.face-evidence-card img {
+.face-evidence-card.selected {
+    box-shadow: 0 0 0 2px rgba(193, 92, 48, 0.15);
+}
+
+.face-crop-frame {
+    display: grid;
+    place-items: center;
     width: 100%;
-    aspect-ratio: 4 / 3;
-    object-fit: cover;
+    aspect-ratio: 1 / 1;
+    margin: 0 !important;
+    background: var(--surface-muted);
+}
+
+.face-crop-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
 }
 
 .face-evidence-card span,
@@ -1559,6 +1668,46 @@ body.app-busy {
 .face-evidence-card small {
     margin-bottom: 0.55rem;
     color: var(--text-secondary);
+}
+
+.face-photo-decision,
+.face-photo-decision-hint {
+    margin-top: 0.85rem;
+    padding: 0.7rem 0.8rem;
+    border-radius: 0.7rem;
+    background: var(--surface-muted);
+}
+
+.face-photo-decision {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.face-photo-decision strong {
+    margin-right: auto;
+}
+
+.face-photo-decision.status-safe strong {
+    color: #237451;
+}
+
+.face-photo-decision.status-unsafe strong {
+    color: #995741;
+}
+
+.face-photo-decision button {
+    border: 1px solid rgba(193, 92, 48, 0.3);
+    border-radius: 999px;
+    padding: 0.35rem 0.65rem;
+    background: rgba(255, 255, 255, 0.72);
+    color: var(--accent-color);
+    cursor: pointer;
+}
+
+.face-photo-decision-hint {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
 }
 
 .face-decision-panel {
@@ -1603,25 +1752,241 @@ body.app-busy {
     text-align: center;
 }
 
+.photo-relation-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.photo-relation-card {
+    overflow: hidden;
+    border: 1px solid var(--glass-border);
+    border-radius: 0.85rem;
+    background: rgba(255, 255, 255, 0.66);
+}
+
+.photo-relation-card.expanded {
+    border-color: rgba(193, 92, 48, 0.35);
+}
+
+.photo-relation-toggle {
+    display: grid;
+    grid-template-columns: 1rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.7rem;
+    width: 100%;
+    padding: 0.8rem 0.9rem;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+}
+
+.photo-relation-toggle:hover {
+    background: rgba(193, 92, 48, 0.08);
+}
+
+.photo-relation-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.photo-relation-toggle small {
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.photo-decision-badge {
+    border-radius: 999px;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.photo-decision-badge.status-safe,
+.photo-relation-details .status-safe {
+    color: #237451;
+    background: rgba(36, 126, 88, 0.12);
+}
+
+.photo-decision-badge.status-unsafe,
+.photo-relation-details .status-unsafe {
+    color: #995741;
+    background: rgba(181, 112, 94, 0.13);
+}
+
+.photo-decision-badge.status-pending,
+.photo-relation-details .status-pending {
+    color: #956a21;
+    background: rgba(192, 138, 62, 0.14);
+}
+
+.photo-relation-body {
+    display: grid;
+    grid-template-columns: minmax(180px, 0.35fr) minmax(0, 1fr);
+    gap: 1rem;
+    padding: 1rem;
+    border-top: 1px solid var(--glass-border);
+}
+
+.photo-relation-body > img {
+    width: 100%;
+    max-height: 240px;
+    border-radius: 0.75rem;
+    object-fit: contain;
+    background: var(--surface-muted);
+}
+
+.photo-relation-details {
+    min-width: 0;
+}
+
+.photo-relation-details .face-panel-heading strong {
+    border-radius: 999px;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.75rem;
+}
+
+.photo-people-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    min-height: 2rem;
+    margin-bottom: 1rem;
+}
+
+.photo-person-chip {
+    border-radius: 999px;
+    padding: 0.32rem 0.6rem;
+    background: var(--accent-soft);
+    color: var(--accent-color);
+    font-size: 0.78rem;
+}
+
+.photo-people-empty {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.photo-relation-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.photo-people-modal-content {
+    max-width: 520px;
+}
+
+.photo-people-modal-file {
+    max-width: 390px;
+    margin-top: 0.25rem;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.photo-people-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.photo-people-option {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.7rem;
+    border: 1px solid var(--glass-border);
+    border-radius: 0.7rem;
+    background: rgba(255, 255, 255, 0.66);
+    cursor: pointer;
+}
+
+.photo-people-option:has(input:checked) {
+    border-color: rgba(193, 92, 48, 0.42);
+    background: var(--accent-soft);
+}
+
+.photo-people-option input {
+    width: 1.1rem;
+    height: 1.1rem;
+    accent-color: var(--accent-color);
+}
+
+.photo-people-option span {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+}
+
+.photo-people-option small {
+    color: var(--text-secondary);
+}
+
+.relationship-view-switch button:focus-visible,
+.face-person-name-editor button:focus-visible,
+.face-person-name-input:focus-visible,
+.photo-relation-toggle:focus-visible,
+.photo-relation-actions button:focus-visible,
+.photo-people-option:focus-within {
+    outline: 3px solid rgba(193, 92, 48, 0.28);
+    outline-offset: 2px;
+}
+
 @media (max-width: 820px) {
-    .face-workspace {
-        grid-template-columns: 1fr;
+    .face-workspace-toolbar,
+    .face-person-body {
+        display: flex;
+        flex-direction: column;
     }
 
-    .face-cluster-list-panel,
     .face-evidence-panel {
         border-right: 0;
         border-bottom: 1px solid var(--glass-border);
     }
 
-    .face-cluster-list {
-        flex-direction: row;
-        overflow-x: auto;
-        padding-bottom: 0.25rem;
+    .face-person-toggle {
+        grid-template-columns: 1rem 2.25rem minmax(0, 1fr);
     }
 
-    .face-cluster-item {
-        min-width: 190px;
+    .face-person-row,
+    .photo-relation-body {
+        grid-template-columns: 1fr;
+    }
+
+    .face-person-row {
+        padding-right: 0;
+    }
+
+    .face-person-name-editor {
+        padding: 0 0.75rem 0.75rem;
+    }
+
+    .photo-relation-toggle {
+        grid-template-columns: 1rem minmax(0, 1fr) auto;
+    }
+
+    .photo-relation-toggle small {
+        grid-column: 2 / -1;
+    }
+
+    .face-evidence-grid {
+        gap: 0.5rem;
+    }
+
+    .face-evidence-card > span:last-child {
+        font-size: 0.68rem;
+    }
+
+    .face-photo-decision {
+        align-items: flex-start;
+        flex-wrap: wrap;
     }
 }
 

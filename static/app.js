@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 localBatchInputs.classList.add('hidden');
                 driveBatchInputs.classList.remove('hidden');
+                tryFetchServerToken();
             }
         });
     });
@@ -103,7 +104,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Close button handled via onclick in HTML.
     // Escape key to exit fullscreen.
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') toggleFullscreen(false);
+        if (e.key === 'Escape') {
+            closePhotoPeopleModal();
+            toggleFullscreen(false);
+        }
     });
 
     // Sync CSS class if user exits via ESC (native browser trigger)
@@ -130,6 +134,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentFaceClusters = [];
     let selectedFaceClusterId = null;
     let faceClusteringInfo = null;
+    const faceClusterUi = {
+        expanded: new Set(),
+        selectedEvidenceIndexes: new Map(),
+    };
+    let relationshipViewMode = 'people';
+    let photoPeopleAssignments = {};
+    const photoClusterUi = { expanded: new Set() };
 
     let batchSelectedFiles = [];
 
@@ -181,6 +192,20 @@ document.addEventListener('DOMContentLoaded', () => {
             throw new Error(`分群 min_samples 必須介於 1 到 ${defaults.minSamplesMax}`);
         }
         return { eps, minSamples };
+    }
+
+    function initializePhotoPeopleAssignments() {
+        photoPeopleAssignments = PhotoRelationships.createAssignments(currentFaceClusters);
+        currentBatchResults.forEach(item => {
+            const fileName = item.file_name || item.file;
+            if (fileName && !(fileName in photoPeopleAssignments)) photoPeopleAssignments[fileName] = [];
+        });
+    }
+
+    function setCurrentFaceClusters(clusters) {
+        currentFaceClusters = Array.isArray(clusters) ? clusters : [];
+        selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
+        initializePhotoPeopleAssignments();
     }
 
     function getBatchUploadLimits() {
@@ -849,6 +874,11 @@ document.addEventListener('DOMContentLoaded', () => {
         currentFaceClusters = [];
         selectedFaceClusterId = null;
         faceClusteringInfo = null;
+        faceClusterUi.expanded.clear();
+        faceClusterUi.selectedEvidenceIndexes.clear();
+        relationshipViewMode = 'people';
+        photoPeopleAssignments = {};
+        photoClusterUi.expanded.clear();
         batchOverviewActive = false;
         window._currentMetrics = null;
         window._currentSessionId = sessionId;
@@ -915,9 +945,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             totalImages = data.total || totalImages;
                             showToast(`${data.file_name || data.file} 這張沒看成`, 'error');
                         } else if (data.status === 'completed') {
-                            currentFaceClusters = Array.isArray(data.face_clusters) ? data.face_clusters : [];
+                            setCurrentFaceClusters(data.face_clusters);
                             faceClusteringInfo = data.face_clustering || null;
-                            selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
                         } else if (data.results && Array.isArray(data.results)) {
                             // 本機批次模式：一次性完整 JSON 回應
                             totalImages = data.total || data.results.length;
@@ -935,9 +964,8 @@ document.addEventListener('DOMContentLoaded', () => {
                                     showToast(`${item.file} 這張沒看成`, 'error');
                                 }
                             });
-                            currentFaceClusters = Array.isArray(data.face_clusters) ? data.face_clusters : [];
+                            setCurrentFaceClusters(data.face_clusters);
                             faceClusteringInfo = data.face_clustering || null;
-                            selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
                         }
 
                         // 更新 UI 進度
@@ -968,9 +996,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             showToast(`${item.file} 這張沒看成`, 'error');
                         }
                     });
-                    currentFaceClusters = Array.isArray(data.face_clusters) ? data.face_clusters : [];
+                    setCurrentFaceClusters(data.face_clusters);
                     faceClusteringInfo = data.face_clustering || null;
-                    selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
                     updateProgressUI(successCount + failedCount, totalImages, successCount, failedCount);
                 }
             }
@@ -1120,75 +1147,239 @@ document.addEventListener('DOMContentLoaded', () => {
         return currentBatchResults.findIndex(item => (item.file_name || item.file) === fileName);
     }
 
-    function renderFaceWorkspace(container) {
-        const selected = currentFaceClusters.find(cluster => cluster.cluster_id === selectedFaceClusterId) || currentFaceClusters[0];
-        if (!selected) return;
-        selectedFaceClusterId = selected.cluster_id;
-        const clusterItems = currentFaceClusters.map(cluster => `
-            <button class="face-cluster-item ${cluster.cluster_id === selected.cluster_id ? 'selected' : ''}"
-                    type="button" data-cluster-id="${escapeHtml(cluster.cluster_id)}">
-                <span class="face-cluster-avatar">${String(cluster.display_name || '人').trim().charAt(0) || '人'}</span>
-                <span class="face-cluster-copy">
-                    <strong>${escapeHtml(cluster.display_name)}</strong>
-                    <small>${cluster.photo_count} 張照片 · ${cluster.face_count} 張臉</small>
-                </span>
-                <span class="face-cluster-status status-${escapeHtml(cluster.status)}">${statusLabel(cluster.status)}</span>
-            </button>`).join('');
-        const evidence = (selected.evidence_photos || []).map(item => {
-            const resultIndex = findResultIndex(item.file_name);
-            const source = item.image_b64 ? `data:image/jpeg;base64,${item.image_b64}` : (resultIndex >= 0 ? getItemImgSrc(currentBatchResults[resultIndex]) : '');
-            return `<button class="face-evidence-card" type="button" data-result-index="${resultIndex}" ${resultIndex < 0 ? 'disabled' : ''}>
-                ${source ? `<img src="${source}" alt="${escapeHtml(item.file_name)}" loading="lazy">` : '<span class="face-evidence-missing">無預覽</span>'}
-                <span>${escapeHtml(item.file_name)}</span>
-                <small>信心 ${(Number(item.score || 0) * 100).toFixed(0)}%</small>
-            </button>`;
-        }).join('');
-        container.innerHTML = `<section class="face-workspace" aria-label="人物分類工作台">
-            <aside class="face-cluster-list-panel">
-                <div class="face-panel-heading"><span>人物群組</span><strong>${currentFaceClusters.length}</strong></div>
-                <div class="face-cluster-list">${clusterItems}</div>
-            </aside>
-            <main class="face-evidence-panel">
-                <div class="face-panel-heading"><span>${escapeHtml(selected.display_name)} 的出現位置</span><small>${selected.photo_count} 張照片</small></div>
-                <div class="face-evidence-grid">${evidence || '<p class="face-empty-copy">沒有可顯示的證據照片</p>'}</div>
-            </main>
-            <aside class="face-decision-panel">
-                <div class="face-panel-heading"><span>確認人物</span></div>
-                <label>人物名稱<input id="face-cluster-name" value="${escapeHtml(selected.display_name)}" maxlength="80"></label>
-                <label>確認狀態<select id="face-cluster-status">
-                    <option value="unconfirmed" ${selected.status === 'unconfirmed' ? 'selected' : ''}>未命名</option>
-                    <option value="pending" ${selected.status === 'pending' ? 'selected' : ''}>待確認</option>
-                    <option value="confirmed" ${selected.status === 'confirmed' ? 'selected' : ''}>已確認</option>
-                </select></label>
-                <label>備註<textarea id="face-cluster-notes" rows="4" maxlength="500" placeholder="例如：講師、工作人員">${escapeHtml(selected.notes || '')}</textarea></label>
-                <button id="save-face-cluster-btn" class="face-save-btn" type="button">儲存這個人物</button>
-                <small class="face-save-hint">流水 ID：${escapeHtml(selected.cluster_id)}</small>
-            </aside>
-        </section>`;
-
-        container.querySelectorAll('.face-cluster-item').forEach(button => {
-            button.addEventListener('click', () => {
-                selectedFaceClusterId = button.dataset.clusterId;
-                renderFaceWorkspace(container);
-            });
-        });
-        container.querySelectorAll('.face-evidence-card').forEach(button => {
-            button.addEventListener('click', () => {
-                const resultIndex = Number(button.dataset.resultIndex);
-                if (resultIndex >= 0) openReviewFromOverview(resultIndex);
-            });
-        });
-        document.getElementById('save-face-cluster-btn')?.addEventListener('click', saveSelectedFaceCluster);
+    function getFaceEvidenceDecision(evidence) {
+        const resultIndex = findResultIndex(evidence.file_name);
+        const item = resultIndex >= 0 ? currentBatchResults[resultIndex] : null;
+        const decision = item?.user_decision || item?.ai_decision || 'pending';
+        return {
+            resultIndex,
+            decision,
+            label: decision === 'safe' ? '可公開' : decision === 'unsafe' ? '不可公開' : '待確認',
+        };
     }
 
-    async function saveSelectedFaceCluster() {
-        const cluster = currentFaceClusters.find(item => item.cluster_id === selectedFaceClusterId);
-        if (!cluster) return;
-        const update = {
-            display_name: document.getElementById('face-cluster-name').value.trim() || cluster.display_name,
-            status: document.getElementById('face-cluster-status').value,
-            notes: document.getElementById('face-cluster-notes').value.trim(),
+    function renderFacePhotoDecision(evidence) {
+        if (!evidence) {
+            return '<p class="face-photo-decision-hint">點選任一人臉框，查看該張照片的可公開判定。</p>';
+        }
+        const decision = getFaceEvidenceDecision(evidence);
+        return `<div class="face-photo-decision status-${escapeHtml(decision.decision)}" role="status">
+            <span>這張照片的判定</span>
+            <strong>${decision.label}</strong>
+            <button type="button" data-face-action="open-photo" data-result-index="${decision.resultIndex}">查看完整照片</button>
+        </div>`;
+    }
+
+    function cropFaceEvidenceImages(container) {
+        container.querySelectorAll('img[data-face-bbox]').forEach(img => {
+            const bbox = String(img.dataset.faceBbox || '').split(',').map(Number);
+            if (bbox.length !== 4 || bbox.some(value => !Number.isFinite(value))) return;
+            const source = img.currentSrc || img.src;
+            const sourceImage = new Image();
+            sourceImage.onload = () => {
+                const [x1, y1, x2, y2] = bbox;
+                const left = Math.max(0, Math.min(sourceImage.naturalWidth, Math.floor(x1)));
+                const top = Math.max(0, Math.min(sourceImage.naturalHeight, Math.floor(y1)));
+                const right = Math.max(left + 1, Math.min(sourceImage.naturalWidth, Math.ceil(x2)));
+                const bottom = Math.max(top + 1, Math.min(sourceImage.naturalHeight, Math.ceil(y2)));
+                const canvas = document.createElement('canvas');
+                canvas.width = right - left;
+                canvas.height = bottom - top;
+                canvas.getContext('2d').drawImage(
+                    sourceImage,
+                    left,
+                    top,
+                    canvas.width,
+                    canvas.height,
+                    0,
+                    0,
+                    canvas.width,
+                    canvas.height,
+                );
+                img.removeAttribute('data-face-bbox');
+                img.src = canvas.toDataURL('image/jpeg', 0.88);
+            };
+            sourceImage.src = source;
+        });
+    }
+
+    function renderPeoplePerspective(container) {
+        const clusterItems = currentFaceClusters.map(cluster => {
+            const clusterId = String(cluster.cluster_id);
+            const isExpanded = faceClusterUi.expanded.has(clusterId);
+            const selectedEvidenceIndex = faceClusterUi.selectedEvidenceIndexes.get(clusterId);
+            const selectedEvidence = Number.isInteger(selectedEvidenceIndex)
+                ? (cluster.evidence_photos || [])[selectedEvidenceIndex]
+                : null;
+            const evidence = (cluster.evidence_photos || []).map((item, evidenceIndex) => {
+                const decision = getFaceEvidenceDecision(item);
+                const source = item.image_b64
+                    ? `data:image/jpeg;base64,${item.image_b64}`
+                    : (decision.resultIndex >= 0 ? getItemImgSrc(currentBatchResults[decision.resultIndex]) : '');
+                const bbox = Array.isArray(item.bbox) ? item.bbox.map(Number).join(',') : '';
+                const selectedClass = evidenceIndex === selectedEvidenceIndex ? ' selected' : '';
+                return `<button class="face-evidence-card${selectedClass}" type="button"
+                        data-face-action="select-evidence" data-cluster-id="${escapeHtml(clusterId)}"
+                        data-evidence-index="${evidenceIndex}" ${decision.resultIndex < 0 ? 'disabled' : ''}>
+                    <span class="face-crop-frame">
+                        ${source ? `<img src="${source}" data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(item.file_name)} 的人臉" loading="lazy">` : '<span class="face-evidence-missing">無預覽</span>'}
+                    </span>
+                    <span>${escapeHtml(item.file_name)}</span>
+                </button>`;
+            }).join('');
+            return `<article class="face-person-card${isExpanded ? ' expanded' : ''}">
+                <div class="face-person-row">
+                    <button class="face-person-toggle" type="button" data-face-action="toggle-cluster"
+                            data-cluster-id="${escapeHtml(clusterId)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? '收合' : '展開'} ${escapeHtml(cluster.display_name)}">
+                        <span class="face-cluster-arrow" aria-hidden="true">${isExpanded ? '▼' : '▶'}</span>
+                        <span class="face-cluster-avatar">${escapeHtml(String(cluster.display_name || '人').trim().charAt(0) || '人')}</span>
+                        <span class="face-cluster-copy"><small>${cluster.photo_count} 張照片 · ${cluster.face_count} 張人臉框</small></span>
+                    </button>
+                    <div class="face-person-name-editor">
+                        <input class="face-person-name-input" value="${escapeHtml(cluster.display_name)}" maxlength="80" aria-label="人物名稱">
+                        <button type="button" data-face-action="save-name" data-cluster-id="${escapeHtml(clusterId)}">儲存名稱</button>
+                    </div>
+                </div>
+                ${isExpanded ? `<div class="face-person-body">
+                    <section class="face-evidence-panel">
+                        <div class="face-panel-heading"><span>辨識為這個人的人臉框</span><small>依最長邊等比例適配</small></div>
+                        <div class="face-evidence-grid">${evidence || '<p class="face-empty-copy">沒有可顯示的人臉框</p>'}</div>
+                        <div class="face-photo-decision-slot">${renderFacePhotoDecision(selectedEvidence)}</div>
+                    </section>
+                    <aside class="face-decision-panel" data-cluster-editor="${escapeHtml(clusterId)}">
+                        <div class="face-panel-heading"><span>確認人物</span><small>${statusLabel(cluster.status)}</small></div>
+                        <label>確認狀態<select class="face-cluster-status-input">
+                            <option value="unconfirmed" ${cluster.status === 'unconfirmed' ? 'selected' : ''}>未命名</option>
+                            <option value="pending" ${cluster.status === 'pending' ? 'selected' : ''}>待確認</option>
+                            <option value="confirmed" ${cluster.status === 'confirmed' ? 'selected' : ''}>已確認</option>
+                        </select></label>
+                        <label>備註<textarea class="face-cluster-notes" rows="3" maxlength="500" placeholder="例如：講師、工作人員">${escapeHtml(cluster.notes || '')}</textarea></label>
+                        <button class="face-save-btn" type="button" data-face-action="save-cluster" data-cluster-id="${escapeHtml(clusterId)}">儲存這個人物</button>
+                        <small class="face-save-hint">流水 ID：${escapeHtml(clusterId)}</small>
+                    </aside>
+                </div>` : ''}
+            </article>`;
+        }).join('');
+
+        container.innerHTML = `<div class="face-cluster-list">${clusterItems}</div>`;
+
+        cropFaceEvidenceImages(container);
+    }
+
+    function getResultDecision(item) {
+        const analysis = item.result || item;
+        const decision = item.user_decision || item.ai_decision || analysis.ai_decision
+            || (analysis.moderation_status === 'public' || analysis.is_safe_for_public ? 'safe'
+                : analysis.moderation_status === 'pending' ? 'pending' : 'unsafe');
+        return {
+            value: decision,
+            label: decision === 'safe' ? '可公開' : decision === 'pending' ? '待確認' : '不可公開',
         };
+    }
+
+    function renderPhotoPerspective(container) {
+        const peopleById = new Map(currentFaceClusters.map(cluster => [String(cluster.cluster_id), cluster]));
+        const photoItems = currentBatchResults.map((item, resultIndex) => {
+            const fileName = String(item.file_name || item.file || `圖片 ${resultIndex + 1}`);
+            const isExpanded = photoClusterUi.expanded.has(resultIndex);
+            const decision = getResultDecision(item);
+            const assignedPeople = (photoPeopleAssignments[fileName] || [])
+                .map(clusterId => peopleById.get(String(clusterId)))
+                .filter(Boolean);
+            const peopleChips = assignedPeople.map(cluster =>
+                `<span class="photo-person-chip">${escapeHtml(cluster.display_name)}</span>`
+            ).join('');
+            return `<article class="photo-relation-card${isExpanded ? ' expanded' : ''}">
+                <button class="photo-relation-toggle" type="button" data-photo-action="toggle-photo"
+                        data-result-index="${resultIndex}" aria-expanded="${isExpanded}">
+                    <span class="face-cluster-arrow" aria-hidden="true">${isExpanded ? '▼' : '▶'}</span>
+                    <span class="photo-relation-name">${escapeHtml(fileName)}</span>
+                    <small>${assignedPeople.length} 位人物</small>
+                </button>
+                ${isExpanded ? `<div class="photo-relation-body">
+                    <img src="${getItemImgSrc(item)}" alt="${escapeHtml(fileName)}" loading="lazy">
+                    <div class="photo-relation-details">
+                        <div class="face-panel-heading"><span>照片判定</span><strong class="status-${escapeHtml(decision.value)}">${decision.label}</strong></div>
+                        <div class="photo-people-summary">${peopleChips || '<span class="photo-people-empty">尚未登記人物</span>'}</div>
+                        <div class="photo-relation-actions">
+                            <button type="button" data-photo-action="edit-people" data-result-index="${resultIndex}">編輯人物</button>
+                            <button type="button" data-photo-action="open-photo" data-result-index="${resultIndex}">查看完整照片</button>
+                        </div>
+                    </div>
+                </div>` : ''}
+            </article>`;
+        }).join('');
+        container.innerHTML = `<div class="photo-relation-list">${photoItems || '<p class="face-empty-copy">沒有可顯示的照片</p>'}</div>`;
+    }
+
+    function renderFaceWorkspace(container) {
+        container.innerHTML = `<section class="face-workspace" aria-label="人物與照片關聯結果">
+            <div class="face-workspace-toolbar">
+                <div><strong>${relationshipViewMode === 'people' ? '偵測到的人物' : '辨識過的照片'}</strong><span>列表預設收合</span></div>
+                <div class="relationship-view-switch" role="group" aria-label="結果檢視角度">
+                    <button type="button" data-relationship-view="people" class="${relationshipViewMode === 'people' ? 'active' : ''}">人物角度</button>
+                    <button type="button" data-relationship-view="photos" class="${relationshipViewMode === 'photos' ? 'active' : ''}">照片角度</button>
+                </div>
+            </div>
+            <div class="relationship-view-content"></div>
+        </section>`;
+        const content = container.querySelector('.relationship-view-content');
+        if (relationshipViewMode === 'people') renderPeoplePerspective(content);
+        else renderPhotoPerspective(content);
+
+        container.onclick = event => {
+            const viewTarget = event.target.closest('[data-relationship-view]');
+            if (viewTarget) {
+                relationshipViewMode = viewTarget.dataset.relationshipView;
+                renderFaceWorkspace(container);
+                return;
+            }
+            const actionTarget = event.target.closest('[data-face-action]');
+            if (actionTarget && container.contains(actionTarget)) {
+                const clusterId = actionTarget.dataset.clusterId;
+                if (actionTarget.dataset.faceAction === 'toggle-cluster') {
+                    if (faceClusterUi.expanded.has(clusterId)) faceClusterUi.expanded.delete(clusterId);
+                    else faceClusterUi.expanded.add(clusterId);
+                    renderFaceWorkspace(container);
+                } else if (actionTarget.dataset.faceAction === 'select-evidence') {
+                    const evidenceIndex = Number(actionTarget.dataset.evidenceIndex);
+                    faceClusterUi.selectedEvidenceIndexes.set(clusterId, evidenceIndex);
+                    const personCard = actionTarget.closest('.face-person-card');
+                    personCard.querySelectorAll('.face-evidence-card.selected').forEach(card => card.classList.remove('selected'));
+                    actionTarget.classList.add('selected');
+                    const cluster = currentFaceClusters.find(item => item.cluster_id === clusterId);
+                    const selectedEvidence = cluster?.evidence_photos?.[evidenceIndex];
+                    personCard.querySelector('.face-photo-decision-slot').innerHTML = renderFacePhotoDecision(selectedEvidence);
+                } else if (actionTarget.dataset.faceAction === 'open-photo') {
+                    const resultIndex = Number(actionTarget.dataset.resultIndex);
+                    if (resultIndex >= 0) openReviewFromOverview(resultIndex);
+                } else if (actionTarget.dataset.faceAction === 'save-name') {
+                    const name = actionTarget.closest('.face-person-row').querySelector('.face-person-name-input').value.trim();
+                    saveFaceClusterUpdate(clusterId, { display_name: name });
+                } else if (actionTarget.dataset.faceAction === 'save-cluster') {
+                    saveSelectedFaceCluster(clusterId, actionTarget.closest('[data-cluster-editor]'));
+                }
+                return;
+            }
+            const photoTarget = event.target.closest('[data-photo-action]');
+            if (!photoTarget || !container.contains(photoTarget)) return;
+            const resultIndex = Number(photoTarget.dataset.resultIndex);
+            if (photoTarget.dataset.photoAction === 'toggle-photo') {
+                if (photoClusterUi.expanded.has(resultIndex)) photoClusterUi.expanded.delete(resultIndex);
+                else photoClusterUi.expanded.add(resultIndex);
+                renderFaceWorkspace(container);
+            } else if (photoTarget.dataset.photoAction === 'edit-people') {
+                openPhotoPeopleModal(resultIndex);
+            } else if (photoTarget.dataset.photoAction === 'open-photo') {
+                openReviewFromOverview(resultIndex);
+            }
+        };
+    }
+
+    async function saveFaceClusterUpdate(clusterId, update) {
+        const cluster = currentFaceClusters.find(item => item.cluster_id === clusterId);
+        if (!cluster) return;
+        if ('display_name' in update) update.display_name = update.display_name || cluster.display_name;
         Object.assign(cluster, update);
         renderBatchOverview();
         try {
@@ -1198,12 +1389,73 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify(update),
             });
             if (!response.ok) throw new Error('server update failed');
-            showToast(`已儲存「${update.display_name}」`);
+            showToast(`已儲存「${cluster.display_name}」`);
         } catch (error) {
             console.warn('Face cluster update stayed in browser only:', error);
             showToast('名稱已保留在這次下載資料中；伺服器同步失敗', 'error');
         }
     }
+
+    async function saveSelectedFaceCluster(clusterId, editor) {
+        const cluster = currentFaceClusters.find(item => item.cluster_id === clusterId);
+        if (!cluster || !editor) return;
+        selectedFaceClusterId = clusterId;
+        const update = {
+            status: editor.querySelector('.face-cluster-status-input').value,
+            notes: editor.querySelector('.face-cluster-notes').value.trim(),
+        };
+        await saveFaceClusterUpdate(clusterId, update);
+    }
+
+    function openPhotoPeopleModal(resultIndex) {
+        const item = currentBatchResults[resultIndex];
+        if (!item) return;
+        const fileName = String(item.file_name || item.file || `圖片 ${resultIndex + 1}`);
+        const selectedIds = new Set((photoPeopleAssignments[fileName] || []).map(String));
+        const modal = document.getElementById('photo-people-modal');
+        modal.dataset.resultIndex = String(resultIndex);
+        document.getElementById('photo-people-modal-file').textContent = fileName;
+        document.getElementById('photo-people-options').innerHTML = currentFaceClusters.length > 0
+            ? currentFaceClusters.map(cluster => {
+                const clusterId = String(cluster.cluster_id);
+                return `<label class="photo-people-option">
+                    <input type="checkbox" value="${escapeHtml(clusterId)}" ${selectedIds.has(clusterId) ? 'checked' : ''}>
+                    <span><strong>${escapeHtml(cluster.display_name)}</strong><small>${escapeHtml(clusterId)}</small></span>
+                </label>`;
+            }).join('')
+            : '<p class="photo-people-empty">這一批沒有偵測到人物。</p>';
+        modal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        modal.querySelector('input, [data-photo-people-modal-action="save"]')?.focus();
+    }
+
+    function closePhotoPeopleModal() {
+        const modal = document.getElementById('photo-people-modal');
+        if (!modal || modal.classList.contains('hidden')) return;
+        modal.classList.add('hidden');
+        delete modal.dataset.resultIndex;
+        document.body.style.overflow = '';
+    }
+
+    document.getElementById('photo-people-modal')?.addEventListener('click', event => {
+        const action = event.target.closest('[data-photo-people-modal-action]')?.dataset.photoPeopleModalAction;
+        if (action === 'close') {
+            closePhotoPeopleModal();
+        } else if (action === 'save') {
+            const modal = document.getElementById('photo-people-modal');
+            const resultIndex = Number(modal.dataset.resultIndex);
+            const item = currentBatchResults[resultIndex];
+            if (!item) return closePhotoPeopleModal();
+            const fileName = String(item.file_name || item.file || `圖片 ${resultIndex + 1}`);
+            photoPeopleAssignments[fileName] = Array.from(
+                modal.querySelectorAll('#photo-people-options input:checked'),
+                input => input.value,
+            );
+            closePhotoPeopleModal();
+            renderBatchOverview();
+            showToast(`已更新「${fileName}」的人物關聯`);
+        }
+    });
 
     function getItemImgSrc(item) {
         if (item.original_image_b64) {
@@ -1241,21 +1493,39 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function buildBatchResultExport() {
-        return {
-            exported_at: new Date().toISOString(),
-            session_id: window._currentSessionId || null,
-            batch_mode: batchMode,
-            image_count: currentBatchResults.length,
-            face_clusters: currentFaceClusters,
-            results: currentBatchResults.map((item, index) => {
-                const { original_image_b64, drawn_image_b64, ...result } = item;
-                return {
-                    index: index + 1,
-                    ...result,
-                    annotated_image_available: Boolean(drawn_image_b64),
-                };
-            }),
-        };
+        return PhotoRelationships.buildExport({
+            sessionId: window._currentSessionId || null,
+            batchMode,
+            clusters: currentFaceClusters,
+            results: currentBatchResults.map((item, index) => ({
+                index: index + 1,
+                ...item,
+                annotated_image_available: Boolean(item.drawn_image_b64),
+            })),
+            assignments: photoPeopleAssignments,
+            exportedAt: new Date().toISOString(),
+        });
+    }
+
+    async function saveExportToDrive(document) {
+        const targetFolderId = driveTargetId.value.trim();
+        if (batchMode !== 'drive' || !targetFolderId) return { attempted: false };
+        try {
+            const response = await fetch('/batch_exports/drive', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: window._currentSessionId,
+                    target_folder_id: targetFolderId,
+                    document,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'Google 雲端備份失敗');
+            return { attempted: true, success: true, fileName: data.file_name };
+        } catch (error) {
+            return { attempted: true, success: false, error: error.message };
+        }
     }
 
     async function downloadBatchResults() {
@@ -1273,45 +1543,65 @@ document.addEventListener('DOMContentLoaded', () => {
             0,
         );
         const maxBytes = (config?.batch_download_max_mb || 8) * 1024 * 1024;
-
-        if (!wantsImages) {
-            downloadBlob(jsonBlob, `batch_results_${Date.now()}.json`);
-            showToast('已下載 JSON 辨識結果', 'success');
-            return;
-        }
-
-        if (imageBytes + jsonBlob.size > maxBytes || typeof JSZip === 'undefined') {
-            downloadBlob(jsonBlob, `batch_results_${Date.now()}.json`);
-            const reason = typeof JSZip === 'undefined' ? '壓縮元件未載入' : `後製圖超過 ${config?.batch_download_max_mb || 8}MB 上限`;
-            showToast(`${reason}，已自動改下載 JSON；後製圖請改用雲端模式`, 'error');
-            return;
-        }
-
         downloadBatchResultsBtn.disabled = true;
         showLoading(true);
         document.getElementById('loading-text').textContent = '正在整理下載內容…';
+        let localMessage = '已下載 JSON 辨識結果';
+        let localMessageType = 'success';
         try {
-            const zip = new JSZip();
-            zip.file('result.json', json);
-            const annotated = zip.folder('annotated');
-            currentBatchResults.forEach((item, index) => {
-                if (!item.drawn_image_b64) return;
-                const sourceName = item.file_name || item.file || `image_${index + 1}.jpg`;
-                const safeName = safeDownloadName(sourceName, `image_${index + 1}.jpg`).replace(/\.[^.]+$/, '');
-                annotated.file(`annotated_${safeName}.jpg`, item.drawn_image_b64, { base64: true });
-            });
-            const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 4 } });
-            if (zipBlob.size > maxBytes) {
-                downloadBlob(jsonBlob, `batch_results_${Date.now()}.json`);
-                showToast(`結果包超過 ${config?.batch_download_max_mb || 8}MB 上限，已自動改下載 JSON；後製圖請改用雲端模式`, 'error');
-                return;
+            const shouldUseJsonOnly = !wantsImages
+                || imageBytes + jsonBlob.size > maxBytes
+                || typeof JSZip === 'undefined';
+            if (shouldUseJsonOnly) {
+                downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
+                if (wantsImages) {
+                    const reason = typeof JSZip === 'undefined'
+                        ? '壓縮元件未載入'
+                        : `後製圖超過 ${config?.batch_download_max_mb || 8}MB 上限`;
+                    localMessage = `${reason}，已自動改下載 JSON`;
+                    localMessageType = 'error';
+                }
+            } else {
+                const zip = new JSZip();
+                zip.file('result.json', json);
+                const annotated = zip.folder('annotated');
+                currentBatchResults.forEach((item, index) => {
+                    if (!item.drawn_image_b64) return;
+                    const sourceName = item.file_name || item.file || `image_${index + 1}.jpg`;
+                    const safeName = safeDownloadName(sourceName, `image_${index + 1}.jpg`).replace(/\.[^.]+$/, '');
+                    annotated.file(`annotated_${safeName}.jpg`, item.drawn_image_b64, { base64: true });
+                });
+                const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 4 } });
+                if (zipBlob.size > maxBytes) {
+                    downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
+                    localMessage = `結果包超過 ${config?.batch_download_max_mb || 8}MB 上限，已自動改下載 JSON`;
+                    localMessageType = 'error';
+                } else {
+                    downloadBlob(zipBlob, `photo_people_${Date.now()}.zip`);
+                    localMessage = '已下載 JSON 與後製圖 ZIP';
+                }
             }
-            downloadBlob(zipBlob, `batch_results_${Date.now()}.zip`);
-            showToast('已下載 JSON 與後製圖 ZIP', 'success');
+
+            document.getElementById('loading-text').textContent = '正在備份關聯紀錄…';
+            const driveBackup = await saveExportToDrive(exportData);
+            if (driveBackup.attempted && driveBackup.success) {
+                showToast(`${localMessage}，並已備份至雲端輸出區`, localMessageType);
+            } else if (driveBackup.attempted) {
+                showToast(`本機已下載，但雲端備份失敗：${driveBackup.error}`, 'error');
+            } else {
+                showToast(localMessage, localMessageType);
+            }
         } catch (error) {
             console.error('Batch result export failed:', error);
-            downloadBlob(jsonBlob, `batch_results_${Date.now()}.json`);
-            showToast('後製圖打包失敗，已自動改下載 JSON', 'error');
+            downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
+            const driveBackup = await saveExportToDrive(exportData);
+            if (driveBackup.attempted && driveBackup.success) {
+                showToast('後製圖打包失敗，已下載 JSON 並備份至雲端輸出區', 'error');
+            } else if (driveBackup.attempted) {
+                showToast(`本機已下載 JSON，但雲端備份失敗：${driveBackup.error}`, 'error');
+            } else {
+                showToast('後製圖打包失敗，已自動改下載 JSON', 'error');
+            }
         } finally {
             showLoading(false);
             document.getElementById('loading-text').textContent = '正在一張一張看過去…';
@@ -1746,8 +2036,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (e) { /* 未登入時靜默忽略 */ }
     }
-    tryFetchServerToken();
-
     function createPicker(targetId) {
         if (!pickerApiLoaded) {
             console.warn('Picker API 尚未載入，嘗試重新載入...');

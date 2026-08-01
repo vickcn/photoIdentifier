@@ -226,6 +226,7 @@ report_20250902*
 !tests/test_photo_processing_threadpool.py
 !tests/test_face_workspace.py
 !tests/test_face_workspace_api.py
+!tests/face_relationships.test.js
 !issues/
 !issues/issue3.md
 !config.json
@@ -240,3 +241,5 @@ build/
 **.secrets**
 **.vercel**
 .vercel
+
+MEMORY.md

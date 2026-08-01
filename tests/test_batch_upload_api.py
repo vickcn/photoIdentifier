@@ -69,6 +69,28 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(config["batch_upload_concurrency"], 2)
         self.assertEqual(config["batch_download_max_mb"], 8)
 
+    def test_load_config_allows_larger_batch_limits_outside_vercel(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_config_path = Path(temp_dir) / "config.json"
+            temp_config_path.write_text(json.dumps({}), encoding="utf-8")
+            with (
+                patch.object(main, "CONFIG_PATH", temp_config_path),
+                patch.object(main, "CONFIG_BATCH_UPLOAD_MAX_FILES_CAP", None),
+                patch.object(main, "CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP", None),
+                patch.dict(
+                    os.environ,
+                    {
+                        "BATCH_UPLOAD_MAX_FILES": "30",
+                        "BATCH_UPLOAD_CONCURRENCY": "20",
+                    },
+                    clear=False,
+                ),
+            ):
+                config = main.load_config()
+
+        self.assertEqual(config["batch_upload_max_files"], 30)
+        self.assertEqual(config["batch_upload_concurrency"], 20)
+
     def test_face_clustering_env_overrides_config_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_config_path = Path(temp_dir) / "config.json"
