@@ -584,7 +584,7 @@ class BatchRequest(BaseModel):
     collaborative_memory: Optional[str] = None
     face_cluster_eps: float = DEFAULT_CLUSTER_EPS
     face_cluster_min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES
-    run_public_classification: bool = True
+    run_public_classification: bool = False
     run_face_clustering: bool = True
 
 
@@ -598,7 +598,7 @@ async def batch_upload_stream(
     collaborative_memory: Optional[str] = Form(None),
     face_cluster_eps: float = Form(DEFAULT_CLUSTER_EPS),
     face_cluster_min_samples: int = Form(DEFAULT_CLUSTER_MIN_SAMPLES),
-    run_public_classification: bool = Form(True),
+    run_public_classification: bool = Form(False),
     run_face_clustering: bool = Form(True),
 ):
     _validate_processing_scope(run_public_classification, run_face_clustering)
@@ -824,7 +824,7 @@ class DriveBatchRequest(BaseModel):
     collaborative_memory: Optional[str] = None
     face_cluster_eps: float = DEFAULT_CLUSTER_EPS
     face_cluster_min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES
-    run_public_classification: bool = True
+    run_public_classification: bool = False
     run_face_clustering: bool = True
 
 @app.post("/batch_drive/")
