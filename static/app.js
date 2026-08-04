@@ -22,6 +22,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const batchConcurrency = document.getElementById('batch-concurrency');
     const faceClusterEpsInput = document.getElementById('face-cluster-eps');
     const faceClusterMinSamplesInput = document.getElementById('face-cluster-min-samples');
+    const batchRunPublic = document.getElementById('batch-run-public');
+    const batchRunFaces = document.getElementById('batch-run-faces');
+    const processingScopeHint = document.getElementById('processing-scope-hint');
     const analyzeBatchBtn = document.getElementById('analyze-batch-btn');
     const organizeArea = document.getElementById('organize-area');
     const safeFolder = document.getElementById('safe-folder');
@@ -149,6 +152,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const includeAnnotatedDownload = document.getElementById('include-annotated-download');
     let config = null;
 
+    function publicClassificationWasRun(item) {
+        const analysis = item?.result || item || {};
+        return analysis.public_classification_performed !== false;
+    }
+
     function isBusy() {
         return localOperationBusy || loadingControlStates !== null;
     }
@@ -181,6 +189,42 @@ document.addEventListener('DOMContentLoaded', () => {
         faceClusterMinSamplesInput.value = String(defaults.minSamples);
         syncFaceClusterSummary();
     }
+
+    function syncProcessingScope() {
+        const runPublic = batchRunPublic.checked;
+        const runFaces = batchRunFaces.checked;
+        const noFeatureSelected = !runPublic && !runFaces;
+        const clusterPanel = document.getElementById('cluster-settings-panel');
+        const publicPanel = document.getElementById('batch-public-settings-panel');
+
+        batchRunPublic.closest('.processing-option').classList.toggle('selected', runPublic);
+        batchRunFaces.closest('.processing-option').classList.toggle('selected', runFaces);
+        clusterPanel.classList.toggle('is-inactive', !runFaces);
+        publicPanel.classList.toggle('is-inactive', !runPublic);
+        clusterPanel.querySelectorAll('button, input').forEach(control => { control.disabled = !runFaces; });
+        publicPanel.querySelectorAll('button, input').forEach(control => { control.disabled = !runPublic; });
+        document.getElementById('btn-edit-collaborative-memory').disabled = !runPublic;
+        document.getElementById('btn-add-memory-local').disabled = !runPublic;
+
+        analyzeBatchBtn.disabled = noFeatureSelected;
+        processingScopeHint.classList.toggle('error', noFeatureSelected);
+        if (noFeatureSelected) {
+            processingScopeHint.textContent = '至少選擇一項功能才能開始。';
+            analyzeBatchBtn.textContent = '請先選擇要執行的功能';
+        } else if (runPublic && runFaces) {
+            processingScopeHint.textContent = '兩項都會執行，可個別關閉。';
+            analyzeBatchBtn.textContent = '開始判定並分群';
+        } else if (runPublic) {
+            processingScopeHint.textContent = '只判定可公開性，不執行人臉分群。';
+            analyzeBatchBtn.textContent = '開始判定可公開性';
+        } else {
+            processingScopeHint.textContent = '只做人臉分群，不呼叫可公開性判定。';
+            analyzeBatchBtn.textContent = '開始人臉分群';
+        }
+    }
+
+    [batchRunPublic, batchRunFaces].forEach(input => input.addEventListener('change', syncProcessingScope));
+    syncProcessingScope();
 
     function readFaceClusterParams() {
         const defaults = getFaceClusterDefaults();
@@ -769,6 +813,16 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateStatsUI(filename, analysis) {
         fileNameDisplay.textContent = filename;
 
+        if (analysis.public_classification_performed === false) {
+            safetyBadge.textContent = '未判定';
+            safetyBadge.className = 'status-badge status-pending';
+            moderationReason.textContent = analysis.moderation_reason || '本次未執行可公開性判定';
+            faceCount.textContent = '-';
+            strapCount.textContent = '-';
+            strapColor.textContent = '-';
+            return;
+        }
+
         const status = analysis.moderation_status || (analysis.is_safe_for_public ? 'public' : 'private');
         if (status === 'public') {
             safetyBadge.textContent = '可以分享';
@@ -832,13 +886,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const source = document.querySelector('input[name="batch-source"]:checked').value;
         batchMode = source === 'local' ? 'upload' : source;
         const currentConcurrency = parseInt(batchConcurrency.value) || 3;
-        let faceClusterParams;
+        const runPublicClassification = batchRunPublic.checked;
+        const runFaceClustering = batchRunFaces.checked;
+        let faceClusterParams = getFaceClusterDefaults();
 
-        try {
-            faceClusterParams = readFaceClusterParams();
-        } catch (error) {
-            showToast(error.message, 'error');
+        if (!runPublicClassification && !runFaceClustering) {
+            showToast('至少選擇一項要執行的功能', 'error');
             return;
+        }
+
+        if (runFaceClustering) {
+            try {
+                faceClusterParams = readFaceClusterParams();
+            } catch (error) {
+                showToast(error.message, 'error');
+                return;
+            }
         }
 
         // Generate session_id for metrics tracking
@@ -862,6 +925,8 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('session_id', sessionId);
             formData.append('face_cluster_eps', String(faceClusterParams.eps));
             formData.append('face_cluster_min_samples', String(faceClusterParams.minSamples));
+            formData.append('run_public_classification', String(runPublicClassification));
+            formData.append('run_face_clustering', String(runFaceClustering));
             const memory = window._collaborativeMemories?.local;
             if (memory) formData.append('collaborative_memory', memory);
             requestOptions = { method: 'POST', body: formData };
@@ -881,6 +946,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 session_id: sessionId,
                 face_cluster_eps: faceClusterParams.eps,
                 face_cluster_min_samples: faceClusterParams.minSamples,
+                run_public_classification: runPublicClassification,
+                run_face_clustering: runFaceClustering,
                 collaborative_memory: window._collaborativeMemories?.drive || null,
             };
             requestOptions = {
@@ -890,7 +957,10 @@ document.addEventListener('DOMContentLoaded', () => {
             };
         }
 
-        if (!(await beginSharedBusy('辨識整場活動'))) return;
+        const busyLabel = runPublicClassification && runFaceClustering
+            ? '判定並整理人物'
+            : runPublicClassification ? '判定照片' : '整理人物';
+        if (!(await beginSharedBusy(busyLabel))) return;
 
         // Reset and Show Progress UI
         updateProgressUI(0, 0, 0, 0);
@@ -915,7 +985,9 @@ document.addEventListener('DOMContentLoaded', () => {
         splitViewer.classList.add('hidden');
         emptyState.classList.remove('hidden');
         showLoading(true);
-        document.getElementById('loading-text').textContent = '正在翻開這場活動的照片…';
+        document.getElementById('loading-text').textContent = runPublicClassification && runFaceClustering
+            ? '正在判定照片並整理人物…'
+            : runPublicClassification ? '正在判定照片是否適合分享…' : '正在整理照片中的人物…';
 
         try {
             const response = await fetch(endpoint, requestOptions);
@@ -955,13 +1027,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             successCount++;
                             totalImages = data.total;
                             const result = data.result || data;
-                            const aiStatus = result.moderation_status || (result.is_safe_for_public ? 'public' : 'private');
-                            // 計算 ai_decision（如果還沒有）
-                            if (!result.ai_decision) {
-                                result.ai_decision = aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending';
+                            if (publicClassificationWasRun(data)) {
+                                const aiStatus = result.moderation_status || (result.is_safe_for_public ? 'public' : 'private');
+                                if (!result.ai_decision) {
+                                    result.ai_decision = aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending';
+                                }
+                                data.user_decision = data.user_decision || result.ai_decision;
+                                data.ai_decision = result.ai_decision;
+                            } else {
+                                data.public_classification_performed = false;
                             }
-                            data.user_decision = data.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
-                            data.ai_decision = result.ai_decision;
                             // 保持 session_id
                             if (data.session_id) window._currentSessionId = data.session_id;
                             currentBatchResults.push(data);
@@ -979,9 +1054,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (data.session_id) window._currentSessionId = data.session_id;
                             data.results.forEach(item => {
                                 if (item.status === 'ok') {
-                                    const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
-                                    item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
-                                    item.ai_decision = item.ai_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                                    if (publicClassificationWasRun(item)) {
+                                        const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
+                                        item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                                        item.ai_decision = item.ai_decision || item.user_decision;
+                                    }
                                     currentBatchResults.push(item);
                                     successCount++;
                                 } else {
@@ -1011,9 +1088,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (data.session_id) window._currentSessionId = data.session_id;
                     data.results.forEach(item => {
                         if (item.status === 'ok') {
-                            const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
-                            item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
-                            item.ai_decision = item.ai_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                            if (publicClassificationWasRun(item)) {
+                                const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
+                                item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                                item.ai_decision = item.ai_decision || item.user_decision;
+                            }
                             currentBatchResults.push(item);
                             successCount++;
                         } else {
@@ -1133,7 +1212,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let safeC = 0, unsafeC = 0, pendingC = 0;
         currentBatchResults.forEach(r => {
             if (r.user_decision === 'safe') safeC++;
-            else if (r.user_decision === 'pending') pendingC++;
+            else if (r.user_decision === 'pending' || !publicClassificationWasRun(r)) pendingC++;
             else unsafeC++;
         });
         document.getElementById('ov-total').textContent = currentBatchResults.length;
@@ -1149,7 +1228,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (faceClusteringInfo && faceClusteringInfo.available === false) {
             viewToggle?.classList.remove('hidden');
             content.innerHTML = `<div class="face-workspace-notice">
-                <strong>人物分群目前未啟用</strong>
+                <strong>${faceClusteringInfo.reason === 'not_requested' ? '本次未執行人物分群' : '人物分群目前未啟用'}</strong>
                 <span>${escapeHtml(faceClusteringInfo.message || '目前先顯示照片審核結果。')}</span>
             </div>`;
             const photoContent = document.createElement('div');
@@ -1176,11 +1255,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function getFaceEvidenceDecision(evidence) {
         const resultIndex = findResultIndex(evidence.file_name);
         const item = resultIndex >= 0 ? currentBatchResults[resultIndex] : null;
+        const wasRun = publicClassificationWasRun(item);
         const decision = item?.user_decision || item?.ai_decision || 'pending';
         return {
             resultIndex,
             decision,
-            label: decision === 'safe' ? '可公開' : decision === 'unsafe' ? '不可公開' : '待確認',
+            label: !wasRun && !item?.user_decision
+                ? '未判定'
+                : decision === 'safe' ? '可公開' : decision === 'unsafe' ? '不可公開' : '待確認',
         };
     }
 
@@ -1294,12 +1376,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function getResultDecision(item) {
         const analysis = item.result || item;
+        const wasRun = publicClassificationWasRun(item);
         const decision = item.user_decision || item.ai_decision || analysis.ai_decision
             || (analysis.moderation_status === 'public' || analysis.is_safe_for_public ? 'safe'
                 : analysis.moderation_status === 'pending' ? 'pending' : 'unsafe');
         return {
             value: decision,
-            label: decision === 'safe' ? '可公開' : decision === 'pending' ? '待確認' : '不可公開',
+            label: !wasRun && !item.user_decision
+                ? '未判定'
+                : decision === 'safe' ? '可公開' : decision === 'pending' ? '待確認' : '不可公開',
         };
     }
 
@@ -1640,12 +1725,15 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderThumbnailGrid(container) {
         let html = '<div class="thumbnail-grid">';
         currentBatchResults.forEach((item, idx) => {
-            const decision = item.user_decision || 'private';
-            const isOverride = item.user_decision !== item.ai_decision;
+            const decisionInfo = getResultDecision(item);
+            const decision = decisionInfo.value;
+            const isOverride = Boolean(item.user_decision && item.ai_decision && item.user_decision !== item.ai_decision);
             const fileName = escapeHtml(item.file_name || item.file || `圖片 ${idx + 1}`);
             const src = getItemImgSrc(item);
             const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
-            const badgeText = decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
+            const badgeText = !publicClassificationWasRun(item) && !item.user_decision
+                ? '未判定'
+                : decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
             html += `<div class="thumbnail-item" data-idx="${idx}" title="${fileName}">
                 <img src="${src}" alt="${fileName}" loading="lazy">
                 <div class="thumbnail-overlay">
@@ -1665,12 +1753,15 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderOverviewList(container) {
         let html = '<div class="overview-list">';
         currentBatchResults.forEach((item, idx) => {
-            const decision = item.user_decision || 'private';
-            const isOverride = item.user_decision !== item.ai_decision;
+            const decisionInfo = getResultDecision(item);
+            const decision = decisionInfo.value;
+            const isOverride = Boolean(item.user_decision && item.ai_decision && item.user_decision !== item.ai_decision);
             const fileName = escapeHtml(item.file_name || item.file || `圖片 ${idx + 1}`);
             const src = getItemImgSrc(item);
             const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
-            const badgeText = decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
+            const badgeText = !publicClassificationWasRun(item) && !item.user_decision
+                ? '未判定'
+                : decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
             html += `<div class="overview-list-row" data-idx="${idx}">
                 <span class="list-row-num">#${idx + 1}</span>
                 <img class="list-row-thumb" src="${src}" alt="${fileName}" loading="lazy">
@@ -1763,7 +1854,7 @@ document.addEventListener('DOMContentLoaded', () => {
             btnSetSafe.classList.add('active-safe');
         } else if (currentData.user_decision === 'pending') {
             btnSetPending.classList.add('active-pending');
-        } else {
+        } else if (currentData.user_decision === 'unsafe') {
             btnSetUnsafe.classList.add('active-unsafe');
         }
     }
@@ -1800,16 +1891,19 @@ document.addEventListener('DOMContentLoaded', () => {
         let html = '';
 
         currentBatchResults.forEach((item, idx) => {
-            const decision = item.user_decision || 'private';
-            const isOverride = item.user_decision !== item.ai_decision;
+            const decisionInfo = getResultDecision(item);
+            const decision = decisionInfo.value;
+            const isOverride = Boolean(item.user_decision && item.ai_decision && item.user_decision !== item.ai_decision);
             if (decision === 'safe') safeC++;
-            else if (decision === 'pending') pendingC++;
+            else if (decision === 'pending' || !publicClassificationWasRun(item)) pendingC++;
             else unsafeC++;
 
             const fileName = item.file_name || item.file || `圖片 ${idx + 1}`;
             const currentClass = idx === currentIndex ? ' current' : '';
             const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
-            const badgeText = decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
+            const badgeText = !publicClassificationWasRun(item) && !item.user_decision
+                ? '未判定'
+                : decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
 
             html += `<div class="review-item${currentClass}" data-idx="${idx}">
                 <span class="review-item-index">#${idx + 1}</span>
@@ -2001,6 +2095,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 `最多 ${config.batch_upload_max_files} 張，單檔 ${config.batch_upload_max_file_mb}MB、合計 ${config.batch_upload_max_total_mb}MB 以內`;
             batchConcurrency.value = String(config.batch_upload_concurrency || 2);
             applyFaceClusterDefaults();
+            if (!config.face_clustering_enabled) {
+                batchRunFaces.checked = false;
+                batchRunFaces.disabled = true;
+            }
+            syncProcessingScope();
         } catch (e) {
             console.error("Failed to fetch config", e);
         }
@@ -2169,6 +2268,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const summaryPanel = document.getElementById('batch-metrics-summary');
         if (!summaryPanel) return;
         if (!currentBatchResults || currentBatchResults.length === 0) return;
+        if (!currentBatchResults.some(publicClassificationWasRun)) {
+            showToast('本次未執行可公開性判定，沒有判定指標', 'error');
+            return;
+        }
 
         const computed = computeFrontendMetrics(currentBatchResults);
         renderMetricsSummary(computed);

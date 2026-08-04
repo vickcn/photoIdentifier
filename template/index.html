@@ -12,7 +12,7 @@
         href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Inter:wght@400;500;600;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/lxgw-wenkai-tc@5.2.9/400.css">
-    <link rel="stylesheet" href="/static/app.css?v=20260801-photo-people">
+    <link rel="stylesheet" href="/static/app.css?v=20260804-processing-scope">
     <!-- Google API & Identity Services for Picker -->
     <script src="https://apis.google.com/js/api.js" async defer></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -44,6 +44,7 @@
                         <p>把照片拖進來，或點一下挑一張</p>
                         <span class="sub-text">JPG、PNG、WEBP 都可以，25MB 以內</span>
                     </div>
+                    <p class="single-mode-note">單張照片只做可公開性判定；人臉分群需要兩張以上照片，請使用「整場活動」。</p>
                     <button id="btn-add-memory-single" class="secondary-btn" style="width: 100%;">📝 加一點提醒</button>
                     <button id="analyze-single-btn" class="primary-btn" disabled>看看這張照片</button>
                 </div>
@@ -108,12 +109,27 @@
                             </div>
                         </div>
                     </div>
+
+                    <fieldset class="processing-scope" id="batch-processing-scope">
+                        <legend>這次要做什麼</legend>
+                        <div class="processing-scope-options">
+                            <label class="processing-option selected">
+                                <input type="checkbox" id="batch-run-public" checked>
+                                <span><strong>可公開性判定</strong><small>判斷照片是否適合分享</small></span>
+                            </label>
+                            <label class="processing-option selected">
+                                <input type="checkbox" id="batch-run-faces" checked>
+                                <span><strong>人臉分群</strong><small>將跨照片的同一人物整理在一起</small></span>
+                            </label>
+                        </div>
+                        <p class="processing-scope-hint" id="processing-scope-hint" role="status">兩項都會執行，可個別關閉。</p>
+                    </fieldset>
                     <div class="input-group row-group">
                         <label for="batch-concurrency">一次看幾張</label>
                         <input type="number" id="batch-concurrency" value="1" min="1" max="3">
                     </div>
 
-                    <div class="cluster-settings-panel">
+                    <div class="cluster-settings-panel" id="cluster-settings-panel">
                         <button class="cluster-settings-toggle" id="btn-toggle-cluster-settings" type="button">
                             <span>進階分群設定</span>
                             <span class="cluster-settings-summary" id="cluster-settings-summary">DBSCAN: eps 0.35, min_samples 2</span>
@@ -135,7 +151,7 @@
                     </div>
 
                     <!-- Color Rules Panel -->
-                    <div class="color-rules-panel">
+                    <div class="color-rules-panel" id="batch-public-settings-panel">
                         <button class="color-rules-toggle" id="btn-toggle-color-rules" onclick="window.__toggleColorRules()">
                             <span>帶子的顏色，代表什麼</span>
                             <span class="color-rules-arrow" id="color-rules-arrow">▼</span>
@@ -504,7 +520,7 @@
     <div id="toast" class="toast hidden"></div>
 
     <script src="/static/face_relationships.js?v=20260801-photo-people"></script>
-    <script src="/static/app.js?v=20260801-photo-people"></script>
+    <script src="/static/app.js?v=20260804-processing-scope"></script>
 </body>
 
 </html>

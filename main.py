@@ -105,6 +105,23 @@ def _read_face_cluster_params(raw_eps: Any, raw_min_samples: Any) -> tuple[float
     return eps, min_samples
 
 
+def _validate_processing_scope(run_public_classification: bool, run_face_clustering: bool) -> None:
+    if not run_public_classification and not run_face_clustering:
+        raise HTTPException(status_code=400, detail="至少選擇一項：可公開性判定或人臉分群")
+
+
+def _skip_session_face_clustering(session_id: str) -> dict[str, Any]:
+    session = _batch_sessions[session_id]
+    session["face_clusters"] = []
+    session["face_clustering"] = {
+        "available": False,
+        "reason": "not_requested",
+        "cluster_count": 0,
+        "message": "本次未執行人臉分群。",
+    }
+    return session["face_clustering"]
+
+
 def load_config() -> dict[str, Any]:
     config = {
         "max_upload_size_mb": DEFAULT_MAX_UPLOAD_SIZE_MB,
@@ -567,6 +584,8 @@ class BatchRequest(BaseModel):
     collaborative_memory: Optional[str] = None
     face_cluster_eps: float = DEFAULT_CLUSTER_EPS
     face_cluster_min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES
+    run_public_classification: bool = True
+    run_face_clustering: bool = True
 
 
 @app.post("/batch_upload_stream/")
@@ -579,7 +598,10 @@ async def batch_upload_stream(
     collaborative_memory: Optional[str] = Form(None),
     face_cluster_eps: float = Form(DEFAULT_CLUSTER_EPS),
     face_cluster_min_samples: int = Form(DEFAULT_CLUSTER_MIN_SAMPLES),
+    run_public_classification: bool = Form(True),
+    run_face_clustering: bool = Form(True),
 ):
+    _validate_processing_scope(run_public_classification, run_face_clustering)
     if concurrency < 1:
         raise HTTPException(status_code=400, detail="一次處理張數必須至少為 1")
     if IS_VERCEL and concurrency > 3:
@@ -591,10 +613,13 @@ async def batch_upload_stream(
         raise HTTPException(status_code=400, detail="顏色規則格式錯誤") from exc
     if color_rules is not None and not isinstance(color_rules, list):
         raise HTTPException(status_code=400, detail="顏色規則必須是陣列")
-    face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
-        face_cluster_eps,
-        face_cluster_min_samples,
-    )
+    if run_face_clustering:
+        face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
+            face_cluster_eps,
+            face_cluster_min_samples,
+        )
+    else:
+        face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
 
     current_session_id = session_id or str(uuid.uuid4())
     owner_id = _acquire_batch_slot(request, current_session_id)
@@ -621,6 +646,8 @@ async def batch_upload_stream(
             "concurrency": concurrency,
             "face_cluster_eps": face_cluster_eps,
             "face_cluster_min_samples": face_cluster_min_samples,
+            "run_public_classification": run_public_classification,
+            "run_face_clustering": run_face_clustering,
         },
         "completed": False,
     }
@@ -633,6 +660,7 @@ async def batch_upload_stream(
                 concurrency=concurrency,
                 color_rules=color_rules,
                 collaborative_memory=collaborative_memory,
+                evaluate_public=run_public_classification,
             ):
                 if chunk.get("status") == "ok":
                     _batch_sessions[current_session_id]["results"].append(chunk)
@@ -641,7 +669,11 @@ async def batch_upload_stream(
 
             _batch_sessions[current_session_id]["end_time"] = datetime.now().isoformat()
             _batch_sessions[current_session_id]["completed"] = True
-            face_clustering = await _classify_session_faces(current_session_id)
+            face_clustering = (
+                await _classify_session_faces(current_session_id)
+                if run_face_clustering
+                else _skip_session_face_clustering(current_session_id)
+            )
             await _persist_session_update(
                 current_session_id,
                 {
@@ -683,16 +715,20 @@ async def batch_upload_stream(
 
 @app.post("/batch/")
 async def batch_visualize(req: BatchRequest, request: Request):
+    _validate_processing_scope(req.run_public_classification, req.run_face_clustering)
     input_path = Path(req.input_folder)
     if not input_path.exists() or not input_path.is_dir():
         raise HTTPException(status_code=400, detail=f"資料夾不存在：{req.input_folder}")
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     temp_folder = str(input_path / f"review_temp_{ts}")
-    face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
-        req.face_cluster_eps,
-        req.face_cluster_min_samples,
-    )
+    if req.run_face_clustering:
+        face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
+            req.face_cluster_eps,
+            req.face_cluster_min_samples,
+        )
+    else:
+        face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
 
     # 生成或使用提供的 session_id
     session_id = req.session_id or str(uuid.uuid4())
@@ -712,6 +748,8 @@ async def batch_visualize(req: BatchRequest, request: Request):
             "concurrency": req.concurrency,
             "face_cluster_eps": face_cluster_eps,
             "face_cluster_min_samples": face_cluster_min_samples,
+            "run_public_classification": req.run_public_classification,
+            "run_face_clustering": req.run_face_clustering,
         },
         "completed": False
     }
@@ -724,6 +762,7 @@ async def batch_visualize(req: BatchRequest, request: Request):
             concurrency=req.concurrency,
             color_rules=req.color_rules,
             collaborative_memory=req.collaborative_memory,
+            evaluate_public=req.run_public_classification,
         )
         ok = [r for r in results if r["status"] == "ok"]
         err = [r for r in results if r["status"] == "error"]
@@ -735,7 +774,11 @@ async def batch_visualize(req: BatchRequest, request: Request):
                 await _persist_photo_result(session_id, owner_id, result)
         _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
         _batch_sessions[session_id]["completed"] = True
-        face_clustering = await _classify_session_faces(session_id)
+        face_clustering = (
+            await _classify_session_faces(session_id)
+            if req.run_face_clustering
+            else _skip_session_face_clustering(session_id)
+        )
         await _persist_session_update(
             session_id,
             {
@@ -781,31 +824,57 @@ class DriveBatchRequest(BaseModel):
     collaborative_memory: Optional[str] = None
     face_cluster_eps: float = DEFAULT_CLUSTER_EPS
     face_cluster_min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES
+    run_public_classification: bool = True
+    run_face_clustering: bool = True
 
 @app.post("/batch_drive/")
 async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
     """雲端硬碟批量處理入口 (舊 - 一次性回傳)"""
+    _validate_processing_scope(req.run_public_classification, req.run_face_clustering)
     user_key = request.session.get("user_key")
     if not user_key:
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
     
     try:
         creds = get_drive_credentials(request)
+        if req.run_face_clustering:
+            face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
+                req.face_cluster_eps,
+                req.face_cluster_min_samples,
+            )
+        else:
+            face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
         results = await batch_process_drive(
             folder_id=req.folder_id,
             credentials=creds,
             target_folder_id=req.target_folder_id,
-            concurrency=req.concurrency
+            concurrency=req.concurrency,
+            evaluate_public=req.run_public_classification,
         )
         
         success_count = sum(1 for r in results if r.get("status") == "ok")
         failed_count = len(results) - success_count
+        if req.run_face_clustering and FACE_CLUSTERING_ENABLED:
+            face_clusters = await cluster_batch_results(
+                results,
+                eps=face_cluster_eps,
+                min_samples=face_cluster_min_samples,
+            )
+            face_clustering = {"available": True, "cluster_count": len(face_clusters)}
+        elif req.run_face_clustering:
+            face_clusters = []
+            face_clustering = {"available": False, "reason": "disabled", "cluster_count": 0}
+        else:
+            face_clusters = []
+            face_clustering = {"available": False, "reason": "not_requested", "cluster_count": 0}
         
         return {
             "status": "success",
             "results": results,
             "success": success_count,
-            "failed": failed_count
+            "failed": failed_count,
+            "face_clustering": face_clustering,
+            "face_clusters": face_clusters,
         }
     except Exception as e:
         logger.exception("Drive batch error: %s", e)
@@ -816,21 +885,25 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
 @app.post("/batch_drive_stream/")
 async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request):
     """雲端硬碟批量處理入口 (新 - 串流即時回傳進度)"""
+    _validate_processing_scope(req.run_public_classification, req.run_face_clustering)
     user_key = request.session.get("user_key")
     if not user_key:
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
 
     try:
         creds = get_drive_credentials(request)
-        face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
-            req.face_cluster_eps,
-            req.face_cluster_min_samples,
-        )
+        if req.run_face_clustering:
+            face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
+                req.face_cluster_eps,
+                req.face_cluster_min_samples,
+            )
+        else:
+            face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
 
         # 1. 獲取協作記憶：優先使用請求提供的，再從遠端讀取
         collaborative_memory = req.collaborative_memory
 
-        if not collaborative_memory:
+        if not collaborative_memory and req.run_public_classification:
             # 嘗試從 Google Drive 讀取
             try:
                 from googleapiclient.discovery import build
@@ -872,6 +945,8 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                 "concurrency": req.concurrency,
                 "face_cluster_eps": face_cluster_eps,
                 "face_cluster_min_samples": face_cluster_min_samples,
+                "run_public_classification": req.run_public_classification,
+                "run_face_clustering": req.run_face_clustering,
             },
             "completed": False
         }
@@ -887,6 +962,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                     concurrency=req.concurrency,
                     color_rules=req.color_rules,
                     collaborative_memory=collaborative_memory,
+                    evaluate_public=req.run_public_classification,
                 ):
                     # 儲存結果到 session
                     if chunk.get("status") == "ok":
@@ -900,7 +976,11 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                 # 標記完成
                 _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
                 _batch_sessions[session_id]["completed"] = True
-                face_clustering = await _classify_session_faces(session_id)
+                face_clustering = (
+                    await _classify_session_faces(session_id)
+                    if req.run_face_clustering
+                    else _skip_session_face_clustering(session_id)
+                )
                 await _persist_session_update(
                     session_id,
                     {

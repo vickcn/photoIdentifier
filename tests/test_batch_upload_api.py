@@ -191,6 +191,94 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(events[-1]["face_clustering"]["eps"], 0.42)
         self.assertEqual(events[-1]["face_clustering"]["min_samples"], 3)
 
+    def test_batch_upload_can_run_face_clustering_without_public_classification(self):
+        classify_calls = []
+
+        async def fake_batch_stream(images, **kwargs):
+            self.assertFalse(kwargs["evaluate_public"])
+            yield {
+                "status": "ok",
+                "file_name": images[0].filename,
+                "total": 1,
+                "index": 1,
+                "result": {
+                    "moderation_status": "pending",
+                    "is_safe_for_public": False,
+                    "public_classification_performed": False,
+                },
+                "original_image_b64": "b3JpZ2luYWw=",
+                "drawn_image_b64": "b3JpZ2luYWw=",
+            }
+
+        async def fake_classify_session_faces(session_id):
+            classify_calls.append(session_id)
+            main._batch_sessions[session_id]["face_clusters"] = []
+            return {"available": True, "cluster_count": 0}
+
+        with (
+            patch.object(main, "batch_process_uploads_stream", fake_batch_stream),
+            patch.object(main, "_classify_session_faces", fake_classify_session_faces),
+        ):
+            response = self.client.post(
+                "/batch_upload_stream/",
+                files=[("files", ("one.jpg", b"one", "image/jpeg"))],
+                data={
+                    "session_id": "upload-test",
+                    "run_public_classification": "false",
+                    "run_face_clustering": "true",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(classify_calls, ["upload-test"])
+        self.assertFalse(main._batch_sessions["upload-test"]["processing_info"]["run_public_classification"])
+
+    def test_batch_upload_can_run_public_classification_without_face_clustering(self):
+        async def fake_batch_stream(images, **kwargs):
+            self.assertTrue(kwargs["evaluate_public"])
+            yield {
+                "status": "ok",
+                "file_name": images[0].filename,
+                "total": 1,
+                "index": 1,
+                "result": {"moderation_status": "public", "is_safe_for_public": True},
+                "original_image_b64": "b3JpZ2luYWw=",
+                "drawn_image_b64": "ZHJhd24=",
+            }
+
+        with (
+            patch.object(main, "batch_process_uploads_stream", fake_batch_stream),
+            patch.object(main, "_classify_session_faces") as classify,
+        ):
+            response = self.client.post(
+                "/batch_upload_stream/",
+                files=[("files", ("one.jpg", b"one", "image/jpeg"))],
+                data={
+                    "session_id": "upload-test",
+                    "run_public_classification": "true",
+                    "run_face_clustering": "false",
+                },
+            )
+
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(response.status_code, 200)
+        classify.assert_not_called()
+        self.assertEqual(events[-1]["face_clustering"]["reason"], "not_requested")
+        self.assertEqual(events[-1]["face_clusters"], [])
+
+    def test_batch_upload_requires_at_least_one_processing_feature(self):
+        response = self.client.post(
+            "/batch_upload_stream/",
+            files=[("files", ("one.jpg", b"one", "image/jpeg"))],
+            data={
+                "run_public_classification": "false",
+                "run_face_clustering": "false",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("至少選擇一項", response.json()["detail"])
+
     def test_vercel_deployment_defaults_face_clustering_on(self):
         vercel_config = json.loads((Path(__file__).parents[1] / "vercel.json").read_text(encoding="utf-8"))
 

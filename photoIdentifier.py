@@ -43,7 +43,13 @@ def resize_image_if_needed(image_bytes: bytes, max_size: int = 1600) -> bytes:
     img.save(out, format="JPEG", quality=85)
     return out.getvalue()
 
-async def process_and_visualize_photo(image_bytes: bytes, content_type: str = "image/jpeg", color_rules: list | None = None, collaborative_memory: str | None = None) -> Tuple[PhotoAnalysisResult, bytes]:
+async def process_and_visualize_photo(
+    image_bytes: bytes,
+    content_type: str = "image/jpeg",
+    color_rules: list | None = None,
+    collaborative_memory: str | None = None,
+    evaluate_public: bool = True,
+) -> Tuple[PhotoAnalysisResult, bytes]:
     """
     整合 google_usage 跟 aoi 模組：
     1. 縮圖處理（防止 HTTP 400 並加速）
@@ -51,6 +57,21 @@ async def process_and_visualize_photo(image_bytes: bytes, content_type: str = "i
     3. 解析出 bbox 座標後，將邊界框畫上圖片
     """
     processed_image_bytes = await asyncio.to_thread(resize_image_if_needed, image_bytes)
+    if not evaluate_public:
+        return PhotoAnalysisResult(
+            has_face=False,
+            face_bboxes=[],
+            face_confidences=[],
+            has_brand_strap=False,
+            strap_bboxes=[],
+            strap_confidences=[],
+            strap_color=None,
+            is_safe_for_public=False,
+            moderation_status="pending",
+            moderation_reason="未執行可公開性判定",
+            public_classification_performed=False,
+        ), processed_image_bytes
+
     b64_image = base64.b64encode(processed_image_bytes).decode('utf-8')
     local_face_bboxes = await detect_normalized_bboxes(
         processed_image_bytes,
@@ -82,6 +103,7 @@ async def batch_process_folder(
     concurrency: int = 3,
     color_rules: list | None = None,
     collaborative_memory: str | None = None,
+    evaluate_public: bool = True,
 ) -> list[dict]:
     """
     批量掃描資料夾內所有圖檔，並行辨識後將後製圖存至 output_dir
@@ -102,7 +124,13 @@ async def batch_process_folder(
             try:
                 image_bytes = file.read_bytes()
                 mime_type = mimetypes.guess_type(str(file))[0] or "image/jpeg"
-                result, drawn_bytes = await process_and_visualize_photo(image_bytes, mime_type, color_rules=color_rules, collaborative_memory=collaborative_memory)
+                result, drawn_bytes = await process_and_visualize_photo(
+                    image_bytes,
+                    mime_type,
+                    color_rules=color_rules,
+                    collaborative_memory=collaborative_memory,
+                    evaluate_public=evaluate_public,
+                )
                 out_file = output_path / f"annotated_{file.name}"
                 out_file.write_bytes(drawn_bytes)
 
@@ -119,6 +147,7 @@ async def batch_process_folder(
                     "is_safe_for_public": result.is_safe_for_public,
                     "moderation_status": result.moderation_status,
                     "moderation_reason": result.moderation_reason,
+                    "public_classification_performed": result.public_classification_performed,
                     "ai_decision": ai_decision,
                     "status": "ok",
                 }
@@ -135,6 +164,7 @@ async def batch_process_uploads_stream(
     concurrency: int = 3,
     color_rules: list | None = None,
     collaborative_memory: str | None = None,
+    evaluate_public: bool = True,
 ):
     """辨識已驗證的上傳圖片，依完成順序逐筆回傳 NDJSON 所需資料。"""
     semaphore = asyncio.Semaphore(concurrency)
@@ -147,6 +177,7 @@ async def batch_process_uploads_stream(
                     image.content_type,
                     color_rules=color_rules,
                     collaborative_memory=collaborative_memory,
+                    evaluate_public=evaluate_public,
                 )
                 return {
                     "status": "ok",
@@ -171,6 +202,7 @@ async def batch_process_drive(
     target_folder_id: Optional[str] = None,
     concurrency: int = 3,
     collaborative_memory: str | None = None,
+    evaluate_public: bool = True,
 ) -> List[dict]:
     """
     從 Google Drive 批量取得圖片、辨識並回傳結果。
@@ -186,7 +218,7 @@ async def batch_process_drive(
     safe_target_id = None
     unsafe_target_id = None
 
-    if target_folder_id:
+    if target_folder_id and evaluate_public:
         def get_or_create_subfolder(name: str, parent_id: str):
             q = f"name = '{name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
             res = drive_service.files().list(q=q, fields="files(id)").execute()
@@ -243,11 +275,17 @@ async def batch_process_drive(
                     image_bytes = resp.content
                 
                 # 4. 辨識與標註
-                result, drawn_bytes = await process_and_visualize_photo(image_bytes, mime_type)
+                result, drawn_bytes = await process_and_visualize_photo(
+                    image_bytes,
+                    mime_type,
+                    evaluate_public=evaluate_public,
+                )
                 
                 output_link = None
                 # 5. 上傳歸檔
-                final_parent_id = safe_target_id if result.is_safe_for_public else unsafe_target_id
+                final_parent_id = (
+                    safe_target_id if result.is_safe_for_public else unsafe_target_id
+                ) if evaluate_public else None
                 
                 if final_parent_id:
                     def upload():
@@ -293,6 +331,8 @@ async def batch_process_drive(
                     "is_safe_for_public": result.is_safe_for_public,
                     "moderation_status": result.moderation_status,
                     "moderation_reason": result.moderation_reason,
+                    "public_classification_performed": result.public_classification_performed,
+                    "original_image_b64": base64.b64encode(image_bytes).decode('utf-8'),
                     "ai_decision": ai_decision,
                     "status": "ok",
                 }
@@ -304,7 +344,15 @@ async def batch_process_drive(
     results = await asyncio.gather(*tasks)
     return results
 
-async def batch_process_drive_stream(folder_id: str, credentials, target_folder_id: str = None, concurrency: int = 3, color_rules: list | None = None, collaborative_memory: str | None = None):
+async def batch_process_drive_stream(
+    folder_id: str,
+    credentials,
+    target_folder_id: str = None,
+    concurrency: int = 3,
+    color_rules: list | None = None,
+    collaborative_memory: str | None = None,
+    evaluate_public: bool = True,
+):
     """
     與 batch_process_drive 類似，但這是一個 Async Generator，會逐一 yield 每張圖的結果。
     用於實現即時進度條推送。
@@ -364,7 +412,13 @@ async def batch_process_drive_stream(folder_id: str, credentials, target_folder_
 
                 # 辨識 (使用 config.json 中設定的 timeout，防止 AI API 掛住)
                 analysis, drawn_bytes = await asyncio.wait_for(
-                    process_and_visualize_photo(image_bytes, mime_type, color_rules=color_rules, collaborative_memory=collaborative_memory),
+                    process_and_visualize_photo(
+                        image_bytes,
+                        mime_type,
+                        color_rules=color_rules,
+                        collaborative_memory=collaborative_memory,
+                        evaluate_public=evaluate_public,
+                    ),
                     timeout=float(REQUEST_TIMEOUT)
                 )
 

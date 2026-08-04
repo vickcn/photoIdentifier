@@ -6,6 +6,26 @@ from src.google_usage import PhotoAnalysisResult
 
 
 class PhotoProcessingThreadpoolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_process_without_public_classification_skips_analysis_services(self):
+        with (
+            patch.object(photoIdentifier, "resize_image_if_needed", return_value=b"processed"),
+            patch.object(photoIdentifier, "detect_normalized_bboxes") as detect,
+            patch.object(photoIdentifier, "analyze_brand_strap_image") as analyze,
+            patch.object(photoIdentifier, "draw_bboxes_on_image") as draw,
+        ):
+            result, drawn_bytes = await photoIdentifier.process_and_visualize_photo(
+                b"original",
+                evaluate_public=False,
+            )
+
+        self.assertFalse(result.public_classification_performed)
+        self.assertEqual(result.moderation_status, "pending")
+        self.assertEqual(result.moderation_reason, "未執行可公開性判定")
+        self.assertEqual(drawn_bytes, b"processed")
+        detect.assert_not_called()
+        analyze.assert_not_called()
+        draw.assert_not_called()
+
     async def test_process_and_visualize_photo_offloads_blocking_image_work(self):
         calls = []
 

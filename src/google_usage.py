@@ -106,6 +106,7 @@ class PhotoAnalysisResult(BaseModel):
     is_safe_for_public: bool
     moderation_status: Literal["public", "private", "pending"] = "public"
     moderation_reason: str
+    public_classification_performed: bool = True
 
 
 def map_google_api_error_to_http(status_code: int, error_text: str) -> HTTPException:
