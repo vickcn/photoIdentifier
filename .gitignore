@@ -27,6 +27,7 @@ MANIFEST
 **.secr
 **.secr**
 data*/
+scripts
 # PyInstaller
 *.manifest
 *.spec
@@ -217,6 +218,8 @@ report_20250902*
 
 *tmp*
 
+**firestore-key.json
+
 !template
 
 # Versioned regression tests and implementation plan for upload batches
@@ -227,8 +230,6 @@ report_20250902*
 !tests/test_face_workspace.py
 !tests/test_face_workspace_api.py
 !tests/face_relationships.test.js
-!issues/
-!issues/issue3.md
 !config.json
 !requirements.txt
 # Next.js & Node

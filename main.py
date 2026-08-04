@@ -28,19 +28,20 @@ from src.insight_api_client import (
     cluster_batch_results,
     detect_normalized_bboxes,
 )
+from src.batch_state_store import create_batch_state_store
 
 DEFAULT_MAX_UPLOAD_SIZE_MB = 25
 DEFAULT_BATCH_UPLOAD_MAX_FILES = 3
 DEFAULT_BATCH_UPLOAD_MAX_FILE_MB = 2
 DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 4
-DEFAULT_BATCH_UPLOAD_CONCURRENCY = 2
+DEFAULT_BATCH_UPLOAD_CONCURRENCY = 1
 DEFAULT_BATCH_DOWNLOAD_MAX_MB = 8
 DEFAULT_FACE_CLUSTERING_ENABLED = True
 FACE_CLUSTER_EPS_MIN = 0.05
 FACE_CLUSTER_EPS_MAX = 1.5
 IS_VERCEL = os.getenv("VERCEL") == "1"
 CONFIG_BATCH_UPLOAD_MAX_FILES_CAP = 20 if IS_VERCEL else None
-CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP = 10 if IS_VERCEL else None
+CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP = 3 if IS_VERCEL else None
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 
@@ -203,6 +204,7 @@ from src.upload_batch import read_upload_batch
 # Session storage for batch operations
 _batch_sessions: dict[str, dict] = {}
 _active_batch_owners: dict[str, str] = {}
+batch_state_store = create_batch_state_store()
 
 
 def _get_client_id(request: Request) -> str:
@@ -245,6 +247,46 @@ def _owned_batch_session(request: Request, session_id: str) -> dict[str, Any]:
     return session
 
 
+async def _owned_batch_session_async(request: Request, session_id: str) -> dict[str, Any]:
+    owner_id = _get_client_id(request)
+    session = _batch_sessions.get(session_id)
+    if session is not None and session.get("owner_id") == owner_id:
+        return session
+    if batch_state_store.enabled:
+        stored_session = await batch_state_store.get_session(owner_id, session_id)
+        if stored_session is not None:
+            _batch_sessions[session_id] = stored_session
+            return stored_session
+    raise HTTPException(status_code=404, detail="找不到這場活動的辨識紀錄")
+
+
+async def _persist_session_created(session: dict[str, Any]) -> None:
+    if not batch_state_store.enabled:
+        return
+    try:
+        await batch_state_store.create_session(session)
+    except Exception:
+        logger.exception("Failed to persist batch session=%s", session.get("session_id"))
+
+
+async def _persist_photo_result(session_id: str, owner_id: str, result: dict[str, Any]) -> None:
+    if not batch_state_store.enabled:
+        return
+    try:
+        await batch_state_store.add_photo_result(session_id, owner_id, result)
+    except Exception:
+        logger.exception("Failed to persist photo result session=%s", session_id)
+
+
+async def _persist_session_update(session_id: str, updates: dict[str, Any]) -> None:
+    if not batch_state_store.enabled:
+        return
+    try:
+        await batch_state_store.update_session(session_id, updates)
+    except Exception:
+        logger.exception("Failed to persist batch session update=%s", session_id)
+
+
 async def _classify_session_faces(session_id: str) -> dict[str, Any]:
     session = _batch_sessions[session_id]
     if not FACE_CLUSTERING_ENABLED:
@@ -262,6 +304,11 @@ async def _classify_session_faces(session_id: str) -> dict[str, Any]:
         min_samples = int(processing_info.get("face_cluster_min_samples", DEFAULT_CLUSTER_MIN_SAMPLES))
         clusters = await cluster_batch_results(session.get("results", []), eps=eps, min_samples=min_samples)
         session["face_clusters"] = clusters
+        if batch_state_store.enabled:
+            try:
+                await batch_state_store.save_face_clusters(session_id, session["owner_id"], clusters)
+            except Exception:
+                logger.exception("Failed to persist face clusters session=%s", session_id)
         session["face_clustering"] = {
             "available": True,
             "cluster_count": len(clusters),
@@ -535,8 +582,8 @@ async def batch_upload_stream(
 ):
     if concurrency < 1:
         raise HTTPException(status_code=400, detail="一次處理張數必須至少為 1")
-    if IS_VERCEL and concurrency > 10:
-        raise HTTPException(status_code=400, detail="Vercel 環境下一次處理張數必須介於 1 到 10")
+    if IS_VERCEL and concurrency > 3:
+        raise HTTPException(status_code=400, detail="Vercel 環境下一次處理張數必須介於 1 到 3")
 
     try:
         color_rules = json.loads(color_rules_json) if color_rules_json else None
@@ -577,6 +624,7 @@ async def batch_upload_stream(
         },
         "completed": False,
     }
+    await _persist_session_created(_batch_sessions[current_session_id])
 
     async def event_generator():
         try:
@@ -588,11 +636,21 @@ async def batch_upload_stream(
             ):
                 if chunk.get("status") == "ok":
                     _batch_sessions[current_session_id]["results"].append(chunk)
+                    await _persist_photo_result(current_session_id, owner_id, chunk)
                 yield json.dumps({**chunk, "session_id": current_session_id}, ensure_ascii=False) + "\n"
 
             _batch_sessions[current_session_id]["end_time"] = datetime.now().isoformat()
             _batch_sessions[current_session_id]["completed"] = True
             face_clustering = await _classify_session_faces(current_session_id)
+            await _persist_session_update(
+                current_session_id,
+                {
+                    "status": "completed",
+                    "completed_at": _batch_sessions[current_session_id]["end_time"],
+                    "result_count": len(_batch_sessions[current_session_id]["results"]),
+                    "face_clustering": face_clustering,
+                },
+            )
             yield json.dumps(
                 {
                     "status": "completed",
@@ -605,6 +663,14 @@ async def batch_upload_stream(
             ) + "\n"
         except Exception as exc:
             _batch_sessions[current_session_id]["end_time"] = datetime.now().isoformat()
+            await _persist_session_update(
+                current_session_id,
+                {
+                    "status": "failed",
+                    "completed_at": _batch_sessions[current_session_id]["end_time"],
+                    "error_message": "批次處理中斷",
+                },
+            )
             logger.exception("Upload batch stream error: %s", exc)
             yield json.dumps(
                 {"status": "error", "session_id": current_session_id, "error": "批次處理中斷"},
@@ -649,6 +715,7 @@ async def batch_visualize(req: BatchRequest, request: Request):
         },
         "completed": False
     }
+    await _persist_session_created(_batch_sessions[session_id])
 
     try:
         results = await batch_process_folder(
@@ -663,9 +730,21 @@ async def batch_visualize(req: BatchRequest, request: Request):
 
         # 儲存結果到 session
         _batch_sessions[session_id]["results"] = results
+        for result in results:
+            if result.get("status") == "ok":
+                await _persist_photo_result(session_id, owner_id, result)
         _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
         _batch_sessions[session_id]["completed"] = True
         face_clustering = await _classify_session_faces(session_id)
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "completed",
+                "completed_at": _batch_sessions[session_id]["end_time"],
+                "result_count": len(results),
+                "face_clustering": face_clustering,
+            },
+        )
 
         return {
             "session_id": session_id,
@@ -680,6 +759,14 @@ async def batch_visualize(req: BatchRequest, request: Request):
     except Exception as e:
         logger.exception("Batch processing error: %s", e)
         _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "failed",
+                "completed_at": _batch_sessions[session_id]["end_time"],
+                "error_message": "批量辨識失敗",
+            },
+        )
         raise HTTPException(status_code=500, detail="批量辨識失敗") from e
     finally:
         _release_batch_slot(owner_id, session_id)
@@ -788,6 +875,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
             },
             "completed": False
         }
+        await _persist_session_created(_batch_sessions[session_id])
 
         async def event_generator():
             try:
@@ -803,6 +891,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                     # 儲存結果到 session
                     if chunk.get("status") == "ok":
                         _batch_sessions[session_id]["results"].append(chunk)
+                        await _persist_photo_result(session_id, owner_id, chunk)
 
                     # 每一筆結果都轉成 JSON 並加上換行符號推播出去
                     chunk_with_session = {**chunk, "session_id": session_id}
@@ -812,6 +901,15 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                 _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
                 _batch_sessions[session_id]["completed"] = True
                 face_clustering = await _classify_session_faces(session_id)
+                await _persist_session_update(
+                    session_id,
+                    {
+                        "status": "completed",
+                        "completed_at": _batch_sessions[session_id]["end_time"],
+                        "result_count": len(_batch_sessions[session_id]["results"]),
+                        "face_clustering": face_clustering,
+                    },
+                )
                 yield json.dumps({
                     "status": "completed",
                     "session_id": session_id,
@@ -822,6 +920,14 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
 
             except Exception as inner_e:
                 _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
+                await _persist_session_update(
+                    session_id,
+                    {
+                        "status": "failed",
+                        "completed_at": _batch_sessions[session_id]["end_time"],
+                        "error_message": f"串流中斷: {str(inner_e)}",
+                    },
+                )
                 yield json.dumps({"status": "error", "error": f"串流中斷: {str(inner_e)}"}, ensure_ascii=False) + "\n"
             finally:
                 _release_batch_slot(owner_id, session_id)
@@ -1125,7 +1231,7 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
     if not session_id or not target_folder_id:
         raise HTTPException(status_code=400, detail="session_id 與 Google 雲端輸出區不可留白")
 
-    session = _owned_batch_session(request, session_id)
+    session = await _owned_batch_session_async(request, session_id)
     if session.get("batch_mode") != "drive":
         raise HTTPException(status_code=400, detail="只有 Google 雲端批次可以備份到輸出區")
     if req.document.get("session_id") != session_id:
@@ -1149,7 +1255,33 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
         raise
     except Exception as exc:
         logger.exception("Drive relationship export failed session=%s", session_id)
+        if batch_state_store.enabled:
+            try:
+                await batch_state_store.create_export_record(
+                    session_id,
+                    session["owner_id"],
+                    "drive",
+                    file_name,
+                    "failed",
+                    {"target_folder_id": target_folder_id, "error": str(exc)},
+                )
+            except Exception:
+                logger.exception("Failed to persist failed export metadata session=%s", session_id)
         raise HTTPException(status_code=500, detail=f"無法將 JSON 備份到 Google 雲端：{exc}") from exc
+
+    if batch_state_store.enabled:
+        try:
+            await batch_state_store.save_photo_assignments(session_id, session["owner_id"], req.document)
+            await batch_state_store.create_export_record(
+                session_id,
+                session["owner_id"],
+                "drive",
+                saved.get("name") or file_name,
+                "created",
+                {"target_folder_id": target_folder_id, "file_id": saved.get("id")},
+            )
+        except Exception:
+            logger.exception("Failed to persist Drive export metadata session=%s", session_id)
 
     return {
         "status": "created",
@@ -1160,13 +1292,13 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
 
 @app.get("/face_clusters/{session_id}")
 async def get_face_clusters(session_id: str, request: Request):
-    session = _owned_batch_session(request, session_id)
+    session = await _owned_batch_session_async(request, session_id)
     return {"session_id": session_id, "clusters": session.get("face_clusters", [])}
 
 
 @app.patch("/face_clusters/{session_id}/{cluster_id}")
 async def update_face_cluster(session_id: str, cluster_id: str, req: FaceClusterUpdateRequest, request: Request):
-    session = _owned_batch_session(request, session_id)
+    session = await _owned_batch_session_async(request, session_id)
 
     cluster = next(
         (item for item in session.get("face_clusters", []) if item.get("cluster_id") == cluster_id),
@@ -1181,6 +1313,15 @@ async def update_face_cluster(session_id: str, cluster_id: str, req: FaceCluster
     if "notes" in updates:
         updates["notes"] = updates["notes"].strip()
     cluster.update(updates)
+    if batch_state_store.enabled:
+        stored_cluster = await batch_state_store.update_face_cluster(
+            session_id,
+            session["owner_id"],
+            cluster_id,
+            updates,
+        )
+        if stored_cluster is not None:
+            cluster = stored_cluster
     return {"session_id": session_id, "cluster": cluster}
 
 
@@ -1188,7 +1329,7 @@ async def update_face_cluster(session_id: str, cluster_id: str, req: FaceCluster
 async def get_batch_summary(req: BatchSummaryRequest, request: Request):
     """獲取批次處理的綜合指標與混淆矩陣"""
     session_id = req.session_id
-    session_data = _owned_batch_session(request, session_id)
+    session_data = await _owned_batch_session_async(request, session_id)
     results = session_data.get("results", [])
 
     if not results:
@@ -1219,7 +1360,7 @@ async def get_batch_summary(req: BatchSummaryRequest, request: Request):
 async def export_batch_summary(req: BatchSummaryRequest, request: Request):
     """匯出批次指標為 JSON 格式"""
     session_id = req.session_id
-    session_data = _owned_batch_session(request, session_id)
+    session_data = await _owned_batch_session_async(request, session_id)
     results = session_data.get("results", [])
 
     if not results:
@@ -1251,6 +1392,21 @@ async def list_batch_sessions(request: Request):
     """列出所有活躍的批次會話"""
     sessions = []
     owner_id = _get_client_id(request)
+    if batch_state_store.enabled:
+        stored_sessions = await batch_state_store.list_sessions(owner_id)
+        if stored_sessions:
+            return {
+                "sessions": [
+                    {
+                        "session_id": item.get("session_id"),
+                        "batch_mode": item.get("batch_mode"),
+                        "start_time": item.get("created_at"),
+                        "result_count": item.get("result_count", 0),
+                        "status": item.get("status", "processing"),
+                    }
+                    for item in stored_sessions
+                ]
+            }
     for session_id, session_data in _batch_sessions.items():
         if session_data.get("owner_id") != owner_id:
             continue

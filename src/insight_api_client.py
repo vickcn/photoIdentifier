@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 from collections.abc import Sequence
 from pathlib import Path
@@ -11,6 +12,7 @@ from PIL import Image
 
 DEFAULT_CLUSTER_EPS = 0.35
 DEFAULT_CLUSTER_MIN_SAMPLES = 2
+logger = logging.getLogger(__name__)
 
 
 class InsightApiClient:
@@ -45,7 +47,17 @@ class InsightApiClient:
         timeout = httpx.Timeout(connect=10, read=300, write=300, pool=10)
         async with httpx.AsyncClient(base_url=self.base_url, headers=headers, timeout=timeout) as client:
             response = await client.post(path, **kwargs)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                body = response.text[:500]
+                logger.warning(
+                    "Insight API failed path=%s status=%s body=%s",
+                    path,
+                    response.status_code,
+                    body,
+                )
+                raise RuntimeError(f"Insight API HTTP {response.status_code}: {body}") from exc
             return response.json()
 
 

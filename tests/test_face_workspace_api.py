@@ -7,6 +7,63 @@ from fastapi.testclient import TestClient
 import main
 
 
+class FakeBatchStateStore:
+    enabled = True
+
+    def __init__(self):
+        self.updated_clusters = []
+
+    async def get_session(self, owner_id, session_id):
+        if owner_id != "owner-a" or session_id != "stored-session":
+            return None
+        return {
+            "session_id": "stored-session",
+            "owner_id": "owner-a",
+            "batch_mode": "drive",
+            "status": "completed",
+            "result_count": 1,
+            "face_clusters": [
+                {
+                    "cluster_id": "cluster_001",
+                    "display_name": "人物 001",
+                    "status": "unconfirmed",
+                    "face_count": 1,
+                    "photo_count": 1,
+                    "evidence_photos": [],
+                    "notes": "",
+                }
+            ],
+            "results": [],
+        }
+
+    async def update_face_cluster(self, session_id, owner_id, cluster_id, updates):
+        self.updated_clusters.append((session_id, owner_id, cluster_id, updates))
+        return {
+            "cluster_id": cluster_id,
+            "session_id": session_id,
+            "owner_id": owner_id,
+            "display_name": updates.get("display_name", "人物 001"),
+            "status": updates.get("status", "unconfirmed"),
+            "notes": updates.get("notes", ""),
+            "face_count": 1,
+            "photo_count": 1,
+            "evidence_photos": [],
+        }
+
+    async def list_sessions(self, owner_id):
+        if owner_id != "owner-a":
+            return []
+        return [
+            {
+                "session_id": "stored-session",
+                "batch_mode": "drive",
+                "created_at": "2026-08-01T00:00:00+00:00",
+                "result_count": 1,
+                "status": "completed",
+            }
+        ]
+
+
 class FaceWorkspaceApiTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
@@ -28,6 +85,7 @@ class FaceWorkspaceApiTests(unittest.TestCase):
 
     def tearDown(self):
         main._batch_sessions.pop("face-workspace-test", None)
+        main._batch_sessions.pop("stored-session", None)
 
     def test_returns_face_clusters_for_batch_session(self):
         with patch.object(main, "_get_client_id", return_value="owner-a"):
@@ -194,6 +252,45 @@ class FaceWorkspaceApiTests(unittest.TestCase):
             save.call_args.args[3],
             json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8"),
         )
+
+    def test_returns_face_clusters_from_persistent_store_when_memory_misses(self):
+        store = FakeBatchStateStore()
+        with (
+            patch.object(main, "batch_state_store", store),
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+        ):
+            response = self.client.get("/face_clusters/stored-session")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["clusters"][0]["cluster_id"], "cluster_001")
+
+    def test_updates_face_cluster_in_persistent_store_when_memory_was_rehydrated(self):
+        store = FakeBatchStateStore()
+        main._batch_sessions.pop("stored-session", None)
+        with (
+            patch.object(main, "batch_state_store", store),
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+        ):
+            response = self.client.patch(
+                "/face_clusters/stored-session/cluster_001",
+                json={"display_name": "王小明"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["cluster"]["display_name"], "王小明")
+        self.assertEqual(store.updated_clusters[0][0], "stored-session")
+        main._batch_sessions.pop("stored-session", None)
+
+    def test_lists_sessions_from_persistent_store(self):
+        store = FakeBatchStateStore()
+        with (
+            patch.object(main, "batch_state_store", store),
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+        ):
+            response = self.client.get("/batch_sessions/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sessions"][0]["session_id"], "stored-session")
 
 
 if __name__ == "__main__":

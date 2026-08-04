@@ -55,7 +55,7 @@ class BatchUploadApiTests(unittest.TestCase):
                         "BATCH_UPLOAD_MAX_FILES": "3",
                         "BATCH_UPLOAD_MAX_FILE_MB": "2",
                         "BATCH_UPLOAD_MAX_TOTAL_MB": "4",
-                        "BATCH_UPLOAD_CONCURRENCY": "2",
+                        "BATCH_UPLOAD_CONCURRENCY": "1",
                         "BATCH_DOWNLOAD_MAX_MB": "8",
                     },
                     clear=False,
@@ -66,7 +66,7 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(config["batch_upload_max_files"], 3)
         self.assertEqual(config["batch_upload_max_file_mb"], 2)
         self.assertEqual(config["batch_upload_max_total_mb"], 4)
-        self.assertEqual(config["batch_upload_concurrency"], 2)
+        self.assertEqual(config["batch_upload_concurrency"], 1)
         self.assertEqual(config["batch_download_max_mb"], 8)
 
     def test_load_config_allows_larger_batch_limits_outside_vercel(self):

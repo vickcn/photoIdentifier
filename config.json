@@ -5,7 +5,7 @@
   "batch_upload_max_files": 3,
   "batch_upload_max_file_mb": 2,
   "batch_upload_max_total_mb": 4,
-  "batch_upload_concurrency": 2,
+  "batch_upload_concurrency": 1,
   "batch_download_max_mb": 8,
   "face_clustering_enabled": true,
   "request_timeout": 600

@@ -143,6 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const photoClusterUi = { expanded: new Set() };
 
     let batchSelectedFiles = [];
+    let batchFailureDetails = [];
 
     const downloadBatchResultsBtn = document.getElementById('download-batch-results-btn');
     const includeAnnotatedDownload = document.getElementById('include-annotated-download');
@@ -225,6 +226,29 @@ document.addEventListener('DOMContentLoaded', () => {
         const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
         if (totalBytes > limits.maxTotalBytes) return '選取照片的總大小超過限制';
         return null;
+    }
+
+    function getFailureReason(item) {
+        const reason = item?.error || item?.detail || item?.message || '未提供失敗原因';
+        return String(reason).trim() || '未提供失敗原因';
+    }
+
+    function recordBatchFailure(item) {
+        const fileName = item?.file_name || item?.file || '未命名檔案';
+        const reason = getFailureReason(item);
+        const detail = { file: fileName, reason };
+        batchFailureDetails.push(detail);
+        console.error(`[Batch Failure] ${fileName}: ${reason}`, item);
+        showToast(`${fileName} 沒看成：${reason}`, 'error');
+    }
+
+    function flushBatchFailureSummary() {
+        if (batchFailureDetails.length === 0) return;
+        console.groupCollapsed(`Batch failure details (${batchFailureDetails.length})`);
+        batchFailureDetails.forEach((detail, index) => {
+            console.error(`${index + 1}. ${detail.file}: ${detail.reason}`);
+        });
+        console.groupEnd();
     }
 
     function selectBatchFiles(files) {
@@ -874,6 +898,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentFaceClusters = [];
         selectedFaceClusterId = null;
         faceClusteringInfo = null;
+        batchFailureDetails = [];
         faceClusterUi.expanded.clear();
         faceClusterUi.selectedEvidenceIndexes.clear();
         relationshipViewMode = 'people';
@@ -943,7 +968,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else if (data.status === 'error') {
                             failedCount++;
                             totalImages = data.total || totalImages;
-                            showToast(`${data.file_name || data.file} 這張沒看成`, 'error');
+                            recordBatchFailure(data);
                         } else if (data.status === 'completed') {
                             setCurrentFaceClusters(data.face_clusters);
                             faceClusteringInfo = data.face_clustering || null;
@@ -961,7 +986,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     successCount++;
                                 } else {
                                     failedCount++;
-                                    showToast(`${item.file} 這張沒看成`, 'error');
+                                    recordBatchFailure(item);
                                 }
                             });
                             setCurrentFaceClusters(data.face_clusters);
@@ -993,7 +1018,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             successCount++;
                         } else {
                             failedCount++;
-                            showToast(`${item.file} 這張沒看成`, 'error');
+                            recordBatchFailure(item);
                         }
                     });
                     setCurrentFaceClusters(data.face_clusters);
@@ -1003,6 +1028,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             showToast(`看完了。${successCount} 張看過${failedCount ? `，${failedCount} 張沒看成` : ''}`);
+            flushBatchFailureSummary();
 
             if (source === 'local') {
                 organizeArea.classList.add('hidden');

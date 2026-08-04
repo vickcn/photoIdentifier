@@ -3,6 +3,7 @@ import asyncio
 import mimetypes
 import io
 import json
+import logging
 from PIL import Image
 from pathlib import Path
 from typing import Tuple, List, Optional
@@ -10,6 +11,8 @@ from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
 from src.aoi import draw_bboxes_on_image
 from src.insight_api_client import detect_normalized_bboxes
 from src.upload_batch import UploadedImage
+
+logger = logging.getLogger(__name__)
 
 # 讀取 config.json 中的 request_timeout 設定
 try:
@@ -153,6 +156,7 @@ async def batch_process_uploads_stream(
                     "drawn_image_b64": base64.b64encode(drawn_bytes).decode("ascii"),
                 }
             except Exception as exc:
+                logger.exception("Upload batch item failed file=%s error=%s", image.filename, exc)
                 return {"status": "error", "file_name": image.filename, "error": str(exc)}
 
     tasks = [asyncio.create_task(process_one(image)) for image in images]
