@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const relationships = require('../static/face_relationships.js');
+const relationships = require('../static/js/face_relationships.js');
 
 test('creates one cluster relationship per photo even with duplicate evidence', () => {
     const assignments = relationships.createAssignments([
@@ -77,4 +77,31 @@ test('buildExport keeps photos without people and ignores unknown cluster ids', 
 
     assert.deepEqual(output.photos[0].people, []);
     assert.equal(output.photos[0].public_decision, 'pending');
+});
+
+test('buildExport groups photos into merged person folders by display name', () => {
+    const output = relationships.buildExport({
+        sessionId: 'session-3',
+        batchMode: 'drive',
+        exportedAt: '2026-08-01T00:00:00.000Z',
+        clusters: [
+            { cluster_id: 'cluster_001', display_name: '王小明' },
+            { cluster_id: 'cluster_002', display_name: '王小明' },
+        ],
+        results: [
+            { file_name: 'a.jpg', drive_id: 'drive-a' },
+            { file_name: 'b.jpg', drive_id: 'drive-b' },
+        ],
+        assignments: {
+            'a.jpg': ['cluster_001'],
+            'b.jpg': ['cluster_002'],
+        },
+    });
+
+    assert.equal(output.people_folders.length, 1);
+    assert.equal(output.people_folders[0].name, '王小明');
+    assert.deepEqual(
+        output.people_folders[0].photos.map(photo => [photo.file_name, photo.drive_id]),
+        [['a.jpg', 'drive-a'], ['b.jpg', 'drive-b']],
+    );
 });

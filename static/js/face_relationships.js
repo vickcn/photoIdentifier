@@ -30,6 +30,14 @@
         return assignments;
     }
 
+    function normalizeFolderName(value, fallback) {
+        return String(value || fallback || '未命名人物')
+            .trim()
+            .replace(/[\\/:*?"<>|]/g, '_')
+            .replace(/\s+/g, ' ')
+            .slice(0, 80) || '未命名人物';
+    }
+
     function readPublicDecision(item) {
         const analysis = item.result || item;
         const explicit = item.user_decision || item.ai_decision || analysis.ai_decision;
@@ -70,6 +78,27 @@
             if (driveId) photo.drive_id = driveId;
             return photo;
         });
+        const foldersByName = new Map();
+        photos.forEach(photo => {
+            (photo.people || []).forEach(person => {
+                const folderName = normalizeFolderName(person.display_name, person.cluster_id);
+                if (!foldersByName.has(folderName)) {
+                    foldersByName.set(folderName, { name: folderName, photos: [] });
+                }
+                const folder = foldersByName.get(folderName);
+                if (folder.photos.some(item => item.file_name === photo.file_name)) return;
+                folder.photos.push({
+                    file_name: photo.file_name,
+                    drive_id: photo.drive_id || null,
+                    people: photo.people
+                        .filter(item => normalizeFolderName(item.display_name, item.cluster_id) === folderName)
+                        .map(item => ({
+                            cluster_id: item.cluster_id,
+                            display_name: item.display_name,
+                        })),
+                });
+            });
+        });
 
         return {
             exported_at: exportedAt,
@@ -77,6 +106,7 @@
             batch_mode: batchMode,
             image_count: photos.length,
             people,
+            people_folders: Array.from(foldersByName.values()),
             photos,
             face_clusters: cleanClusters,
             results: stripImages(results || []),

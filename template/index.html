@@ -12,7 +12,7 @@
         href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Inter:wght@400;500;600;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/lxgw-wenkai-tc@5.2.9/400.css">
-    <link rel="stylesheet" href="/static/app.css?v=20260804-drive-save">
+    <link rel="stylesheet" href="/static/css/app.css?v=20260804-drive-save">
     <!-- Google API & Identity Services for Picker -->
     <script src="https://apis.google.com/js/api.js" async defer></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -132,14 +132,14 @@
                     <div class="cluster-settings-panel" id="cluster-settings-panel">
                         <button class="cluster-settings-toggle" id="btn-toggle-cluster-settings" type="button">
                             <span>進階分群設定</span>
-                            <span class="cluster-settings-summary" id="cluster-settings-summary">DBSCAN: eps 0.35, min_samples 2</span>
+                            <span class="cluster-settings-summary" id="cluster-settings-summary">DBSCAN: eps 0.9, min_samples 2</span>
                             <span class="cluster-settings-arrow" id="cluster-settings-arrow">▼</span>
                         </button>
                         <div class="cluster-settings-body hidden" id="cluster-settings-body">
                             <div class="cluster-settings-grid">
                                 <div class="input-group">
                                     <label for="face-cluster-eps">DBSCAN eps</label>
-                                    <input type="number" id="face-cluster-eps" value="0.35" min="0.05" max="1.5" step="0.01">
+                                    <input type="number" id="face-cluster-eps" value="0.9" min="0.05" max="1.5" step="0.01">
                                 </div>
                                 <div class="input-group">
                                     <label for="face-cluster-min-samples">min_samples</label>
@@ -252,7 +252,7 @@
                     <div class="overview-footer">
                         <label class="download-option">
                             <input type="checkbox" id="include-annotated-download" checked>
-                            下載時包含後製圖
+                            下載時包含人物照片資料夾
                         </label>
                         <div class="result-export-actions">
                             <button class="secondary-btn" id="download-batch-results-btn" type="button">
@@ -524,8 +524,8 @@
     <!-- Notification Toast -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/static/face_relationships.js?v=20260801-photo-people"></script>
-    <script src="/static/app.js?v=20260804-drive-save"></script>
+    <script src="/static/js/face_relationships.js?v=20260801-photo-people"></script>
+    <script src="/static/js/app.js?v=20260804-drive-save"></script>
 </body>
 
 </html>

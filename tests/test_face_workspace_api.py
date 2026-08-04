@@ -253,6 +253,50 @@ class FaceWorkspaceApiTests(unittest.TestCase):
             json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8"),
         )
 
+    def test_drive_export_copies_people_folders_when_present(self):
+        main._batch_sessions["face-workspace-test"]["batch_mode"] = "drive"
+        people_folders = [
+            {
+                "name": "王小明",
+                "photos": [{"file_name": "a.jpg", "drive_id": "drive-a"}],
+            }
+        ]
+        document = {
+            "session_id": "face-workspace-test",
+            "photos": [],
+            "people_folders": people_folders,
+        }
+        with (
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+            patch.object(main, "get_drive_credentials", return_value=object()) as credentials,
+            patch.object(
+                main,
+                "_save_json_export_to_drive",
+                return_value={"id": "file-1", "name": "photo_people.json"},
+                create=True,
+            ),
+            patch.object(
+                main,
+                "_copy_people_folders_to_drive",
+                return_value={"copied_count": 1, "folder_count": 1, "errors": []},
+                create=True,
+            ) as copy_folders,
+        ):
+            response = self.client.post(
+                "/batch_exports/drive",
+                json={
+                    "session_id": "face-workspace-test",
+                    "target_folder_id": "target-1",
+                    "document": document,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["people_copy"]["copied_count"], 1)
+        self.assertEqual(copy_folders.call_args.args[0], credentials.return_value)
+        self.assertEqual(copy_folders.call_args.args[1], "target-1")
+        self.assertEqual(copy_folders.call_args.args[2], people_folders)
+
     def test_returns_face_clusters_from_persistent_store_when_memory_misses(self):
         store = FakeBatchStateStore()
         with (

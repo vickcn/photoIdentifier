@@ -24,11 +24,11 @@ source ~/tchop/bin/activate
 python main.py
 ```
 
-預設會開在 `http://localhost:8000`。如果要改 host 或 port，可先設定環境變數再啟動：
+預設會開在 `http://localhost:6419`。如果要改 host 或 port，可先設定環境變數再啟動：
 
 ```bash
 export HOST=127.0.0.1
-export PORT=8000
+export PORT=6419
 python main.py
 ```
 
@@ -50,7 +50,7 @@ python -m pytest
 3. 一次選取或拖入多張 JPG、PNG、WEBP 圖片。
 4. 點擊開始辨識，系統會逐張顯示進度與標註結果。
 
-系統預設最多接受 3 張、單檔 2MB、合計 4MB；實際限制以畫面顯示為準。超過限制時，請改用 Google 雲端資料夾模式。上傳模式不接受伺服器本機路徑，也不會在部署端建立長期暫存資料夾。
+系統預設最多接受 3 張、單檔 2MB、合計 4MB；實際限制以畫面顯示為準。超過限制時，請調整設定或改用雲端批次模式。上傳模式不接受伺服器本機路徑，也不會在部署端建立長期暫存資料夾。
 
 如果同一份程式要同時支援 `Vercel` 與本機執行，建議把批次上傳限制與預設併發放在環境變數管理。讀取優先順序是：`環境變數 -> config.json -> 程式預設值`。
 
@@ -58,6 +58,15 @@ python -m pytest
 - `BATCH_UPLOAD_MAX_FILE_MB`
 - `BATCH_UPLOAD_MAX_TOTAL_MB`
 - `BATCH_UPLOAD_CONCURRENCY`
+
+目前預設值為：
+
+- `BATCH_UPLOAD_MAX_FILES=3`
+- `BATCH_UPLOAD_MAX_FILE_MB=2`
+- `BATCH_UPLOAD_MAX_TOTAL_MB=4`
+- `BATCH_UPLOAD_CONCURRENCY=1`
+
+若在 `Vercel` 環境中執行，批次一次看幾張的上限會收斂到 `3`，避免同時打太多請求到下游辨識服務。
 
 在 **「整場活動」** 模式下，右側有一個預設收合的 **進階分群設定**，可調整 DBSCAN 參數：
 
@@ -76,6 +85,17 @@ python -m pytest
 
 若 classifier API 暫時不可用，系統會降級為一般照片公開性審核。
 
+### 批次狀態持久化
+
+批次工作流支援 Firestore 持久化；若要在雲端環境保存 session、照片結果、人物分群與關聯資料，請確認下列變數已設定：
+
+- `BATCH_STATE_BACKEND=auto` 或 `firestore`
+- `FIRESTORE_PROJECT_ID`
+- `FIRESTORE_DATABASE`
+- `FIRESTORE_SERVICE_ACCOUNT_JSON`（非 GCP 環境常用）
+
+若未設定，系統會退回記憶體模式，不影響本機測試。
+
 ---
 
 ## ☁️ 雲端自動化：Google Drive 模式
@@ -93,7 +113,7 @@ python -m pytest
 
 ### 相關設定與排錯
 
-Google OAuth、Google Picker、Google Drive API、API key restriction、OAuth client、project number 這些專有名詞可直接寫在專案文件中，方便排錯與溝通。
+Google OAuth、Google Drive API、API key restriction、OAuth client、project number 這些設定都會影響登入與授權流程，請在部署前逐項確認。
 
 若遇到登入失敗、Picker 403、redirect URI 不符、scope 或 session 不一致等問題，建議優先引用 `$google-api-session-patterns`，再依該 skill 的通則檢查：
 
@@ -103,6 +123,8 @@ Google OAuth、Google Picker、Google Drive API、API key restriction、OAuth cl
 - `GOOGLE_PROJECT_NUMBER`
 - `GOOGLE_REDIRECT_URI`
 - `SESSION_SECRET`
+
+如果是在 Vercel 上跑 Google Drive 模式，還要確認 `DRIVE_TOKEN_DIR`、`GOOGLE_CLOUD_PROJECT` 與平台上的 server-side env 是否一致。
 
 ---
 
@@ -128,4 +150,4 @@ Google OAuth、Google Picker、Google Drive API、API key restriction、OAuth cl
     *   Google Drive 網址範例：`drive.google.com/drive/folders/1abc123...`
     *   中間那串 `1abc123...` 就是 ID。
 
-如有任何使用上的異常，請確認您的網路連線是否正常，或檢查 Google Drive 授權是否已過期。
+如有任何使用上的異常，請確認您的網路連線是否正常，或檢查 OAuth 授權、Cloud Run 狀態與 Firestore / classifier 服務是否可用。

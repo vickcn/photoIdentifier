@@ -1304,6 +1304,75 @@ def _save_json_export_to_drive(
     ).execute()
 
 
+def _drive_query_literal(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _copy_people_folders_to_drive(
+    credentials,
+    target_folder_id: str,
+    people_folders: list[dict[str, Any]],
+) -> dict[str, Any]:
+    from googleapiclient.discovery import build
+
+    drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+
+    def get_or_create_subfolder(name: str, parent_id: str) -> str:
+        safe_name = str(name or "未命名人物").strip()[:80] or "未命名人物"
+        query_name = _drive_query_literal(safe_name)
+        query_parent = _drive_query_literal(parent_id)
+        query = (
+            f"name = '{query_name}' and mimeType = 'application/vnd.google-apps.folder' "
+            f"and '{query_parent}' in parents and trashed = false"
+        )
+        found = drive_service.files().list(q=query, fields="files(id)", pageSize=1).execute().get("files", [])
+        if found:
+            return found[0]["id"]
+        created = drive_service.files().create(
+            body={
+                "name": safe_name,
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent_id],
+            },
+            fields="id",
+        ).execute()
+        return created["id"]
+
+    copied_count = 0
+    errors: list[str] = []
+    folders_created_or_reused = 0
+
+    for folder in people_folders:
+        folder_name = str(folder.get("name") or "未命名人物").strip()[:80] or "未命名人物"
+        photos = folder.get("photos") or []
+        if not photos:
+            continue
+        try:
+            folder_id = get_or_create_subfolder(folder_name, target_folder_id)
+            folders_created_or_reused += 1
+        except Exception as exc:
+            errors.append(f"{folder_name}: 無法建立資料夾：{exc}")
+            continue
+
+        for photo in photos:
+            file_id = photo.get("drive_id")
+            file_name = str(photo.get("file_name") or "unknown")
+            if not file_id:
+                errors.append(f"{folder_name}/{file_name}: 缺少 drive_id")
+                continue
+            try:
+                drive_service.files().copy(
+                    fileId=file_id,
+                    body={"name": file_name, "parents": [folder_id]},
+                    fields="id",
+                ).execute()
+                copied_count += 1
+            except Exception as exc:
+                errors.append(f"{folder_name}/{file_name}: {exc}")
+
+    return {"copied_count": copied_count, "folder_count": folders_created_or_reused, "errors": errors}
+
+
 @app.post("/batch_exports/drive")
 async def create_drive_batch_export(req: DriveBatchExportRequest, request: Request):
     session_id = req.session_id.strip()
@@ -1331,6 +1400,15 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
             file_name,
             content,
         )
+        people_copy = {"copied_count": 0, "folder_count": 0, "errors": []}
+        people_folders = req.document.get("people_folders")
+        if isinstance(people_folders, list) and people_folders:
+            people_copy = await run_in_threadpool(
+                _copy_people_folders_to_drive,
+                credentials,
+                target_folder_id,
+                people_folders,
+            )
     except HTTPException:
         raise
     except Exception as exc:
@@ -1358,8 +1436,12 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
                 "drive",
                 saved.get("name") or file_name,
                 "created",
-                {"target_folder_id": target_folder_id, "file_id": saved.get("id")},
-            )
+                    {
+                        "target_folder_id": target_folder_id,
+                        "file_id": saved.get("id"),
+                        "people_copy": people_copy,
+                    },
+                )
         except Exception:
             logger.exception("Failed to persist Drive export metadata session=%s", session_id)
 
@@ -1367,6 +1449,7 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
         "status": "created",
         "file_id": saved.get("id"),
         "file_name": saved.get("name") or file_name,
+        "people_copy": people_copy,
     }
 
 

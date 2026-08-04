@@ -164,7 +164,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function getFaceClusterDefaults() {
         return {
-            eps: Number(config?.face_cluster_default_eps ?? 0.35),
+            eps: Number(config?.face_cluster_default_eps ?? 0.9),
             minSamples: Number(config?.face_cluster_default_min_samples ?? 2),
             epsMin: Number(config?.face_cluster_eps_min ?? 0.05),
             epsMax: Number(config?.face_cluster_eps_max ?? 1.5),
@@ -1626,6 +1626,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return name.replace(/[^a-zA-Z0-9._-]/g, '_') || fallback;
     }
 
+    function safeZipPathSegment(value, fallback) {
+        const name = String(value || fallback || '').split(/[\\/]/).pop().trim();
+        return name.replace(/[\\/:*?"<>|]/g, '_') || fallback;
+    }
+
+    function findSelectedBatchFile(fileName) {
+        const targetName = String(fileName || '');
+        return batchSelectedFiles.find(file => file.name === targetName)
+            || batchSelectedFiles.find(file => safeDownloadName(file.name, file.name) === safeDownloadName(targetName, targetName));
+    }
+
     function buildBatchResultExport() {
         return PhotoRelationships.buildExport({
             sessionId: window._currentSessionId || null,
@@ -1656,7 +1667,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.detail || 'Google 雲端備份失敗');
-            return { attempted: true, success: true, fileName: data.file_name };
+            return { attempted: true, success: true, fileName: data.file_name, peopleCopy: data.people_copy };
         } catch (error) {
             return { attempted: true, success: false, error: error.message };
         }
@@ -1679,7 +1690,9 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const result = await saveExportToDrive(buildBatchResultExport());
             if (!result.success) throw new Error(result.error || 'Google 雲端儲存失敗');
-            showToast(`已儲存辨識結果：${result.fileName}`);
+            const copiedCount = result.peopleCopy?.copied_count || 0;
+            const copySuffix = copiedCount ? `，已複製 ${copiedCount} 張照片到人物資料夾` : '';
+            showToast(`已儲存辨識結果：${result.fileName}${copySuffix}`);
         } catch (error) {
             showToast(`儲存失敗：${error.message}`, 'error');
         } finally {
@@ -1698,11 +1711,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const exportData = buildBatchResultExport();
         const json = JSON.stringify(exportData, null, 2);
         const jsonBlob = new Blob([json], { type: 'application/json;charset=utf-8' });
-        const wantsImages = Boolean(includeAnnotatedDownload?.checked);
-        const imageBytes = currentBatchResults.reduce(
-            (total, item) => total + base64ByteLength(item.drawn_image_b64),
-            0,
-        );
+        const wantsPhotoFolders = Boolean(includeAnnotatedDownload?.checked);
+        const folderPhotoEntries = [];
+        (exportData.people_folders || []).forEach(folder => {
+            (folder.photos || []).forEach(photo => {
+                const sourceFile = findSelectedBatchFile(photo.file_name);
+                if (!sourceFile) return;
+                folderPhotoEntries.push({ folderName: folder.name, photo, sourceFile });
+            });
+        });
+        const imageBytes = folderPhotoEntries.reduce((total, item) => total + item.sourceFile.size, 0);
         const maxBytes = (config?.batch_download_max_mb || 8) * 1024 * 1024;
         downloadBatchResultsBtn.disabled = true;
         showLoading(true);
@@ -1710,36 +1728,37 @@ document.addEventListener('DOMContentLoaded', () => {
         let localMessage = '已下載 JSON 辨識結果';
         let localMessageType = 'success';
         try {
-            const shouldUseJsonOnly = !wantsImages
+            const shouldUseJsonOnly = !wantsPhotoFolders
+                || folderPhotoEntries.length === 0
                 || imageBytes + jsonBlob.size > maxBytes
                 || typeof JSZip === 'undefined';
             if (shouldUseJsonOnly) {
                 downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
-                if (wantsImages) {
+                if (wantsPhotoFolders) {
                     const reason = typeof JSZip === 'undefined'
                         ? '壓縮元件未載入'
-                        : `後製圖超過 ${config?.batch_download_max_mb || 8}MB 上限`;
+                        : folderPhotoEntries.length === 0
+                            ? '找不到可放入人物資料夾的本機原圖'
+                            : `照片資料夾超過 ${config?.batch_download_max_mb || 8}MB 上限`;
                     localMessage = `${reason}，已自動改下載 JSON`;
                     localMessageType = 'error';
                 }
             } else {
                 const zip = new JSZip();
                 zip.file('result.json', json);
-                const annotated = zip.folder('annotated');
-                currentBatchResults.forEach((item, index) => {
-                    if (!item.drawn_image_b64) return;
-                    const sourceName = item.file_name || item.file || `image_${index + 1}.jpg`;
-                    const safeName = safeDownloadName(sourceName, `image_${index + 1}.jpg`).replace(/\.[^.]+$/, '');
-                    annotated.file(`annotated_${safeName}.jpg`, item.drawn_image_b64, { base64: true });
+                folderPhotoEntries.forEach((entry, index) => {
+                    const folder = zip.folder(safeZipPathSegment(entry.folderName, `person_${index + 1}`));
+                    const photoName = safeZipPathSegment(entry.photo.file_name, entry.sourceFile.name || `image_${index + 1}.jpg`);
+                    folder.file(photoName, entry.sourceFile);
                 });
                 const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 4 } });
                 if (zipBlob.size > maxBytes) {
                     downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
-                    localMessage = `結果包超過 ${config?.batch_download_max_mb || 8}MB 上限，已自動改下載 JSON`;
+                    localMessage = `照片資料夾超過 ${config?.batch_download_max_mb || 8}MB 上限，已自動改下載 JSON`;
                     localMessageType = 'error';
                 } else {
                     downloadBlob(zipBlob, `photo_people_${Date.now()}.zip`);
-                    localMessage = '已下載 JSON 與後製圖 ZIP';
+                    localMessage = '已下載 JSON 與人物照片資料夾 ZIP';
                 }
             }
 
@@ -1747,7 +1766,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('Batch result export failed:', error);
             downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
-            showToast('後製圖打包失敗，已自動改下載 JSON', 'error');
+            showToast('人物照片資料夾打包失敗，已自動改下載 JSON', 'error');
         } finally {
             showLoading(false);
             document.getElementById('loading-text').textContent = '正在一張一張看過去…';
