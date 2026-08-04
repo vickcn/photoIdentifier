@@ -149,6 +149,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let batchFailureDetails = [];
 
     const downloadBatchResultsBtn = document.getElementById('download-batch-results-btn');
+    const saveDriveResultsBtn = document.getElementById('save-drive-results-btn');
     const includeAnnotatedDownload = document.getElementById('include-annotated-download');
     let config = null;
 
@@ -1219,6 +1220,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('ov-safe').textContent = safeC;
         document.getElementById('ov-unsafe').textContent = unsafeC;
         document.getElementById('ov-pending').textContent = pendingC;
+        saveDriveResultsBtn?.classList.toggle('hidden', batchMode !== 'drive');
 
         const content = document.getElementById('overview-content');
         const viewToggle = document.querySelector('.view-mode-toggle');
@@ -1660,6 +1662,33 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function saveBatchResultsToDrive() {
+        if (batchMode !== 'drive' || currentBatchResults.length === 0) {
+            showToast('目前沒有可儲存的雲端辨識結果', 'error');
+            return;
+        }
+
+        if (!driveTargetId.value.trim()) {
+            handleAuthClick('drive-target-id', saveBatchResultsToDrive);
+            return;
+        }
+
+        saveDriveResultsBtn.disabled = true;
+        showLoading(true);
+        document.getElementById('loading-text').textContent = '正在儲存辨識結果…';
+        try {
+            const result = await saveExportToDrive(buildBatchResultExport());
+            if (!result.success) throw new Error(result.error || 'Google 雲端儲存失敗');
+            showToast(`已儲存辨識結果：${result.fileName}`);
+        } catch (error) {
+            showToast(`儲存失敗：${error.message}`, 'error');
+        } finally {
+            showLoading(false);
+            document.getElementById('loading-text').textContent = '正在一張一張看過去…';
+            saveDriveResultsBtn.disabled = false;
+        }
+    }
+
     async function downloadBatchResults() {
         if (currentBatchResults.length === 0) {
             showToast('目前沒有可下載的辨識結果', 'error');
@@ -1714,26 +1743,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            document.getElementById('loading-text').textContent = '正在備份關聯紀錄…';
-            const driveBackup = await saveExportToDrive(exportData);
-            if (driveBackup.attempted && driveBackup.success) {
-                showToast(`${localMessage}，並已備份至雲端輸出區`, localMessageType);
-            } else if (driveBackup.attempted) {
-                showToast(`本機已下載，但雲端備份失敗：${driveBackup.error}`, 'error');
-            } else {
-                showToast(localMessage, localMessageType);
-            }
+            showToast(localMessage, localMessageType);
         } catch (error) {
             console.error('Batch result export failed:', error);
             downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
-            const driveBackup = await saveExportToDrive(exportData);
-            if (driveBackup.attempted && driveBackup.success) {
-                showToast('後製圖打包失敗，已下載 JSON 並備份至雲端輸出區', 'error');
-            } else if (driveBackup.attempted) {
-                showToast(`本機已下載 JSON，但雲端備份失敗：${driveBackup.error}`, 'error');
-            } else {
-                showToast('後製圖打包失敗，已自動改下載 JSON', 'error');
-            }
+            showToast('後製圖打包失敗，已自動改下載 JSON', 'error');
         } finally {
             showLoading(false);
             document.getElementById('loading-text').textContent = '正在一張一張看過去…';
@@ -1742,6 +1756,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     downloadBatchResultsBtn?.addEventListener('click', downloadBatchResults);
+    saveDriveResultsBtn?.addEventListener('click', saveBatchResultsToDrive);
 
     function renderThumbnailGrid(container) {
         let html = '<div class="thumbnail-grid">';
@@ -2106,6 +2121,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // === Google Picker Integration ===
     let pickerApiLoaded = false;
     let oauthToken = null;
+    let pickerSelectionCallback = null;
     // Fetch config on load
     async function fetchConfig() {
         try {
@@ -2142,7 +2158,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    function handleAuthClick(targetId) {
+    function handleAuthClick(targetId, onPicked = null) {
         if (!config || !config.google_client_id) {
             showToast('伺服器未設定 Google Client ID', 'error');
             return;
@@ -2151,6 +2167,8 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('伺服器未設定 Google Project Number', 'error');
             return;
         }
+
+        pickerSelectionCallback = onPicked;
 
         // 若已有 token（由伺服器端 OAuth 同步或先前 Picker 授權取得），直接開啟 Picker
         if (oauthToken) {
@@ -2236,10 +2254,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (targetId === 'drive-folder-id') {
                     autoLoadCollaborativeMemoryForDrive(folder.id);
                 }
+                const onPicked = pickerSelectionCallback;
+                pickerSelectionCallback = null;
+                if (onPicked) onPicked(folder);
             }
         } else if (data.action === google.picker.Action.CANCEL) {
+            pickerSelectionCallback = null;
             console.log('Picker 已取消');
         } else if (data[google.picker.Response.ERROR_CODE]) {
+            pickerSelectionCallback = null;
             const errorCode = data[google.picker.Response.ERROR_CODE];
             console.error('Picker 錯誤代碼:', errorCode);
             showToast(`Picker 錯誤：${errorCode}`, 'error');

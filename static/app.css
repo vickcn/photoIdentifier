@@ -1412,6 +1412,13 @@ body.app-busy {
     accent-color: var(--accent-color);
 }
 
+.result-export-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+}
+
 .overview-header {
     display: flex;
     justify-content: space-between;
