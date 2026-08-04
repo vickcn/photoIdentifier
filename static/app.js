@@ -1311,6 +1311,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function renderClusterLeadPreview(cluster) {
+        const leadEvidence = Array.isArray(cluster?.evidence_photos) ? cluster.evidence_photos[0] : null;
+        if (!leadEvidence) {
+            return `<span class="face-cluster-avatar">${escapeHtml(String(cluster?.display_name || '人').trim().charAt(0) || '人')}</span>`;
+        }
+        const decision = getFaceEvidenceDecision(leadEvidence);
+        const source = leadEvidence.image_b64
+            ? `data:image/jpeg;base64,${leadEvidence.image_b64}`
+            : (decision.resultIndex >= 0 ? getItemImgSrc(currentBatchResults[decision.resultIndex]) : '');
+        const bbox = Array.isArray(leadEvidence.bbox) ? leadEvidence.bbox.map(Number).join(',') : '';
+        if (!source) {
+            return `<span class="face-cluster-avatar">${escapeHtml(String(cluster?.display_name || '人').trim().charAt(0) || '人')}</span>`;
+        }
+        return `<span class="face-cluster-avatar face-cluster-avatar-photo">
+            <img src="${source}" data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(cluster.display_name || '人物')} 的代表截圖" loading="lazy">
+        </span>`;
+    }
+
     function renderPeoplePerspective(container) {
         const clusterItems = currentFaceClusters.map(cluster => {
             const clusterId = String(cluster.cluster_id);
@@ -1340,8 +1358,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button class="face-person-toggle" type="button" data-face-action="toggle-cluster"
                             data-cluster-id="${escapeHtml(clusterId)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? '收合' : '展開'} ${escapeHtml(cluster.display_name)}">
                         <span class="face-cluster-arrow" aria-hidden="true">${isExpanded ? '▼' : '▶'}</span>
-                        <span class="face-cluster-avatar">${escapeHtml(String(cluster.display_name || '人').trim().charAt(0) || '人')}</span>
-                        <span class="face-cluster-copy"><small>${cluster.photo_count} 張照片 · ${cluster.face_count} 張人臉框</small></span>
+                        ${renderClusterLeadPreview(cluster)}
+                        <span class="face-cluster-copy">
+                            <strong>${escapeHtml(cluster.display_name || clusterId)}</strong>
+                            <small>${cluster.photo_count} 張照片 · ${cluster.face_count} 張人臉框</small>
+                        </span>
                     </button>
                     <div class="face-person-name-editor">
                         <input class="face-person-name-input" value="${escapeHtml(cluster.display_name)}" maxlength="80" aria-label="人物名稱">
