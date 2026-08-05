@@ -197,33 +197,35 @@
             <section class="viewer-panel glass-panel">
                 <!-- Loading Overlay -->
                 <div id="loading-overlay" class="loading-overlay hidden">
-                    <div class="spinner"></div>
-                    <p id="loading-text">正在一張一張看過去…</p>
+                    <div class="loading-card" role="status" aria-live="polite" aria-atomic="false">
+                        <div class="spinner" aria-hidden="true"></div>
+                        <p id="loading-text">正在一張一張看過去…</p>
 
-                    <!-- 新增進度條區域 -->
-                    <div class="progress-container">
-                        <div class="progress-info">
-                            <span id="progress-percent">0%</span>
-                            <span id="progress-count">0 / 0</span>
+                        <!-- 新增進度條區域 -->
+                        <div class="progress-container">
+                            <div class="progress-info">
+                                <span id="progress-percent">0%</span>
+                                <span id="progress-count">0 / 0</span>
+                            </div>
+                            <div class="progress-track">
+                                <div id="progress-fill" class="progress-fill"></div>
+                            </div>
                         </div>
-                        <div class="progress-track">
-                            <div id="progress-fill" class="progress-fill"></div>
-                        </div>
-                    </div>
 
-                    <!-- 即時統計摘要 -->
-                    <div class="batch-stats-summary">
-                        <div class="stat-item success">
-                            <span class="label">看完了</span>
-                            <strong id="stream-success-count" class="value">0</strong>
-                        </div>
-                        <div class="stat-item failed">
-                            <span class="label">沒看成</span>
-                            <strong id="stream-failed-count" class="value">0</strong>
-                        </div>
-                        <div class="stat-item pending">
-                            <span class="label">還剩</span>
-                            <strong id="stream-pending-count" class="value">0</strong>
+                        <!-- 即時統計摘要 -->
+                        <div class="batch-stats-summary">
+                            <div class="stat-item success">
+                                <span class="label">看完了</span>
+                                <strong id="stream-success-count" class="value">0</strong>
+                            </div>
+                            <div class="stat-item failed">
+                                <span class="label">沒看成</span>
+                                <strong id="stream-failed-count" class="value">0</strong>
+                            </div>
+                            <div class="stat-item pending">
+                                <span class="label">還剩</span>
+                                <strong id="stream-pending-count" class="value">0</strong>
+                            </div>
                         </div>
                     </div>
                 </div>

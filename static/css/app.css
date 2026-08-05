@@ -643,13 +643,32 @@ button:disabled {
 .loading-overlay {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(22, 50, 79, 0.74);
-    backdrop-filter: blur(4px);
+    background: rgba(72, 58, 47, 0.42);
+    backdrop-filter: blur(6px) saturate(0.8);
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
+    padding: 1.5rem;
     z-index: 10000;
+}
+
+.loading-card {
+    width: min(560px, 100%);
+    padding: 2.5rem 2.75rem;
+    color: var(--text-primary);
+    text-align: center;
+    background: var(--paper-base);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    border-radius: 20px;
+    box-shadow: 0 24px 64px rgba(59, 50, 43, 0.24);
+}
+
+.loading-card #loading-text {
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    font-weight: 600;
+    line-height: 1.6;
+    color: var(--ink-strong);
 }
 
 body.app-busy {
@@ -657,13 +676,13 @@ body.app-busy {
 }
 
 .spinner {
-    width: 50px;
-    height: 50px;
-    border: 3px solid rgba(255,255,255,0.1);
+    width: 48px;
+    height: 48px;
+    border: 4px solid var(--paper-edge);
     border-radius: 50%;
-    border-top-color: var(--accent-color);
+    border-top-color: var(--sun-core);
     animation: spin 1s ease-in-out infinite;
-    margin-bottom: 1rem;
+    margin: 0 auto 1rem;
 }
 
 @keyframes spin {
@@ -820,7 +839,7 @@ body.app-busy {
     width: 100%;
     margin: 20px 0;
     text-align: center;
-    max-width: 400px;
+    max-width: none;
 }
 
 .progress-info {
@@ -829,24 +848,23 @@ body.app-busy {
     margin-bottom: 8px;
     font-size: 0.9rem;
     font-weight: 500;
-    color: #fff;
+    color: var(--ink-body);
 }
 
 .progress-track {
     width: 100%;
     height: 10px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--paper-sunk);
     border-radius: 5px;
     overflow: hidden;
     position: relative;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--paper-edge);
 }
 
 .progress-fill {
     height: 100%;
     width: 0%;
-    background: linear-gradient(90deg, #0f8f9b 0%, #16a34a 100%);
-    box-shadow: 0 0 10px rgba(15, 143, 155, 0.32);
+    background: var(--sun-core);
     transition: width 0.3s ease;
 }
 
@@ -861,19 +879,18 @@ body.app-busy {
 
 .stat-item {
     padding: 12px;
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--paper-print);
     border-radius: 12px;
     text-align: center;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--paper-edge);
 }
 
 .stat-item .label {
     display: block;
     font-size: 0.7rem;
-    color: var(--text-secondary);
+    color: var(--ink-body);
     margin-bottom: 4px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 0.04em;
 }
 
 .stat-item .value {
@@ -883,7 +900,36 @@ body.app-busy {
 
 .stat-item.success .value { color: var(--success-color); }
 .stat-item.failed .value { color: var(--danger-color); }
-.stat-item.pending .value { color: #ffd740; }
+.stat-item.pending .value { color: var(--wheat-core); }
+
+@media (max-width: 560px) {
+    .loading-overlay {
+        padding: 1rem;
+    }
+
+    .loading-card {
+        padding: 2rem 1.25rem 1.5rem;
+        border-radius: 16px;
+    }
+
+    .batch-stats-summary {
+        gap: 8px;
+    }
+
+    .stat-item {
+        padding: 10px 6px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .spinner {
+        animation-duration: 2s;
+    }
+
+    .progress-fill {
+        transition: none;
+    }
+}
 
 .split-viewer.fullscreen-mode .viewer-images {
     flex: 1;
@@ -1406,6 +1452,7 @@ body.app-busy {
     gap: 0.5rem;
     color: var(--text-secondary);
     font-size: 0.9rem;
+    flex: 1 1 240px;
 }
 
 .overview-footer .download-option input {
@@ -1414,9 +1461,16 @@ body.app-busy {
 
 .result-export-actions {
     display: flex;
-    flex-direction: column;
-    align-items: stretch;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+    flex: 0 1 auto;
+    margin-left: auto;
     gap: 0.5rem;
+}
+
+.result-export-actions .secondary-btn {
+    white-space: nowrap;
 }
 
 .overview-header {
@@ -2290,6 +2344,18 @@ body.app-busy {
     gap: 0.75rem;
     padding-top: 0.5rem;
     border-top: 1px solid var(--glass-border);
+}
+
+@media (max-width: 720px) {
+    .result-export-actions {
+        width: 100%;
+        justify-content: stretch;
+        margin-left: 0;
+    }
+
+    .result-export-actions .secondary-btn {
+        flex: 1 1 0;
+    }
 }
 
 /* Back to overview button inside split-viewer */
