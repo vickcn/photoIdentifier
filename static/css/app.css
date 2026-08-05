@@ -570,6 +570,15 @@ button:disabled {
     object-fit: contain;
 }
 
+.face-focus-overlay {
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+    border: 3px solid #f6b23e;
+    border-radius: 10px;
+    box-shadow: 0 0 0 9999px rgba(31, 24, 18, 0.18), 0 0 0 2px rgba(255, 255, 255, 0.92);
+}
+
 .image-label {
     position: absolute;
     top: 0.5rem;
@@ -1709,6 +1718,12 @@ body.app-busy {
     cursor: pointer;
 }
 
+.face-person-name-editor .face-delete-inline-btn {
+    border-color: rgba(153, 87, 65, 0.34);
+    background: rgba(181, 112, 94, 0.1);
+    color: #995741;
+}
+
 .face-person-toggle:focus-visible,
 .face-evidence-card:focus-visible,
 .face-photo-decision button:focus-visible,
@@ -2163,6 +2178,7 @@ body.app-busy {
 .face-person-name-input:focus-visible,
 .face-evidence-transfer button:focus-visible,
 .face-evidence-transfer select:focus-visible,
+.face-delete-inline-btn:focus-visible,
 .face-delete-btn:focus-visible,
 .photo-relation-toggle:focus-visible,
 .photo-relation-actions button:focus-visible,
@@ -2198,6 +2214,11 @@ body.app-busy {
 
     .face-person-name-editor {
         padding: 0 0.75rem 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .face-person-name-input {
+        flex-basis: 100%;
     }
 
     .photo-relation-toggle {

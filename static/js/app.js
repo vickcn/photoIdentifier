@@ -137,6 +137,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentFaceClusters = [];
     let selectedFaceClusterId = null;
     let faceClusteringInfo = null;
+    let focusedFaceEvidence = null;
     const faceClusterUi = {
         expanded: new Set(),
         selectedEvidenceIndexes: new Map(),
@@ -771,6 +772,50 @@ document.addEventListener('DOMContentLoaded', () => {
         strapColor.textContent = '-';
     }
 
+    function getFaceFocusOverlay() {
+        const imageBox = annotatedImg.closest('.image-box');
+        if (!imageBox) return null;
+        let overlay = imageBox.querySelector('.face-focus-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.className = 'face-focus-overlay hidden';
+            overlay.setAttribute('aria-hidden', 'true');
+            imageBox.appendChild(overlay);
+        }
+        return overlay;
+    }
+
+    function renderFaceFocusOverlay() {
+        const overlay = getFaceFocusOverlay();
+        const bbox = Array.isArray(focusedFaceEvidence?.bbox) ? focusedFaceEvidence.bbox.map(Number) : null;
+        if (!overlay || !bbox || bbox.length !== 4 || bbox.some(value => !Number.isFinite(value)) || !annotatedImg.naturalWidth || !annotatedImg.naturalHeight) {
+            overlay?.classList.add('hidden');
+            return;
+        }
+
+        const [x1, y1, x2, y2] = bbox;
+        const imageRect = annotatedImg.getBoundingClientRect();
+        const parentRect = annotatedImg.closest('.image-box').getBoundingClientRect();
+        const left = imageRect.left - parentRect.left + (x1 / annotatedImg.naturalWidth) * imageRect.width;
+        const top = imageRect.top - parentRect.top + (y1 / annotatedImg.naturalHeight) * imageRect.height;
+        const width = ((x2 - x1) / annotatedImg.naturalWidth) * imageRect.width;
+        const height = ((y2 - y1) / annotatedImg.naturalHeight) * imageRect.height;
+
+        overlay.style.left = `${left}px`;
+        overlay.style.top = `${top}px`;
+        overlay.style.width = `${width}px`;
+        overlay.style.height = `${height}px`;
+        overlay.classList.remove('hidden');
+    }
+
+    function clearFaceFocusOverlay() {
+        focusedFaceEvidence = null;
+        getFaceFocusOverlay()?.classList.add('hidden');
+    }
+
+    annotatedImg.addEventListener('load', renderFaceFocusOverlay);
+    window.addEventListener('resize', renderFaceFocusOverlay);
+
     analyzeSingleBtn.addEventListener('click', async () => {
         if (!singleSelectedFile) return;
         if (!(await beginSharedBusy('辨識照片'))) return;
@@ -797,6 +842,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await res.json();
 
             // set annotated image
+            clearFaceFocusOverlay();
             annotatedImg.src = 'data:image/jpeg;base64,' + data.drawn_image_b64;
 
             // update stats
@@ -1160,6 +1206,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 originalImg.src = 'https://placehold.co/600x400?text=Processing+Drive+File';
             }
             annotatedImg.src = 'data:image/jpeg;base64,' + currentData.drawn_image_b64;
+            renderFaceFocusOverlay();
 
             // 輔助 UI: 更新統計數據
             const analysis = currentData.result;
@@ -1168,6 +1215,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Local File Mode (Non-Stream)
             originalImg.src = `/local_file/?path=${encodeURIComponent(currentData.original_path)}`;
             annotatedImg.src = `/local_file/?path=${encodeURIComponent(currentData.output)}`;
+            renderFaceFocusOverlay();
 
             const fakeAnalysis = {
                 moderation_status: currentData.moderation_status,
@@ -1280,7 +1328,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return `<div class="face-photo-decision status-${escapeHtml(decision.decision)}" role="status">
             <span>這張照片的判定</span>
             <strong>${decision.label}</strong>
-            <button type="button" data-face-action="open-photo" data-result-index="${decision.resultIndex}">查看完整照片</button>
+            <button type="button" data-face-action="open-photo" data-cluster-id="${escapeHtml(clusterId)}" data-result-index="${decision.resultIndex}" data-evidence-index="${evidenceIndex}">查看完整照片</button>
         </div>
         ${personOptions ? `<div class="face-evidence-transfer" data-face-transfer-source="${escapeHtml(clusterId)}" data-evidence-index="${evidenceIndex}">
             <label>更換所屬人物
@@ -1440,6 +1488,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="face-person-name-editor">
                         <input class="face-person-name-input" value="${escapeHtml(cluster.display_name)}" maxlength="80" aria-label="人物名稱">
                         <button type="button" data-face-action="save-name" data-cluster-id="${escapeHtml(clusterId)}">儲存名稱</button>
+                        <button class="face-delete-inline-btn" type="button" data-face-action="delete-cluster" data-cluster-id="${escapeHtml(clusterId)}">刪除</button>
                     </div>
                 </div>
                 ${isExpanded ? `<div class="face-person-body">
@@ -1457,7 +1506,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         </select></label>
                         <label>備註<textarea class="face-cluster-notes" rows="3" maxlength="500" placeholder="例如：講師、工作人員">${escapeHtml(cluster.notes || '')}</textarea></label>
                         <button class="face-save-btn" type="button" data-face-action="save-cluster" data-cluster-id="${escapeHtml(clusterId)}">儲存這個人物</button>
-                        <button class="face-delete-btn" type="button" data-face-action="delete-cluster" data-cluster-id="${escapeHtml(clusterId)}">刪除人物</button>
                         <small class="face-save-hint">流水 ID：${escapeHtml(clusterId)}</small>
                     </aside>
                 </div>` : ''}
@@ -1558,7 +1606,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     personCard.querySelector('.face-photo-decision-slot').innerHTML = renderFacePhotoDecision(selectedEvidence, clusterId, evidenceIndex);
                 } else if (actionTarget.dataset.faceAction === 'open-photo') {
                     const resultIndex = Number(actionTarget.dataset.resultIndex);
-                    if (resultIndex >= 0) openReviewFromOverview(resultIndex);
+                    const evidenceIndex = Number(actionTarget.dataset.evidenceIndex);
+                    const cluster = currentFaceClusters.find(item => String(item.cluster_id) === String(clusterId));
+                    const evidence = Number.isInteger(evidenceIndex) ? cluster?.evidence_photos?.[evidenceIndex] : null;
+                    if (resultIndex >= 0) openReviewFromOverview(resultIndex, evidence || null);
                 } else if (actionTarget.dataset.faceAction === 'save-name') {
                     const name = actionTarget.closest('.face-person-row').querySelector('.face-person-name-input').value.trim();
                     saveFaceClusterUpdate(clusterId, { display_name: name });
@@ -1919,9 +1970,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function openReviewFromOverview(index) {
+    function openReviewFromOverview(index, faceEvidence = null) {
         batchOverviewActive = false;
         currentIndex = index;
+        focusedFaceEvidence = faceEvidence;
         document.getElementById('batch-overview').classList.add('hidden');
         document.getElementById('batch-metrics-summary').classList.add('hidden');
         emptyState.classList.add('hidden');
@@ -1968,6 +2020,7 @@ document.addEventListener('DOMContentLoaded', () => {
     prevBtn.addEventListener('click', () => {
         if (currentBatchResults.length > 0) {
             currentIndex = (currentIndex - 1 + currentBatchResults.length) % currentBatchResults.length;
+            clearFaceFocusOverlay();
             renderBatchViewer();
             highlightCurrentInSummary();
         }
@@ -1976,6 +2029,7 @@ document.addEventListener('DOMContentLoaded', () => {
     nextBtn.addEventListener('click', () => {
         if (currentBatchResults.length > 0) {
             currentIndex = (currentIndex + 1) % currentBatchResults.length;
+            clearFaceFocusOverlay();
             renderBatchViewer();
             highlightCurrentInSummary();
         }
@@ -2065,6 +2119,7 @@ document.addEventListener('DOMContentLoaded', () => {
             el.addEventListener('click', () => {
                 const idx = parseInt(el.dataset.idx);
                 currentIndex = idx;
+                clearFaceFocusOverlay();
                 renderBatchViewer();
                 highlightCurrentInSummary();
             });
