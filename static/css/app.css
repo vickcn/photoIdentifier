@@ -323,6 +323,69 @@ body::before {
     border-color: rgba(201, 106, 63, 0.25);
 }
 
+.drive-folder-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    min-height: 1.75rem;
+}
+
+.text-action-btn {
+    padding: 0.2rem 0;
+    border: 0;
+    border-bottom: 1px solid transparent;
+    background: transparent;
+    color: var(--accent-color);
+    font: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: color 160ms ease, border-color 160ms ease, opacity 160ms ease;
+}
+
+.text-action-btn:hover:not(:disabled),
+.text-action-btn:focus-visible {
+    border-bottom-color: currentColor;
+}
+
+.text-action-btn:disabled {
+    color: var(--text-muted);
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.drive-folder-modal-content {
+    max-width: 440px;
+}
+
+.drive-folder-modal-content .modal-body label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.drive-folder-modal-content input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.8rem;
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.92);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.drive-folder-modal-content input:focus {
+    border-color: rgba(201, 106, 63, 0.55);
+    outline: 3px solid rgba(201, 106, 63, 0.12);
+}
+
+.form-error {
+    margin: 0.55rem 0 0;
+    color: #a33d2f;
+    font-size: 0.82rem;
+}
+
 .input-group input {
     background: rgba(255,255,255,0.9);
     border: 1px solid var(--glass-border);

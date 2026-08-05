@@ -12,7 +12,7 @@
         href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Inter:wght@400;500;600;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/lxgw-wenkai-tc@5.2.9/400.css">
-    <link rel="stylesheet" href="/static/css/app.css?v=20260804-drive-save">
+    <link rel="stylesheet" href="/static/css/app.css?v=20260805-drive-folder">
     <!-- Google API & Identity Services for Picker -->
     <script src="https://apis.google.com/js/api.js" async defer></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -106,6 +106,10 @@
                             <div class="input-with-button">
                                 <input type="text" id="drive-target-id" placeholder="留白的話，就只在畫面上看，不會動到雲端">
                                 <button id="btn-browse-target" class="inline-btn" title="從雲端挑一個資料夾">📂 翻翻看</button>
+                            </div>
+                            <div class="drive-folder-actions" aria-label="輸出資料夾操作">
+                                <button id="btn-create-target" class="text-action-btn" type="button">建立新資料夾</button>
+                                <button id="btn-rename-target" class="text-action-btn" type="button" disabled>重新命名輸出區</button>
                             </div>
                         </div>
                     </div>
@@ -523,11 +527,33 @@
         </div>
     </div>
 
+    <div id="drive-folder-modal" class="modal hidden">
+        <div class="modal-overlay" data-drive-folder-action="close"></div>
+        <div class="modal-content drive-folder-modal-content" role="dialog" aria-modal="true" aria-labelledby="drive-folder-modal-title">
+            <div class="modal-header">
+                <div>
+                    <h3 id="drive-folder-modal-title">建立新資料夾</h3>
+                    <p id="drive-folder-modal-hint" class="modal-hint"></p>
+                </div>
+                <button class="modal-close-btn" type="button" data-drive-folder-action="close" aria-label="關閉">✕</button>
+            </div>
+            <div class="modal-body">
+                <label for="drive-folder-name">資料夾名稱</label>
+                <input id="drive-folder-name" type="text" maxlength="100" autocomplete="off" placeholder="例如：活動照片辨識結果">
+                <p id="drive-folder-error" class="form-error hidden" role="alert"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="secondary-btn" type="button" data-drive-folder-action="close">取消</button>
+                <button class="primary-btn" id="drive-folder-submit" type="button" data-drive-folder-action="submit">建立並設為輸出區</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Notification Toast -->
     <div id="toast" class="toast hidden"></div>
 
     <script src="/static/js/face_relationships.js?v=20260801-photo-people"></script>
-    <script src="/static/js/app.js?v=20260804-drive-save"></script>
+    <script src="/static/js/app.js?v=20260805-drive-folder"></script>
 </body>
 
 </html>

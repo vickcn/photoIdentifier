@@ -154,6 +154,59 @@ class FaceWorkspaceApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "找不到這場活動的辨識紀錄")
 
+    def test_creates_drive_output_folder_and_uses_root_by_default(self):
+        with (
+            patch.object(main, "get_drive_credentials", return_value=object()) as credentials,
+            patch.object(
+                main,
+                "_create_drive_output_folder",
+                return_value={"id": "folder-1", "name": "活動輸出", "parents": ["root"]},
+            ) as create_folder,
+        ):
+            response = self.client.post("/drive/output-folders", json={"name": "  活動輸出  "})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["folder"]["id"], "folder-1")
+        self.assertEqual(create_folder.call_args.args, (credentials.return_value, "活動輸出", "root"))
+
+    def test_creates_drive_output_folder_inside_selected_parent(self):
+        with (
+            patch.object(main, "get_drive_credentials", return_value=object()),
+            patch.object(
+                main,
+                "_create_drive_output_folder",
+                return_value={"id": "folder-2", "name": "人物整理", "parents": ["parent-1"]},
+            ) as create_folder,
+        ):
+            response = self.client.post(
+                "/drive/output-folders",
+                json={"name": "人物整理", "parent_folder_id": "parent-1"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(create_folder.call_args.args[2], "parent-1")
+
+    def test_renames_selected_drive_output_folder(self):
+        with (
+            patch.object(main, "get_drive_credentials", return_value=object()),
+            patch.object(
+                main,
+                "_rename_drive_output_folder",
+                return_value={"id": "folder-1", "name": "新名稱"},
+            ) as rename_folder,
+        ):
+            response = self.client.patch(
+                "/drive/output-folders/folder-1", json={"name": "新名稱"}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(rename_folder.call_args.args[1:], ("folder-1", "新名稱"))
+
+    def test_rejects_blank_drive_output_folder_name(self):
+        response = self.client.post("/drive/output-folders", json={"name": "   "})
+
+        self.assertEqual(response.status_code, 400)
+
     def test_drive_export_rejects_non_drive_batch(self):
         with patch.object(main, "_get_client_id", return_value="owner-a"):
             response = self.client.post(

@@ -2311,6 +2311,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const btnBrowseSource = document.getElementById('btn-browse-source');
     const btnBrowseTarget = document.getElementById('btn-browse-target');
+    const btnCreateTarget = document.getElementById('btn-create-target');
+    const btnRenameTarget = document.getElementById('btn-rename-target');
+    const driveFolderModal = document.getElementById('drive-folder-modal');
+    const driveFolderName = document.getElementById('drive-folder-name');
+    const driveFolderError = document.getElementById('drive-folder-error');
+    const driveFolderSubmit = document.getElementById('drive-folder-submit');
 
     [btnBrowseSource, btnBrowseTarget].forEach(btn => {
         btn.addEventListener('click', () => {
@@ -2318,6 +2324,92 @@ document.addEventListener('DOMContentLoaded', () => {
             handleAuthClick(targetInputId);
         });
     });
+
+    function syncDriveTargetActions() {
+        btnRenameTarget.disabled = !driveTargetId.value.trim();
+    }
+
+    function closeDriveFolderModal() {
+        if (driveFolderSubmit.disabled) return;
+        driveFolderModal.classList.add('hidden');
+        driveFolderError.classList.add('hidden');
+    }
+
+    function openDriveFolderModal(mode) {
+        const isRename = mode === 'rename';
+        if (isRename && !driveTargetId.value.trim()) {
+            showToast('請先選擇要重新命名的輸出區', 'error');
+            return;
+        }
+        driveFolderModal.dataset.mode = mode;
+        document.getElementById('drive-folder-modal-title').textContent = isRename ? '重新命名輸出區' : '建立新資料夾';
+        document.getElementById('drive-folder-modal-hint').textContent = isRename
+            ? '只會更改目前輸出資料夾的名稱。'
+            : driveTargetId.value.trim()
+                ? '新資料夾會建立在目前選取的輸出區裡，並自動成為新的輸出區。'
+                : '新資料夾會建立在「我的雲端硬碟」，並自動設為輸出區。';
+        driveFolderSubmit.textContent = isRename ? '儲存新名稱' : '建立並設為輸出區';
+        driveFolderName.value = '';
+        driveFolderError.classList.add('hidden');
+        driveFolderModal.classList.remove('hidden');
+        driveFolderName.focus();
+    }
+
+    async function submitDriveFolder() {
+        const name = driveFolderName.value.trim();
+        if (!name) {
+            driveFolderError.textContent = '請輸入資料夾名稱';
+            driveFolderError.classList.remove('hidden');
+            driveFolderName.focus();
+            return;
+        }
+
+        const isRename = driveFolderModal.dataset.mode === 'rename';
+        const currentFolderId = driveTargetId.value.trim();
+        driveFolderSubmit.disabled = true;
+        driveFolderName.disabled = true;
+        driveFolderError.classList.add('hidden');
+        driveFolderSubmit.textContent = isRename ? '正在重新命名…' : '正在建立…';
+        try {
+            const response = await fetch(
+                isRename ? `/drive/output-folders/${encodeURIComponent(currentFolderId)}` : '/drive/output-folders',
+                {
+                    method: isRename ? 'PATCH' : 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(isRename
+                        ? { name }
+                        : { name, parent_folder_id: currentFolderId || null }),
+                },
+            );
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || '資料夾操作失敗');
+            driveTargetId.value = data.folder.id;
+            driveTargetId.dispatchEvent(new Event('change'));
+            driveFolderModal.classList.add('hidden');
+            showToast(isRename ? `輸出區已改名為「${data.folder.name}」` : `已建立輸出區「${data.folder.name}」`);
+        } catch (error) {
+            driveFolderError.textContent = error.message;
+            driveFolderError.classList.remove('hidden');
+        } finally {
+            driveFolderSubmit.disabled = false;
+            driveFolderName.disabled = false;
+            driveFolderSubmit.textContent = isRename ? '儲存新名稱' : '建立並設為輸出區';
+        }
+    }
+
+    btnCreateTarget.addEventListener('click', () => openDriveFolderModal('create'));
+    btnRenameTarget.addEventListener('click', () => openDriveFolderModal('rename'));
+    driveTargetId.addEventListener('input', syncDriveTargetActions);
+    driveFolderModal.addEventListener('click', event => {
+        const action = event.target.closest('[data-drive-folder-action]')?.dataset.driveFolderAction;
+        if (action === 'close') closeDriveFolderModal();
+        if (action === 'submit') submitDriveFolder();
+    });
+    driveFolderName.addEventListener('keydown', event => {
+        if (event.key === 'Enter') submitDriveFolder();
+        if (event.key === 'Escape') closeDriveFolderModal();
+    });
+    syncDriveTargetActions();
 
     function handleAuthClick(targetId, onPicked = null) {
         if (!config || !config.google_client_id) {
@@ -2410,6 +2502,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const input = document.getElementById(targetId);
             if (input) {
                 input.value = folder.id;
+                input.dispatchEvent(new Event('change'));
                 showToast(`已選取資料夾：${folder.name}`);
                 // 當選擇輸入資料夾時，自動加載該資料夾的協作記憶
                 if (targetId === 'drive-folder-id') {

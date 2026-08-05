@@ -1280,6 +1280,90 @@ class DriveBatchExportRequest(BaseModel):
     document: dict[str, Any]
 
 
+class DriveOutputFolderRequest(BaseModel):
+    name: str
+    parent_folder_id: Optional[str] = None
+
+
+class DriveOutputFolderRenameRequest(BaseModel):
+    name: str
+
+
+def _normalized_drive_folder_name(name: str) -> str:
+    normalized = name.strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="資料夾名稱不可留白")
+    if len(normalized) > 100:
+        raise HTTPException(status_code=400, detail="資料夾名稱不可超過 100 個字")
+    return normalized
+
+
+def _create_drive_output_folder(credentials, name: str, parent_folder_id: str) -> dict:
+    from googleapiclient.discovery import build
+
+    drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    return drive_service.files().create(
+        body={
+            "name": name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_folder_id],
+        },
+        fields="id,name,parents",
+    ).execute()
+
+
+def _rename_drive_output_folder(credentials, folder_id: str, name: str) -> dict:
+    from googleapiclient.discovery import build
+
+    drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    existing = drive_service.files().get(fileId=folder_id, fields="id,mimeType").execute()
+    if existing.get("mimeType") != "application/vnd.google-apps.folder":
+        raise HTTPException(status_code=400, detail="指定的輸出區不是 Google 雲端資料夾")
+    return drive_service.files().update(
+        fileId=folder_id,
+        body={"name": name},
+        fields="id,name,parents",
+    ).execute()
+
+
+@app.post("/drive/output-folders")
+async def create_drive_output_folder(req: DriveOutputFolderRequest, request: Request):
+    name = _normalized_drive_folder_name(req.name)
+    parent_folder_id = (req.parent_folder_id or "root").strip() or "root"
+    credentials = get_drive_credentials(request)
+    try:
+        folder = await run_in_threadpool(
+            _create_drive_output_folder, credentials, name, parent_folder_id
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Drive output folder creation failed")
+        raise HTTPException(status_code=500, detail=f"無法建立 Google 雲端資料夾：{exc}") from exc
+    return {"status": "created", "folder": folder}
+
+
+@app.patch("/drive/output-folders/{folder_id}")
+async def rename_drive_output_folder(
+    folder_id: str, req: DriveOutputFolderRenameRequest, request: Request
+):
+    folder_id = folder_id.strip()
+    if not folder_id:
+        raise HTTPException(status_code=400, detail="Google 雲端輸出區不可留白")
+    name = _normalized_drive_folder_name(req.name)
+    credentials = get_drive_credentials(request)
+    try:
+        folder = await run_in_threadpool(
+            _rename_drive_output_folder, credentials, folder_id, name
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Drive output folder rename failed folder=%s", folder_id)
+        raise HTTPException(status_code=500, detail=f"無法重新命名 Google 雲端資料夾：{exc}") from exc
+    return {"status": "renamed", "folder": folder}
+
+
 def _save_json_export_to_drive(
     credentials,
     target_folder_id: str,
