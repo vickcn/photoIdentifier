@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
-DEFAULT_CLUSTER_EPS = 0.35
+DEFAULT_CLUSTER_EPS = 0.9
 DEFAULT_CLUSTER_MIN_SAMPLES = 2
 logger = logging.getLogger(__name__)
 

@@ -74,6 +74,7 @@ python -m pytest
 - `min_samples` 越大，分群會越保守
 
 不特別調整時，前端會直接採用後端回傳的預設值。
+目前預設為 `eps=0.9`、`min_samples=2`。
 
 ### 人臉分群執行環境
 
