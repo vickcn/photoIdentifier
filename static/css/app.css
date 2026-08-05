@@ -1881,6 +1881,48 @@ body.app-busy {
     font-size: 0.78rem;
 }
 
+.face-evidence-transfer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 0.55rem;
+    margin-top: 0.55rem;
+    padding: 0.75rem;
+    border: 1px solid rgba(193, 92, 48, 0.18);
+    border-radius: 0.7rem;
+    background: rgba(255, 253, 248, 0.72);
+}
+
+.face-evidence-transfer label {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.35rem;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.face-evidence-transfer select {
+    min-width: 0;
+    border: 1px solid var(--glass-border);
+    border-radius: 0.6rem;
+    padding: 0.55rem 0.65rem;
+    background: rgba(255, 255, 255, 0.78);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.face-evidence-transfer button {
+    border: 1px solid rgba(193, 92, 48, 0.3);
+    border-radius: 0.6rem;
+    padding: 0.55rem 0.7rem;
+    background: rgba(255, 255, 255, 0.82);
+    color: var(--accent-color);
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
 .face-decision-panel {
     display: flex;
     flex-direction: column;
@@ -1916,6 +1958,22 @@ body.app-busy {
     color: #fff;
     font-weight: 700;
     cursor: pointer;
+}
+
+.face-delete-btn {
+    border: 1px solid rgba(153, 87, 65, 0.34);
+    border-radius: 0.7rem;
+    padding: 0.68rem;
+    background: rgba(181, 112, 94, 0.1);
+    color: #995741;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.face-delete-btn:hover,
+.face-evidence-transfer button:hover {
+    filter: brightness(0.98);
+    transform: translateY(-1px);
 }
 
 .face-save-hint {
@@ -2103,6 +2161,9 @@ body.app-busy {
 .relationship-view-switch button:focus-visible,
 .face-person-name-editor button:focus-visible,
 .face-person-name-input:focus-visible,
+.face-evidence-transfer button:focus-visible,
+.face-evidence-transfer select:focus-visible,
+.face-delete-btn:focus-visible,
 .photo-relation-toggle:focus-visible,
 .photo-relation-actions button:focus-visible,
 .photo-people-option:focus-within {
@@ -2158,6 +2219,10 @@ body.app-busy {
     .face-photo-decision {
         align-items: flex-start;
         flex-wrap: wrap;
+    }
+
+    .face-evidence-transfer {
+        grid-template-columns: 1fr;
     }
 }
 

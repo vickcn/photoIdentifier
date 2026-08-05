@@ -1268,16 +1268,29 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
-    function renderFacePhotoDecision(evidence) {
+    function renderFacePhotoDecision(evidence, clusterId = '', evidenceIndex = -1) {
         if (!evidence) {
             return '<p class="face-photo-decision-hint">點選任一人臉框，查看該張照片的可公開判定。</p>';
         }
         const decision = getFaceEvidenceDecision(evidence);
+        const personOptions = currentFaceClusters
+            .filter(cluster => String(cluster.cluster_id) !== String(clusterId))
+            .map(cluster => `<option value="${escapeHtml(cluster.cluster_id)}">${escapeHtml(cluster.display_name || cluster.cluster_id)}</option>`)
+            .join('');
         return `<div class="face-photo-decision status-${escapeHtml(decision.decision)}" role="status">
             <span>這張照片的判定</span>
             <strong>${decision.label}</strong>
             <button type="button" data-face-action="open-photo" data-result-index="${decision.resultIndex}">查看完整照片</button>
-        </div>`;
+        </div>
+        ${personOptions ? `<div class="face-evidence-transfer" data-face-transfer-source="${escapeHtml(clusterId)}" data-evidence-index="${evidenceIndex}">
+            <label>更換所屬人物
+                <select class="face-transfer-target">
+                    <option value="">選擇人物</option>
+                    ${personOptions}
+                </select>
+            </label>
+            <button type="button" data-face-action="transfer-evidence" data-cluster-id="${escapeHtml(clusterId)}" data-evidence-index="${evidenceIndex}">移到此人物</button>
+        </div>` : ''}`;
     }
 
     function cropFaceEvidenceImages(container) {
@@ -1331,6 +1344,64 @@ document.addEventListener('DOMContentLoaded', () => {
         </span>`;
     }
 
+    function recalculateFaceClusterCounts(cluster) {
+        const evidence = Array.isArray(cluster?.evidence_photos) ? cluster.evidence_photos : [];
+        const photoNames = new Set(evidence.map(item => String(item.file_name || '')).filter(Boolean));
+        cluster.face_count = evidence.length;
+        cluster.photo_count = photoNames.size;
+    }
+
+    function removeClusterFromPhotoAssignments(clusterId) {
+        Object.keys(photoPeopleAssignments).forEach(fileName => {
+            photoPeopleAssignments[fileName] = (photoPeopleAssignments[fileName] || [])
+                .filter(item => String(item) !== String(clusterId));
+        });
+    }
+
+    function moveEvidenceToCluster(sourceClusterId, evidenceIndex, targetClusterId) {
+        const sourceCluster = currentFaceClusters.find(cluster => String(cluster.cluster_id) === String(sourceClusterId));
+        const targetCluster = currentFaceClusters.find(cluster => String(cluster.cluster_id) === String(targetClusterId));
+        if (!sourceCluster || !targetCluster || sourceCluster === targetCluster) return false;
+        const sourceEvidence = Array.isArray(sourceCluster.evidence_photos) ? sourceCluster.evidence_photos : [];
+        const movedEvidence = sourceEvidence[evidenceIndex];
+        if (!movedEvidence) return false;
+
+        sourceEvidence.splice(evidenceIndex, 1);
+        sourceCluster.evidence_photos = sourceEvidence;
+        targetCluster.evidence_photos = Array.isArray(targetCluster.evidence_photos) ? targetCluster.evidence_photos : [];
+        targetCluster.evidence_photos.push(movedEvidence);
+        recalculateFaceClusterCounts(sourceCluster);
+        recalculateFaceClusterCounts(targetCluster);
+
+        const fileName = String(movedEvidence.file_name || '');
+        if (fileName) {
+            const assigned = new Set((photoPeopleAssignments[fileName] || []).map(String));
+            assigned.add(String(targetClusterId));
+            const sourceStillInPhoto = sourceEvidence.some(item => String(item.file_name || '') === fileName);
+            if (!sourceStillInPhoto) assigned.delete(String(sourceClusterId));
+            photoPeopleAssignments[fileName] = Array.from(assigned);
+        }
+
+        faceClusterUi.selectedEvidenceIndexes.delete(String(sourceClusterId));
+        faceClusterUi.expanded.add(String(targetClusterId));
+        selectedFaceClusterId = String(targetClusterId);
+        return true;
+    }
+
+    function deleteFaceCluster(clusterId) {
+        const cluster = currentFaceClusters.find(item => String(item.cluster_id) === String(clusterId));
+        if (!cluster) return;
+        const confirmed = window.confirm(`確定要刪除「${cluster.display_name || cluster.cluster_id}」嗎？\n\n此人物會從本次辨識結果與輸出人物資料夾移除，原始照片不會被刪除。`);
+        if (!confirmed) return;
+        currentFaceClusters = currentFaceClusters.filter(item => String(item.cluster_id) !== String(clusterId));
+        removeClusterFromPhotoAssignments(clusterId);
+        faceClusterUi.expanded.delete(String(clusterId));
+        faceClusterUi.selectedEvidenceIndexes.delete(String(clusterId));
+        if (String(selectedFaceClusterId) === String(clusterId)) selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
+        renderBatchOverview();
+        showToast(`已從本次結果移除「${cluster.display_name || cluster.cluster_id}」`);
+    }
+
     function renderPeoplePerspective(container) {
         const clusterItems = currentFaceClusters.map(cluster => {
             const clusterId = String(cluster.cluster_id);
@@ -1348,7 +1419,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const selectedClass = evidenceIndex === selectedEvidenceIndex ? ' selected' : '';
                 return `<button class="face-evidence-card${selectedClass}" type="button"
                         data-face-action="select-evidence" data-cluster-id="${escapeHtml(clusterId)}"
-                        data-evidence-index="${evidenceIndex}" ${decision.resultIndex < 0 ? 'disabled' : ''}>
+                        data-evidence-index="${evidenceIndex}">
                     <span class="face-crop-frame">
                         ${source ? `<img src="${source}" data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(item.file_name)} 的人臉" loading="lazy">` : '<span class="face-evidence-missing">無預覽</span>'}
                     </span>
@@ -1375,7 +1446,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <section class="face-evidence-panel">
                         <div class="face-panel-heading"><span>辨識為這個人的人臉框</span><small>依最長邊等比例適配</small></div>
                         <div class="face-evidence-grid">${evidence || '<p class="face-empty-copy">沒有可顯示的人臉框</p>'}</div>
-                        <div class="face-photo-decision-slot">${renderFacePhotoDecision(selectedEvidence)}</div>
+                        <div class="face-photo-decision-slot">${renderFacePhotoDecision(selectedEvidence, clusterId, selectedEvidenceIndex)}</div>
                     </section>
                     <aside class="face-decision-panel" data-cluster-editor="${escapeHtml(clusterId)}">
                         <div class="face-panel-heading"><span>確認人物</span><small>${statusLabel(cluster.status)}</small></div>
@@ -1386,6 +1457,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         </select></label>
                         <label>備註<textarea class="face-cluster-notes" rows="3" maxlength="500" placeholder="例如：講師、工作人員">${escapeHtml(cluster.notes || '')}</textarea></label>
                         <button class="face-save-btn" type="button" data-face-action="save-cluster" data-cluster-id="${escapeHtml(clusterId)}">儲存這個人物</button>
+                        <button class="face-delete-btn" type="button" data-face-action="delete-cluster" data-cluster-id="${escapeHtml(clusterId)}">刪除人物</button>
                         <small class="face-save-hint">流水 ID：${escapeHtml(clusterId)}</small>
                     </aside>
                 </div>` : ''}
@@ -1481,9 +1553,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     const personCard = actionTarget.closest('.face-person-card');
                     personCard.querySelectorAll('.face-evidence-card.selected').forEach(card => card.classList.remove('selected'));
                     actionTarget.classList.add('selected');
-                    const cluster = currentFaceClusters.find(item => item.cluster_id === clusterId);
+                    const cluster = currentFaceClusters.find(item => String(item.cluster_id) === String(clusterId));
                     const selectedEvidence = cluster?.evidence_photos?.[evidenceIndex];
-                    personCard.querySelector('.face-photo-decision-slot').innerHTML = renderFacePhotoDecision(selectedEvidence);
+                    personCard.querySelector('.face-photo-decision-slot').innerHTML = renderFacePhotoDecision(selectedEvidence, clusterId, evidenceIndex);
                 } else if (actionTarget.dataset.faceAction === 'open-photo') {
                     const resultIndex = Number(actionTarget.dataset.resultIndex);
                     if (resultIndex >= 0) openReviewFromOverview(resultIndex);
@@ -1492,6 +1564,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     saveFaceClusterUpdate(clusterId, { display_name: name });
                 } else if (actionTarget.dataset.faceAction === 'save-cluster') {
                     saveSelectedFaceCluster(clusterId, actionTarget.closest('[data-cluster-editor]'));
+                } else if (actionTarget.dataset.faceAction === 'delete-cluster') {
+                    deleteFaceCluster(clusterId);
+                } else if (actionTarget.dataset.faceAction === 'transfer-evidence') {
+                    const transferPanel = actionTarget.closest('.face-evidence-transfer');
+                    const targetClusterId = transferPanel?.querySelector('.face-transfer-target')?.value;
+                    const evidenceIndex = Number(actionTarget.dataset.evidenceIndex);
+                    if (!targetClusterId) {
+                        showToast('請先選擇要移到哪一位人物', 'error');
+                        return;
+                    }
+                    if (moveEvidenceToCluster(clusterId, evidenceIndex, targetClusterId)) {
+                        renderBatchOverview();
+                        const targetCluster = currentFaceClusters.find(item => String(item.cluster_id) === String(targetClusterId));
+                        showToast(`已移到「${targetCluster?.display_name || targetClusterId}」`);
+                    }
                 }
                 return;
             }
@@ -1511,7 +1598,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function saveFaceClusterUpdate(clusterId, update) {
-        const cluster = currentFaceClusters.find(item => item.cluster_id === clusterId);
+        const cluster = currentFaceClusters.find(item => String(item.cluster_id) === String(clusterId));
         if (!cluster) return;
         if ('display_name' in update) update.display_name = update.display_name || cluster.display_name;
         Object.assign(cluster, update);
@@ -1531,7 +1618,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function saveSelectedFaceCluster(clusterId, editor) {
-        const cluster = currentFaceClusters.find(item => item.cluster_id === clusterId);
+        const cluster = currentFaceClusters.find(item => String(item.cluster_id) === String(clusterId));
         if (!cluster || !editor) return;
         selectedFaceClusterId = clusterId;
         const update = {
