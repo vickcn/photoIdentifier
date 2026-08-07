@@ -6,6 +6,8 @@
   "batch_upload_max_file_mb": 30,
   "batch_upload_max_total_mb": 4000,
   "batch_upload_concurrency": 5,
+  "batch_upload_concurrency_local_cap": 5,
+  "batch_upload_concurrency_cloud_cap": 3,
   "batch_download_max_mb": 30,
   "face_clustering_enabled": true,
   "request_timeout": 600

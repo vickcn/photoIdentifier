@@ -43,6 +43,8 @@ DEFAULT_BATCH_UPLOAD_MAX_FILES = 100
 DEFAULT_BATCH_UPLOAD_MAX_FILE_MB = 20
 DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 500
 DEFAULT_BATCH_UPLOAD_CONCURRENCY = 5
+DEFAULT_BATCH_UPLOAD_CONCURRENCY_LOCAL_CAP = 5
+DEFAULT_BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP = 3
 DEFAULT_BATCH_DOWNLOAD_MAX_MB = 8
 DEFAULT_FACE_CLUSTERING_ENABLED = True
 FACE_CLUSTER_EPS_MIN = 0.05
@@ -50,8 +52,6 @@ FACE_CLUSTER_EPS_MAX = 1.5
 IS_VERCEL = os.getenv("VERCEL") == "1"
 CONFIG_BATCH_UPLOAD_MAX_FILES_CAP = 20 if IS_VERCEL else None
 CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP = None
-LOCAL_BATCH_CONCURRENCY_CAP = 5
-CLOUD_API_CONCURRENCY_CAP = 3
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 FaceClusterProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
@@ -160,6 +160,8 @@ def load_config() -> dict[str, Any]:
         "batch_upload_max_file_mb": DEFAULT_BATCH_UPLOAD_MAX_FILE_MB,
         "batch_upload_max_total_mb": DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB,
         "batch_upload_concurrency": DEFAULT_BATCH_UPLOAD_CONCURRENCY,
+        "batch_upload_concurrency_local_cap": DEFAULT_BATCH_UPLOAD_CONCURRENCY_LOCAL_CAP,
+        "batch_upload_concurrency_cloud_cap": DEFAULT_BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP,
         "batch_download_max_mb": DEFAULT_BATCH_DOWNLOAD_MAX_MB,
         "face_clustering_enabled": DEFAULT_FACE_CLUSTERING_ENABLED,
     }
@@ -196,6 +198,8 @@ def load_config() -> dict[str, Any]:
         ("batch_upload_max_file_mb", "BATCH_UPLOAD_MAX_FILE_MB", DEFAULT_BATCH_UPLOAD_MAX_FILE_MB, 1, None),
         ("batch_upload_max_total_mb", "BATCH_UPLOAD_MAX_TOTAL_MB", DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB, 1, None),
         ("batch_upload_concurrency", "BATCH_UPLOAD_CONCURRENCY", DEFAULT_BATCH_UPLOAD_CONCURRENCY, 1, CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP),
+        ("batch_upload_concurrency_local_cap", "BATCH_UPLOAD_CONCURRENCY_LOCAL_CAP", DEFAULT_BATCH_UPLOAD_CONCURRENCY_LOCAL_CAP, 1, None),
+        ("batch_upload_concurrency_cloud_cap", "BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP", DEFAULT_BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP, 1, None),
         ("batch_download_max_mb", "BATCH_DOWNLOAD_MAX_MB", DEFAULT_BATCH_DOWNLOAD_MAX_MB, 1, None),
     ):
         config[key] = _read_positive_int(
@@ -223,6 +227,8 @@ BATCH_UPLOAD_MAX_FILES = CONFIG["batch_upload_max_files"]
 BATCH_UPLOAD_MAX_FILE_MB = CONFIG["batch_upload_max_file_mb"]
 BATCH_UPLOAD_MAX_TOTAL_MB = CONFIG["batch_upload_max_total_mb"]
 BATCH_UPLOAD_CONCURRENCY = CONFIG["batch_upload_concurrency"]
+LOCAL_BATCH_CONCURRENCY_CAP = CONFIG["batch_upload_concurrency_local_cap"]
+CLOUD_API_CONCURRENCY_CAP = CONFIG["batch_upload_concurrency_cloud_cap"]
 BATCH_DOWNLOAD_MAX_MB = CONFIG["batch_download_max_mb"]
 FACE_CLUSTERING_ENABLED = CONFIG["face_clustering_enabled"]
 BATCH_UPLOAD_MAX_FILE_BYTES = BATCH_UPLOAD_MAX_FILE_MB * 1024 * 1024
@@ -632,6 +638,8 @@ async def get_frontend_config():
         "batch_upload_concurrency": BATCH_UPLOAD_CONCURRENCY,
         "batch_upload_concurrency_local_cap": LOCAL_BATCH_CONCURRENCY_CAP,
         "batch_upload_concurrency_cloud_cap": CLOUD_API_CONCURRENCY_CAP,
+        "batch_upload_concurrency_local_message": f"這台電腦一次最多先看 {LOCAL_BATCH_CONCURRENCY_CAP} 張，我會慢慢幫你整理好。",
+        "batch_upload_concurrency_cloud_message": f"Google 雲端一次最多先看 {CLOUD_API_CONCURRENCY_CAP} 張，這樣整理起來會比較穩。",
         "batch_download_max_mb": BATCH_DOWNLOAD_MAX_MB,
         "face_clustering_enabled": FACE_CLUSTERING_ENABLED,
         "face_cluster_default_eps": DEFAULT_CLUSTER_EPS,

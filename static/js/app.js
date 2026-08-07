@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const batchFileSummary = document.getElementById('batch-file-summary');
     const batchCloudGuidance = document.getElementById('batch-cloud-guidance');
     const batchConcurrency = document.getElementById('batch-concurrency');
+    const batchConcurrencyHint = document.getElementById('batch-concurrency-hint');
     const faceClusterEpsInput = document.getElementById('face-cluster-eps');
     const faceClusterMinSamplesInput = document.getElementById('face-cluster-min-samples');
     const batchRunPublic = document.getElementById('batch-run-public');
@@ -46,10 +47,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return config?.batch_upload_concurrency_local_cap || config?.batch_upload_concurrency || 5;
     }
 
+    function getBatchConcurrencyHint(source = getSelectedBatchSource()) {
+        if (source === 'drive') {
+            return config?.batch_upload_concurrency_cloud_message || `Google 雲端一次最多先看 ${getBatchConcurrencyCap(source)} 張，這樣整理起來會比較穩。`;
+        }
+        return config?.batch_upload_concurrency_local_message || `這台電腦一次最多先看 ${getBatchConcurrencyCap(source)} 張，我會慢慢幫你整理好。`;
+    }
+
     function syncBatchConcurrencyInput(source = getSelectedBatchSource()) {
         const cap = getBatchConcurrencyCap(source);
         batchConcurrency.max = String(cap);
         batchConcurrency.min = '1';
+        if (batchConcurrencyHint) {
+            batchConcurrencyHint.textContent = getBatchConcurrencyHint(source);
+        }
         const currentValue = parseInt(batchConcurrency.value, 10);
         if (!Number.isFinite(currentValue) || currentValue < 1) {
             batchConcurrency.value = '1';
@@ -63,8 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function validateBatchConcurrency(source, value) {
         const cap = getBatchConcurrencyCap(source);
         if (!Number.isFinite(value) || value < 1 || value > cap) {
-            const modeLabel = source === 'drive' ? '雲端模式' : '本機模式';
-            throw new Error(`${modeLabel}一次看幾張必須介於 1 到 ${cap}`);
+            throw new Error(`這次先幫我一次看 1 到 ${cap} 張就好，整理起來會比較穩。`);
         }
     }
 
