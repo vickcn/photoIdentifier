@@ -1128,6 +1128,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentBatchCancelRequested = false;
     let currentFaceClusterJobId = null;
     const DRIVE_BATCH_POLL_INTERVAL_MS = 1500;
+    const BATCH_VIEW_SNAPSHOT_KEY = 'photoIdentifier.batchViewSnapshot';
+    let lastBatchStatusPayload = null;
 
     const FACE_CLUSTER_STAGE_LABELS = {
         starting: '正在準備整理照片中的人物…',
@@ -1244,6 +1246,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function applyDriveStatusPayload(data) {
+        lastBatchStatusPayload = data;
         if (data.session_id) window._currentSessionId = data.session_id;
         const results = Array.isArray(data.results) ? data.results : [];
         currentBatchResults = [];
@@ -1284,7 +1287,96 @@ document.addEventListener('DOMContentLoaded', () => {
             setCurrentFaceClusters(data.face_clusters);
         }
         faceClusteringInfo = data.face_clustering || faceClusteringInfo;
+        saveBatchViewSnapshot();
     }
+
+    function saveBatchViewSnapshot({ active = Boolean(window._currentSessionId) } = {}) {
+        try {
+            const snapshot = {
+                active,
+                sessionId: window._currentSessionId || null,
+                batchMode,
+                currentIndex,
+                batchOverviewActive,
+                currentBatchResults,
+                currentFaceClusters,
+                faceClusteringInfo,
+                photoPeopleAssignments,
+                lastBatchStatusPayload,
+                savedAt: Date.now(),
+            };
+            sessionStorage.setItem(BATCH_VIEW_SNAPSHOT_KEY, JSON.stringify(snapshot));
+        } catch (error) {
+            // Large face previews can exceed browser storage; memory state still works.
+            console.info('batch view snapshot skipped', error?.name || 'storage_error');
+        }
+    }
+
+    function restoreBatchViewSnapshot() {
+        try {
+            const raw = sessionStorage.getItem(BATCH_VIEW_SNAPSHOT_KEY);
+            if (!raw) return null;
+            const snapshot = JSON.parse(raw);
+            if (!snapshot || !Array.isArray(snapshot.currentBatchResults)) return null;
+            window._currentSessionId = snapshot.sessionId || null;
+            batchMode = snapshot.batchMode || null;
+            currentIndex = Number.isInteger(snapshot.currentIndex) ? snapshot.currentIndex : 0;
+            batchOverviewActive = Boolean(snapshot.batchOverviewActive);
+            currentBatchResults = snapshot.currentBatchResults;
+            currentFaceClusters = Array.isArray(snapshot.currentFaceClusters) ? snapshot.currentFaceClusters : [];
+            faceClusteringInfo = snapshot.faceClusteringInfo || null;
+            photoPeopleAssignments = snapshot.photoPeopleAssignments || {};
+            lastBatchStatusPayload = snapshot.lastBatchStatusPayload || null;
+            if (lastBatchStatusPayload) {
+                updateProgressUI(
+                    Number(lastBatchStatusPayload.progress?.completed || 0),
+                    Number(lastBatchStatusPayload.progress?.total || currentBatchResults.length || 0),
+                    Number(lastBatchStatusPayload.success || 0),
+                    Number(lastBatchStatusPayload.failed || 0),
+                );
+                if (lastBatchStatusPayload.face_cluster_progress) {
+                    updateFaceClusterProgressUI(lastBatchStatusPayload.face_cluster_progress);
+                }
+            }
+            if (currentBatchResults.length > 0) {
+                emptyState.classList.add('hidden');
+                showBatchOverview();
+            }
+            return snapshot;
+        } catch (error) {
+            console.info('batch view snapshot restore skipped', error?.name || 'storage_error');
+            return null;
+        }
+    }
+
+    let batchViewRefreshInFlight = null;
+
+    async function refreshBatchViewAfterReturn() {
+        const snapshot = restoreBatchViewSnapshot();
+        const sessionId = snapshot?.sessionId || window._currentSessionId;
+        if (!sessionId || !snapshot?.active || currentBatchCancelRequested) return;
+        if (batchViewRefreshInFlight) return batchViewRefreshInFlight;
+        batchViewRefreshInFlight = (async () => {
+            try {
+                const response = await fetch(`/batch_sessions/${encodeURIComponent(sessionId)}/status`);
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.detail || '讀取整理進度失敗');
+                applyDriveStatusPayload(data);
+                if (data.status === 'completed' && currentBatchResults.length > 0) showBatchOverview();
+            } catch (error) {
+                console.info('batch view refresh deferred', error?.message || 'status_unavailable');
+            } finally {
+                batchViewRefreshInFlight = null;
+            }
+        })();
+        return batchViewRefreshInFlight;
+    }
+
+    window.addEventListener('pageshow', refreshBatchViewAfterReturn);
+    window.addEventListener('focus', refreshBatchViewAfterReturn);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') refreshBatchViewAfterReturn();
+    });
 
     async function pollDriveBatchStatus(sessionId, signal) {
         let connectionFailures = 0;
@@ -1355,6 +1447,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Generate session_id for metrics tracking
         const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         window._currentSessionId = sessionId;
+        sessionStorage.removeItem(BATCH_VIEW_SNAPSHOT_KEY);
 
         let endpoint = '/batch_upload_stream/';
         let body = {};
@@ -1428,6 +1521,7 @@ document.addEventListener('DOMContentLoaded', () => {
         batchOverviewActive = false;
         window._currentMetrics = null;
         window._currentSessionId = sessionId;
+        saveBatchViewSnapshot({ active: true });
         document.getElementById('batch-overview').classList.add('hidden');
         document.getElementById('back-to-overview-btn').classList.add('hidden');
         document.getElementById('batch-metrics-summary').classList.add('hidden');
@@ -1464,6 +1558,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 applyDriveStatusPayload(data);
                 const finalData = await pollDriveBatchStatus(sessionId, currentBatchAbortController.signal);
                 applyDriveStatusPayload(finalData);
+                saveBatchViewSnapshot({ active: false });
                 showToast(`看完了。${Number(finalData.success || 0)} 張看過${Number(finalData.failed || 0) ? `，${Number(finalData.failed || 0)} 張沒看成` : ''}`);
                 flushBatchFailureSummary();
                 organizeArea.classList.add('hidden');
@@ -1571,6 +1666,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         // 更新 UI 進度
                         updateProgressUI(successCount + failedCount, totalImages, successCount, failedCount);
+                        saveBatchViewSnapshot({ active: true });
 
                     } catch (err) {
                         console.error('JSON parsing data error:', line, err);
@@ -1618,6 +1714,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showBatchOverview();
                 // metrics 等用戶確認後再顯示
             }
+            saveBatchViewSnapshot({ active: false });
 
         } catch (e) {
             logBatchRequestFailure({
