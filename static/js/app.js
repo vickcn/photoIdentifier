@@ -54,6 +54,24 @@ document.addEventListener('DOMContentLoaded', () => {
         return config?.batch_upload_concurrency_local_message || `這台電腦一次最多先看 ${getBatchConcurrencyCap(source)} 張，我會慢慢幫你整理好。`;
     }
 
+    function getBatchUploadLimits(source = getSelectedBatchSource()) {
+        return {
+            maxFiles: source === 'drive'
+                ? (config?.batch_upload_max_files_cloud || 20)
+                : (config?.batch_upload_max_files_local || config?.batch_upload_max_files || 200),
+            maxFileBytes: (config?.batch_upload_max_file_mb || 2) * 1024 * 1024,
+            maxTotalBytes: (config?.batch_upload_max_total_mb || 4) * 1024 * 1024,
+            defaultConcurrency: config?.batch_upload_concurrency || 5,
+        };
+    }
+
+    function getBatchUploadLimitsHint(source = getSelectedBatchSource()) {
+        if (source === 'drive') {
+            return config?.batch_upload_limits_cloud_message || `Google 雲端這次最多先整理 ${getBatchUploadLimits(source).maxFiles} 張，這樣比較不容易卡住。`;
+        }
+        return config?.batch_upload_limits_local_message || `這台電腦這次最多先整理 ${getBatchUploadLimits(source).maxFiles} 張，單檔 ${config?.batch_upload_max_file_mb || 2}MB、合計 ${config?.batch_upload_max_total_mb || 4}MB 以內。`;
+    }
+
     function syncBatchConcurrencyInput(source = getSelectedBatchSource()) {
         const cap = getBatchConcurrencyCap(source);
         batchConcurrency.max = String(cap);
@@ -69,6 +87,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentValue > cap) {
             batchConcurrency.value = String(cap);
         }
+    }
+
+    function syncBatchUploadLimitsHint(source = getSelectedBatchSource()) {
+        const limitsEl = document.getElementById('batch-upload-limits');
+        if (!limitsEl) return;
+        limitsEl.textContent = getBatchUploadLimitsHint(source);
     }
 
     function validateBatchConcurrency(source, value) {
@@ -89,6 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 driveBatchInputs.classList.remove('hidden');
                 tryFetchServerToken();
             }
+            syncBatchUploadLimitsHint(e.target.value);
             syncBatchConcurrencyInput(e.target.value);
         });
     });
@@ -217,7 +242,7 @@ document.addEventListener('DOMContentLoaded', () => {
             minSamples: Number(config?.face_cluster_default_min_samples ?? 2),
             epsMin: Number(config?.face_cluster_eps_min ?? 0.05),
             epsMax: Number(config?.face_cluster_eps_max ?? 1.5),
-            minSamplesMax: config?.batch_upload_max_files || 3,
+            minSamplesMax: getBatchUploadLimits().maxFiles,
         };
     }
 
@@ -313,17 +338,8 @@ document.addEventListener('DOMContentLoaded', () => {
         initializePhotoPeopleAssignments();
     }
 
-    function getBatchUploadLimits() {
-        return {
-            maxFiles: config?.batch_upload_max_files || 3,
-            maxFileBytes: (config?.batch_upload_max_file_mb || 2) * 1024 * 1024,
-            maxTotalBytes: (config?.batch_upload_max_total_mb || 4) * 1024 * 1024,
-            defaultConcurrency: config?.batch_upload_concurrency || 5,
-        };
-    }
-
-    function validateBatchFiles(files) {
-        const limits = getBatchUploadLimits();
+    function validateBatchFiles(files, source = getSelectedBatchSource()) {
+        const limits = getBatchUploadLimits(source);
         if (files.length > limits.maxFiles) return `一次最多選 ${limits.maxFiles} 張照片`;
         const oversized = files.find(file => file.size > limits.maxFileBytes);
         if (oversized) return `${oversized.name} 超過單檔大小限制`;
@@ -357,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function selectBatchFiles(files) {
         const images = Array.from(files).filter(file => file.type.startsWith('image/'));
-        const error = validateBatchFiles(images);
+        const error = validateBatchFiles(images, 'local');
         batchCloudGuidance.classList.toggle('hidden', !error);
         if (error) {
             batchSelectedFiles = [];
@@ -1206,7 +1222,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let requestOptions;
 
         if (source === 'local') {
-            const validationError = validateBatchFiles(batchSelectedFiles);
+            const validationError = validateBatchFiles(batchSelectedFiles, 'local');
             if (batchSelectedFiles.length === 0 || validationError) {
                 showToast(validationError || '請先選擇這場活動的照片', 'error');
                 return;
@@ -2634,8 +2650,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/config');
             config = await res.json();
             console.log("Config loaded:", !!config.google_client_id);
-            document.getElementById('batch-upload-limits').textContent =
-                `最多 ${config.batch_upload_max_files} 張，單檔 ${config.batch_upload_max_file_mb}MB、合計 ${config.batch_upload_max_total_mb}MB 以內`;
+            syncBatchUploadLimitsHint();
             batchConcurrency.value = String(config.batch_upload_concurrency || 5);
             syncBatchConcurrencyInput();
             applyFaceClusterDefaults();

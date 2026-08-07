@@ -40,6 +40,8 @@ from src.batch_state_store import create_batch_state_store
 
 DEFAULT_MAX_UPLOAD_SIZE_MB = 25
 DEFAULT_BATCH_UPLOAD_MAX_FILES = 100
+DEFAULT_BATCH_UPLOAD_MAX_FILES_LOCAL = 200
+DEFAULT_BATCH_UPLOAD_MAX_FILES_CLOUD = 20
 DEFAULT_BATCH_UPLOAD_MAX_FILE_MB = 20
 DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 500
 DEFAULT_BATCH_UPLOAD_CONCURRENCY = 5
@@ -50,7 +52,7 @@ DEFAULT_FACE_CLUSTERING_ENABLED = True
 FACE_CLUSTER_EPS_MIN = 0.05
 FACE_CLUSTER_EPS_MAX = 1.5
 IS_VERCEL = os.getenv("VERCEL") == "1"
-CONFIG_BATCH_UPLOAD_MAX_FILES_CAP = 20 if IS_VERCEL else None
+CONFIG_BATCH_UPLOAD_MAX_FILES_CAP = None
 CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP = None
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
@@ -93,7 +95,7 @@ def _read_bool(raw_value: Any, *, key_name: str, default: bool) -> bool:
     return default
 
 
-def _read_face_cluster_params(raw_eps: Any, raw_min_samples: Any) -> tuple[float, int]:
+def _read_face_cluster_params(raw_eps: Any, raw_min_samples: Any, *, max_files: int) -> tuple[float, int]:
     try:
         eps = float(raw_eps)
     except (TypeError, ValueError) as exc:
@@ -108,10 +110,10 @@ def _read_face_cluster_params(raw_eps: Any, raw_min_samples: Any) -> tuple[float
         min_samples = int(raw_min_samples)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="分群 min_samples 必須是整數") from exc
-    if not 1 <= min_samples <= BATCH_UPLOAD_MAX_FILES:
+    if not 1 <= min_samples <= max_files:
         raise HTTPException(
             status_code=400,
-            detail=f"分群 min_samples 必須介於 1 到 {BATCH_UPLOAD_MAX_FILES}",
+            detail=f"分群 min_samples 必須介於 1 到 {max_files}",
         )
     return eps, min_samples
 
@@ -141,6 +143,17 @@ def _validate_local_api_concurrency(concurrency: int) -> None:
         )
 
 
+def _validate_batch_file_count(file_count: int, *, max_files: int, mode: str) -> None:
+    if file_count < 1:
+        raise HTTPException(status_code=400, detail="請先準備至少 1 張照片")
+    if file_count > max_files:
+        mode_label = "Google 雲端" if mode == "cloud" else "這台電腦"
+        raise HTTPException(
+            status_code=400,
+            detail=f"{mode_label}這次先幫我準備 1 到 {max_files} 張照片就好，整理起來會比較穩。",
+        )
+
+
 def _skip_session_face_clustering(session_id: str) -> dict[str, Any]:
     session = _batch_sessions[session_id]
     session["face_clusters"] = []
@@ -157,6 +170,8 @@ def load_config() -> dict[str, Any]:
     config = {
         "max_upload_size_mb": DEFAULT_MAX_UPLOAD_SIZE_MB,
         "batch_upload_max_files": DEFAULT_BATCH_UPLOAD_MAX_FILES,
+        "batch_upload_max_files_local": DEFAULT_BATCH_UPLOAD_MAX_FILES_LOCAL,
+        "batch_upload_max_files_cloud": DEFAULT_BATCH_UPLOAD_MAX_FILES_CLOUD,
         "batch_upload_max_file_mb": DEFAULT_BATCH_UPLOAD_MAX_FILE_MB,
         "batch_upload_max_total_mb": DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB,
         "batch_upload_concurrency": DEFAULT_BATCH_UPLOAD_CONCURRENCY,
@@ -194,6 +209,8 @@ def load_config() -> dict[str, Any]:
     )
     for key, env_key, default, minimum, maximum in (
         ("batch_upload_max_files", "BATCH_UPLOAD_MAX_FILES", DEFAULT_BATCH_UPLOAD_MAX_FILES, 1, CONFIG_BATCH_UPLOAD_MAX_FILES_CAP),
+        ("batch_upload_max_files_local", "BATCH_UPLOAD_MAX_FILES_LOCAL", DEFAULT_BATCH_UPLOAD_MAX_FILES_LOCAL, 1, None),
+        ("batch_upload_max_files_cloud", "BATCH_UPLOAD_MAX_FILES_CLOUD", DEFAULT_BATCH_UPLOAD_MAX_FILES_CLOUD, 1, None),
         # 先不限制上限，避免本機 / .env / config.json 的批次容量參數被硬性擋掉。
         ("batch_upload_max_file_mb", "BATCH_UPLOAD_MAX_FILE_MB", DEFAULT_BATCH_UPLOAD_MAX_FILE_MB, 1, None),
         ("batch_upload_max_total_mb", "BATCH_UPLOAD_MAX_TOTAL_MB", DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB, 1, None),
@@ -224,6 +241,8 @@ CONFIG = load_config()
 MAX_UPLOAD_SIZE_MB = CONFIG["max_upload_size_mb"]
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 BATCH_UPLOAD_MAX_FILES = CONFIG["batch_upload_max_files"]
+BATCH_UPLOAD_MAX_FILES_LOCAL = CONFIG["batch_upload_max_files_local"]
+BATCH_UPLOAD_MAX_FILES_CLOUD = CONFIG["batch_upload_max_files_cloud"]
 BATCH_UPLOAD_MAX_FILE_MB = CONFIG["batch_upload_max_file_mb"]
 BATCH_UPLOAD_MAX_TOTAL_MB = CONFIG["batch_upload_max_total_mb"]
 BATCH_UPLOAD_CONCURRENCY = CONFIG["batch_upload_concurrency"]
@@ -633,6 +652,8 @@ async def get_frontend_config():
         "google_api_key": os.environ.get("GOOGLE_API_KEY", ""),
         "google_app_id": project_number or client_id,
         "batch_upload_max_files": BATCH_UPLOAD_MAX_FILES,
+        "batch_upload_max_files_local": BATCH_UPLOAD_MAX_FILES_LOCAL,
+        "batch_upload_max_files_cloud": BATCH_UPLOAD_MAX_FILES_CLOUD,
         "batch_upload_max_file_mb": BATCH_UPLOAD_MAX_FILE_MB,
         "batch_upload_max_total_mb": BATCH_UPLOAD_MAX_TOTAL_MB,
         "batch_upload_concurrency": BATCH_UPLOAD_CONCURRENCY,
@@ -640,6 +661,8 @@ async def get_frontend_config():
         "batch_upload_concurrency_cloud_cap": CLOUD_API_CONCURRENCY_CAP,
         "batch_upload_concurrency_local_message": f"這台電腦一次最多先看 {LOCAL_BATCH_CONCURRENCY_CAP} 張，我會慢慢幫你整理好。",
         "batch_upload_concurrency_cloud_message": f"Google 雲端一次最多先看 {CLOUD_API_CONCURRENCY_CAP} 張，這樣整理起來會比較穩。",
+        "batch_upload_limits_local_message": f"這台電腦這次最多先整理 {BATCH_UPLOAD_MAX_FILES_LOCAL} 張，單檔 {BATCH_UPLOAD_MAX_FILE_MB}MB、合計 {BATCH_UPLOAD_MAX_TOTAL_MB}MB 以內。",
+        "batch_upload_limits_cloud_message": f"Google 雲端這次最多先整理 {BATCH_UPLOAD_MAX_FILES_CLOUD} 張，這樣比較不容易卡住。",
         "batch_download_max_mb": BATCH_DOWNLOAD_MAX_MB,
         "face_clustering_enabled": FACE_CLUSTERING_ENABLED,
         "face_cluster_default_eps": DEFAULT_CLUSTER_EPS,
@@ -845,6 +868,7 @@ async def batch_upload_stream(
 ):
     _validate_processing_scope(run_public_classification, run_face_clustering)
     _validate_local_api_concurrency(concurrency)
+    _validate_batch_file_count(len(files), max_files=BATCH_UPLOAD_MAX_FILES_LOCAL, mode="local")
 
     try:
         color_rules = json.loads(color_rules_json) if color_rules_json else None
@@ -856,6 +880,7 @@ async def batch_upload_stream(
         face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
             face_cluster_eps,
             face_cluster_min_samples,
+            max_files=BATCH_UPLOAD_MAX_FILES_LOCAL,
         )
     else:
         face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
@@ -1376,10 +1401,12 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
         face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
             req.face_cluster_eps,
             req.face_cluster_min_samples,
+            max_files=BATCH_UPLOAD_MAX_FILES_CLOUD,
         )
     else:
         face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
     drive_files = await list_drive_image_files(req.folder_id, creds)
+    _validate_batch_file_count(len(drive_files), max_files=BATCH_UPLOAD_MAX_FILES_CLOUD, mode="cloud")
     session_id = req.session_id or str(uuid.uuid4())
     owner_id = _acquire_batch_slot(request, session_id)
     start_time = datetime.now()
@@ -1456,10 +1483,13 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
     
     try:
         creds = get_drive_credentials(request)
+        drive_files = await list_drive_image_files(req.folder_id, creds)
+        _validate_batch_file_count(len(drive_files), max_files=BATCH_UPLOAD_MAX_FILES_CLOUD, mode="cloud")
         if req.run_face_clustering:
             face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
                 req.face_cluster_eps,
                 req.face_cluster_min_samples,
+                max_files=BATCH_UPLOAD_MAX_FILES_CLOUD,
             )
         else:
             face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
@@ -1512,10 +1542,13 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
 
     try:
         creds = get_drive_credentials(request)
+        drive_files = await list_drive_image_files(req.folder_id, creds)
+        _validate_batch_file_count(len(drive_files), max_files=BATCH_UPLOAD_MAX_FILES_CLOUD, mode="cloud")
         if req.run_face_clustering:
             face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
                 req.face_cluster_eps,
                 req.face_cluster_min_samples,
+                max_files=BATCH_UPLOAD_MAX_FILES_CLOUD,
             )
         else:
             face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
