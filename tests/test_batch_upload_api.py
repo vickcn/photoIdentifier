@@ -32,6 +32,20 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(response.json()["face_cluster_default_eps"], main.DEFAULT_CLUSTER_EPS)
         self.assertEqual(response.json()["face_cluster_default_min_samples"], main.DEFAULT_CLUSTER_MIN_SAMPLES)
 
+    def test_drive_batch_rejects_high_cloud_api_concurrency_before_auth(self):
+        response = self.client.post(
+            "/batch_drive_stream/",
+            json={
+                "folder_id": "drive-folder",
+                "concurrency": main.CLOUD_API_CONCURRENCY_CAP + 1,
+                "run_public_classification": False,
+                "run_face_clustering": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("雲端模式一次處理張數", response.json()["detail"])
+
     def test_load_config_prefers_env_over_config_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_config_path = Path(temp_dir) / "config.json"

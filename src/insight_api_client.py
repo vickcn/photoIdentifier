@@ -1,18 +1,40 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import logging
 import os
-from collections.abc import Sequence
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 import httpx
 from PIL import Image
 
 DEFAULT_CLUSTER_EPS = 0.9
 DEFAULT_CLUSTER_MIN_SAMPLES = 2
+DEFAULT_CLUSTER_JOB_POLL_INTERVAL_SEC = 1.0
+DEFAULT_CLUSTER_JOB_TIMEOUT_SEC = 900.0
+DEFAULT_INSIGHT_API_CONNECT_TIMEOUT_SEC = 20.0
 logger = logging.getLogger(__name__)
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
+
+
+def _read_float_env(name: str, default: float, *, minimum: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None or raw_value == "":
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError:
+        logger.warning("%s 無效，改用預設值 %s。", name, default)
+        return default
+    if value < minimum:
+        logger.warning("%s 小於允許值 %s，改用預設值 %s。", name, minimum, default)
+        return default
+    return value
 
 
 class InsightApiClient:
@@ -34,25 +56,119 @@ class InsightApiClient:
         *,
         eps: float = DEFAULT_CLUSTER_EPS,
         min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
+        progress_callback: ProgressCallback | None = None,
     ) -> dict:
         files = [("files", (name, data, content_type)) for name, data, content_type in images]
-        return await self._post(
-            "/v1/faces/cluster",
+        job = await self._post(
+            "/v1/faces/cluster/jobs",
             files=files,
             params={"eps": eps, "min_samples": min_samples},
         )
+        job_id = job.get("job_id")
+        if not job_id:
+            raise RuntimeError("Insight API 未回傳 job_id")
+        await self._emit_progress(progress_callback, job)
+        return await self._wait_for_cluster_job(str(job_id), progress_callback=progress_callback)
+
+    async def cancel_cluster_job(self, job_id: str) -> dict:
+        return await self._post(f"/v1/faces/cluster/jobs/{job_id}/cancel")
+
+    async def _wait_for_cluster_job(
+        self,
+        job_id: str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+    ) -> dict:
+        poll_interval = _read_float_env(
+            "INSIGHT_JOB_POLL_INTERVAL_SEC",
+            DEFAULT_CLUSTER_JOB_POLL_INTERVAL_SEC,
+            minimum=0.2,
+        )
+        timeout_sec = _read_float_env(
+            "INSIGHT_JOB_TIMEOUT_SEC",
+            DEFAULT_CLUSTER_JOB_TIMEOUT_SEC,
+            minimum=1.0,
+        )
+        deadline = time.monotonic() + timeout_sec
+        path = f"/v1/faces/cluster/jobs/{job_id}"
+        latest_snapshot: dict[str, Any] = {"job_id": job_id, "status": "queued", "stage": "queued"}
+
+        while True:
+            try:
+                snapshot = await self._get(path)
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"Insight API job {job_id} 等待逾時") from exc
+                logger.warning(
+                    "Insight API job poll retry job_id=%s error_type=%s error=%r",
+                    job_id,
+                    type(exc).__name__,
+                    exc,
+                )
+                await self._emit_progress(
+                    progress_callback,
+                    {
+                        **latest_snapshot,
+                        "status": "running",
+                        "stage": "connection_wait",
+                    },
+                )
+                await asyncio.sleep(min(max(poll_interval, 1.0) * 2, 5.0))
+                continue
+            latest_snapshot = snapshot
+            await self._emit_progress(progress_callback, snapshot)
+            status = snapshot.get("status")
+            if status == "success":
+                result = snapshot.get("result")
+                if not isinstance(result, dict):
+                    raise RuntimeError(f"Insight API job {job_id} 完成但沒有 result")
+                return result
+            if status == "failed":
+                message = snapshot.get("error_message") or "未知錯誤"
+                raise RuntimeError(f"Insight API job {job_id} 失敗: {message}")
+            if status == "cancelled":
+                raise RuntimeError(f"Insight API job {job_id} 已取消")
+            if status not in {"queued", "running"}:
+                raise RuntimeError(f"Insight API job {job_id} 狀態異常: {status}")
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Insight API job {job_id} 等待逾時")
+            await asyncio.sleep(poll_interval)
+
+    async def _emit_progress(self, callback: ProgressCallback | None, snapshot: dict[str, Any]) -> None:
+        if callback is None:
+            return
+        result = callback(snapshot)
+        if result is not None:
+            await result
 
     async def _post(self, path: str, **kwargs) -> dict:
+        return await self._request("POST", path, **kwargs)
+
+    async def _get(self, path: str, **kwargs) -> dict:
+        return await self._request("GET", path, **kwargs)
+
+    async def _request(self, method: str, path: str, **kwargs) -> dict:
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        timeout = httpx.Timeout(connect=10, read=300, write=300, pool=10)
+        connect_timeout = _read_float_env(
+            "INSIGHT_API_CONNECT_TIMEOUT_SEC",
+            DEFAULT_INSIGHT_API_CONNECT_TIMEOUT_SEC,
+            minimum=1.0,
+        )
+        timeout = httpx.Timeout(connect=connect_timeout, read=300, write=300, pool=10)
         async with httpx.AsyncClient(base_url=self.base_url, headers=headers, timeout=timeout) as client:
-            response = await client.post(path, **kwargs)
+            if method == "POST":
+                response = await client.post(path, **kwargs)
+            elif method == "GET":
+                response = await client.get(path, **kwargs)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 body = response.text[:500]
                 logger.warning(
-                    "Insight API failed path=%s status=%s body=%s",
+                    "Insight API failed method=%s path=%s status=%s body=%s",
+                    method,
                     path,
                     response.status_code,
                     body,
@@ -85,6 +201,7 @@ async def cluster_batch_results(
     *,
     eps: float = DEFAULT_CLUSTER_EPS,
     min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[dict]:
     images: list[tuple[str, bytes, str]] = []
     source_by_name: dict[str, dict] = {}
@@ -104,7 +221,12 @@ async def cluster_batch_results(
 
     if not images:
         return []
-    response = await InsightApiClient().cluster(images, eps=eps, min_samples=min_samples)
+    response = await InsightApiClient().cluster(
+        images,
+        eps=eps,
+        min_samples=min_samples,
+        progress_callback=progress_callback,
+    )
     grouped: dict[tuple[str, int], list[dict]] = {}
     noise_index = 0
     for image in response.get("images", []):
@@ -142,3 +264,7 @@ async def cluster_batch_results(
             }
         )
     return clusters
+
+
+async def cancel_cluster_job(job_id: str) -> dict:
+    return await InsightApiClient().cancel_cluster_job(job_id)

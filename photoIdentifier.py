@@ -257,6 +257,10 @@ async def batch_process_drive(
 
     semaphore = asyncio.Semaphore(concurrency)
 
+    import httpx
+    download_headers = {"Authorization": f"Bearer {credentials.token}"}
+    download_client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
+
     async def process_one_drive(file_item: dict) -> dict:
         async with semaphore:
             file_id = file_item["id"]
@@ -265,14 +269,11 @@ async def batch_process_drive(
             
             try:
                 # 3. 下載內容 (純非同步 HTTP 請求，完全避免 httplib2 阻塞)
-                import httpx
                 url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-                headers = {"Authorization": f"Bearer {credentials.token}"}
-                async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-                    resp = await client.get(url, headers=headers)
-                    if resp.status_code != 200:
-                        raise Exception(f"Drive Download Failed: HTTP {resp.status_code}")
-                    image_bytes = resp.content
+                resp = await download_client.get(url, headers=download_headers)
+                if resp.status_code != 200:
+                    raise Exception(f"Drive Download Failed: HTTP {resp.status_code}")
+                image_bytes = resp.content
                 
                 # 4. 辨識與標註
                 result, drawn_bytes = await process_and_visualize_photo(
@@ -340,9 +341,12 @@ async def batch_process_drive(
                 print(f"[ERROR] Failed to process {file_name}: {repr(e)}")
                 return {"file": file_name, "status": "error", "error": str(e)}
 
-    tasks = [process_one_drive(f) for f in files]
-    results = await asyncio.gather(*tasks)
-    return results
+    try:
+        tasks = [process_one_drive(f) for f in files]
+        results = await asyncio.gather(*tasks)
+        return results
+    finally:
+        await download_client.aclose()
 
 async def batch_process_drive_stream(
     folder_id: str,
@@ -394,6 +398,10 @@ async def batch_process_drive_stream(
 
     semaphore = asyncio.Semaphore(concurrency)
 
+    import httpx
+    download_headers = {"Authorization": f"Bearer {credentials.token}"}
+    download_client = httpx.AsyncClient(timeout=float(REQUEST_TIMEOUT), follow_redirects=True)
+
     async def process_task(file_item, index):
         async with semaphore:
             file_id = file_item["id"]
@@ -401,14 +409,11 @@ async def batch_process_drive_stream(
             mime_type = file_item["mimeType"]
             try:
                 # 下載 (httpx)
-                import httpx
                 url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-                headers = {"Authorization": f"Bearer {credentials.token}"}
-                async with httpx.AsyncClient(timeout=float(REQUEST_TIMEOUT), follow_redirects=True) as client:
-                    resp = await client.get(url, headers=headers)
-                    if resp.status_code != 200:
-                        raise Exception(f"Drive Download Failed: HTTP {resp.status_code}")
-                    image_bytes = resp.content
+                resp = await download_client.get(url, headers=download_headers)
+                if resp.status_code != 200:
+                    raise Exception(f"Drive Download Failed: HTTP {resp.status_code}")
+                image_bytes = resp.content
 
                 # 辨識 (使用 config.json 中設定的 timeout，防止 AI API 掛住)
                 analysis, drawn_bytes = await asyncio.wait_for(
@@ -468,8 +473,11 @@ async def batch_process_drive_stream(
                     "error": str(e)
                 }
 
-    # 使用 as_completed 讓完成的結果立即傳出
-    pending_tasks = [process_task(f, i) for i, f in enumerate(files)]
-    for finished_task in asyncio.as_completed(pending_tasks):
-        result = await finished_task
-        yield result
+    try:
+        # 使用 as_completed 讓完成的結果立即傳出
+        pending_tasks = [process_task(f, i) for i, f in enumerate(files)]
+        for finished_task in asyncio.as_completed(pending_tasks):
+            result = await finished_task
+            yield result
+    finally:
+        await download_client.aclose()

@@ -106,6 +106,7 @@ class NullBatchStateStore:
         session_id: str,
         owner_id: str,
         document: dict[str, Any],
+        user_account: str = "",
     ) -> None:
         return None
 
@@ -120,6 +121,7 @@ class NullBatchStateStore:
         file_name: str,
         status: str,
         metadata: dict[str, Any] | None = None,
+        user_account: str = "",
     ) -> None:
         return None
 
@@ -147,6 +149,7 @@ class FirestoreBatchStateStore:
             "session_id": session["session_id"],
             "owner_id": session["owner_id"],
             "batch_mode": session.get("batch_mode"),
+            "user_account": str(session.get("user_account") or ""),
             "status": "processing",
             "created_at": session.get("start_time") or iso_utc(),
             "updated_at": iso_utc(),
@@ -182,6 +185,7 @@ class FirestoreBatchStateStore:
             "photo_id": photo_id,
             "session_id": session_id,
             "owner_id": owner_id,
+            "user_account": str(result.get("user_account") or ""),
             "file_name": file_name,
             "drive_id": result.get("drive_id"),
             "public_decision": analysis.get("moderation_status") or result.get("moderation_status"),
@@ -284,6 +288,7 @@ class FirestoreBatchStateStore:
         session_id: str,
         owner_id: str,
         document: dict[str, Any],
+        user_account: str = "",
     ) -> None:
         def write_batch() -> None:
             batch = self._client.batch()
@@ -300,6 +305,7 @@ class FirestoreBatchStateStore:
                 payload = {
                     "session_id": session_id,
                     "owner_id": owner_id,
+                    "user_account": user_account,
                     "photo_id": photo_id,
                     "file_name": file_name,
                     "cluster_ids": cluster_ids,
@@ -340,11 +346,13 @@ class FirestoreBatchStateStore:
         file_name: str,
         status: str,
         metadata: dict[str, Any] | None = None,
+        user_account: str = "",
     ) -> None:
         payload = {
             "export_id": export_doc_id(session_id, file_name),
             "session_id": session_id,
             "owner_id": owner_id,
+            "user_account": str(user_account or ""),
             "target": target,
             "file_name": file_name,
             "status": status,

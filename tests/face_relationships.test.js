@@ -79,7 +79,7 @@ test('buildExport keeps photos without people and ignores unknown cluster ids', 
     assert.equal(output.photos[0].public_decision, 'pending');
 });
 
-test('buildExport groups photos into merged person folders by display name', () => {
+test('buildExport groups photos under photo angle by single, multiple, and empty people', () => {
     const output = relationships.buildExport({
         sessionId: 'session-3',
         batchMode: 'drive',
@@ -91,17 +91,16 @@ test('buildExport groups photos into merged person folders by display name', () 
         results: [
             { file_name: 'a.jpg', drive_id: 'drive-a' },
             { file_name: 'b.jpg', drive_id: 'drive-b' },
+            { file_name: 'c.jpg', drive_id: 'drive-c' },
         ],
         assignments: {
             'a.jpg': ['cluster_001'],
             'b.jpg': ['cluster_002'],
+            'c.jpg': ['cluster_001', 'cluster_002'],
         },
     });
 
-    assert.equal(output.people_folders.length, 1);
-    assert.equal(output.people_folders[0].name, '王小明');
-    assert.deepEqual(
-        output.people_folders[0].photos.map(photo => [photo.file_name, photo.drive_id]),
-        [['a.jpg', 'drive-a'], ['b.jpg', 'drive-b']],
-    );
+    assert.deepEqual(output.photo_angle_folders.map(folder => folder.name), ['王小明', '多人']);
+    assert.deepEqual(output.photo_angle_folders[0].photos.map(photo => photo.file_name), ['a.jpg', 'b.jpg']);
+    assert.deepEqual(output.photo_angle_folders[1].photos.map(photo => photo.file_name), ['c.jpg']);
 });

@@ -51,24 +51,23 @@ async def call_gemini_vision_api(prompt: str, b64_image: str, mime_type: str = "
     timeout = httpx.Timeout(REQUEST_TIMEOUT)
     
     max_retries = 4
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(max_retries):
+            try:
                 resp = await client.post(VERTEX_URL, json=payload)
                 if resp.status_code == 429:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(2 ** attempt * 2)  # Exponential backoff: 2s, 4s, 8s...
                         continue
-                    else:
-                        raise Exception("HTTP 429: 配額不足或速率限制")
+                    raise Exception("HTTP 429: 配額不足或速率限制")
                 if resp.status_code != 200:
                     raise Exception(f"HTTP {resp.status_code}")
                 resp_data = resp.json()
                 break
-        except httpx.TimeoutException:
-            if attempt < max_retries - 1:
-                continue
-            raise
+            except httpx.TimeoutException:
+                if attempt < max_retries - 1:
+                    continue
+                raise
 
     try:
         return resp_data["candidates"][0]["content"]["parts"][0]["text"]

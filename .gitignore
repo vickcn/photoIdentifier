@@ -169,6 +169,7 @@ memo*
 env*
 tmp*/
 *test*
+!tests/test_insight_api_client.py
 *try*
 *copy*
 example*/

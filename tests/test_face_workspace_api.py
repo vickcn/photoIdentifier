@@ -308,16 +308,14 @@ class FaceWorkspaceApiTests(unittest.TestCase):
 
     def test_drive_export_copies_people_folders_when_present(self):
         main._batch_sessions["face-workspace-test"]["batch_mode"] = "drive"
-        people_folders = [
-            {
-                "name": "王小明",
-                "photos": [{"file_name": "a.jpg", "drive_id": "drive-a"}],
-            }
-        ]
+        photo_angle_folders = [{
+            "name": "王小明",
+            "photos": [{"file_name": "a.jpg", "drive_id": "drive-a"}],
+        }]
         document = {
             "session_id": "face-workspace-test",
             "photos": [],
-            "people_folders": people_folders,
+            "photo_angle_folders": photo_angle_folders,
         }
         with (
             patch.object(main, "_get_client_id", return_value="owner-a"),
@@ -348,7 +346,7 @@ class FaceWorkspaceApiTests(unittest.TestCase):
         self.assertEqual(response.json()["people_copy"]["copied_count"], 1)
         self.assertEqual(copy_folders.call_args.args[0], credentials.return_value)
         self.assertEqual(copy_folders.call_args.args[1], "target-1")
-        self.assertEqual(copy_folders.call_args.args[2], people_folders)
+        self.assertEqual(copy_folders.call_args.args[2], photo_angle_folders)
 
     def test_returns_face_clusters_from_persistent_store_when_memory_misses(self):
         store = FakeBatchStateStore()

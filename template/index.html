@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>把笑容好好收起來</title>
+    <title>把笑容好好收藏起來</title>
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -91,7 +91,9 @@
                                     <span id="user-name" class="user-name">載入中...</span>
                                     <span id="user-email" class="user-email"></span>
                                 </div>
-                                <button id="google-logout-btn" class="logout-btn" onclick="location.href='/auth/logout'" title="登出並清除授權">🚪</button>
+                                <button id="google-logout-btn" class="logout-btn" onclick="location.href='/auth/logout'" title="登出並清除授權">
+                                    <span class="logout-btn-label">登出</span>
+                                </button>
                             </div>
                         </div>
                         <div class="input-group">
@@ -114,6 +116,7 @@
                         </div>
                     </div>
 
+                    <!--
                     <fieldset class="processing-scope" id="batch-processing-scope">
                         <legend>這次要做什麼</legend>
                         <div class="processing-scope-options">
@@ -128,9 +131,10 @@
                         </div>
                         <p class="processing-scope-hint" id="processing-scope-hint" role="status">兩項都會執行，可個別關閉。</p>
                     </fieldset>
+                    -->
                     <div class="input-group row-group">
                         <label for="batch-concurrency">一次看幾張</label>
-                        <input type="number" id="batch-concurrency" value="1" min="1" max="3">
+                        <input type="number" id="batch-concurrency" value="5" min="1" max="5">
                     </div>
 
                     <div class="cluster-settings-panel" id="cluster-settings-panel">
@@ -154,7 +158,7 @@
                         </div>
                     </div>
 
-                    <!-- Color Rules Panel -->
+                    <!--
                     <div class="color-rules-panel" id="batch-public-settings-panel">
                         <button class="color-rules-toggle" id="btn-toggle-color-rules" onclick="window.__toggleColorRules()">
                             <span>帶子的顏色，代表什麼</span>
@@ -167,11 +171,11 @@
                                 <button class="color-rules-reset" onclick="window.__resetColorRules()">回到原本的</button>
                             </div>
                             <div class="color-swatches-grid" id="color-swatches-grid">
-                                <!-- Rendered by JS -->
                             </div>
                             <p class="color-rules-hint">點一下，決定這個顏色可不可以分享</p>
                         </div>
                     </div>
+                    -->
 
                     <button id="btn-edit-collaborative-memory" class="secondary-btn" style="width: 100%;">📝 編輯提醒</button>
 
@@ -204,6 +208,7 @@
                     <div class="loading-card" role="status" aria-live="polite" aria-atomic="false">
                         <div class="spinner" aria-hidden="true"></div>
                         <p id="loading-text">正在一張一張看過去…</p>
+                        <p id="loading-detail" class="loading-detail">照片會一張一張回來，完成後再整理人物。</p>
 
                         <!-- 新增進度條區域 -->
                         <div class="progress-container">
@@ -230,6 +235,16 @@
                                 <span class="label">還剩</span>
                                 <strong id="stream-pending-count" class="value">0</strong>
                             </div>
+                        </div>
+                        <div class="loading-actions">
+                            <button
+                                id="loading-cancel-btn"
+                                class="secondary-btn loading-cancel-btn hidden"
+                                type="button"
+                                data-allow-busy="true"
+                            >
+                                中止這次整理
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -268,9 +283,11 @@
                                 儲存辨識結果
                             </button>
                         </div>
+                        <!--
                         <button class="finalize-btn" id="overview-finalize-btn" onclick="window.__finalizeReview()">
                             就這樣，整理好
                         </button>
+                        -->
                     </div>
                 </div>
 
@@ -472,11 +489,13 @@
                         </div>
                     </div>
                     <div class="review-list" id="review-list"></div>
+                    <!--
                     <div class="finalize-section">
                         <button class="finalize-btn" id="finalize-btn" onclick="window.__finalizeReview()">
                             就這樣，整理好
                         </button>
                     </div>
+                    -->
                 </div>
 
                 </div><!-- end viewer-review-wrapper -->
@@ -553,7 +572,7 @@
     <div id="toast" class="toast hidden"></div>
 
     <script src="/static/js/face_relationships.js?v=20260801-photo-people"></script>
-    <script src="/static/js/app.js?v=20260805-drive-folder"></script>
+    <script src="/static/js/app.js?v=20260806-face-cancel"></script>
 </body>
 
 </html>

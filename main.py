@@ -2,10 +2,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import asyncio
+import inspect
 import json
 import logging
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Awaitable, Callable, Literal, Optional
 from datetime import datetime
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Request
@@ -21,20 +23,22 @@ from starlette.responses import RedirectResponse
 from pydantic import BaseModel, ValidationError
 import os
 import uuid
+from urllib.parse import urlparse
 
 from src.insight_api_client import (
     DEFAULT_CLUSTER_EPS,
     DEFAULT_CLUSTER_MIN_SAMPLES,
+    cancel_cluster_job,
     cluster_batch_results,
     detect_normalized_bboxes,
 )
 from src.batch_state_store import create_batch_state_store
 
 DEFAULT_MAX_UPLOAD_SIZE_MB = 25
-DEFAULT_BATCH_UPLOAD_MAX_FILES = 3
-DEFAULT_BATCH_UPLOAD_MAX_FILE_MB = 2
-DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 4
-DEFAULT_BATCH_UPLOAD_CONCURRENCY = 1
+DEFAULT_BATCH_UPLOAD_MAX_FILES = 100
+DEFAULT_BATCH_UPLOAD_MAX_FILE_MB = 20
+DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 500
+DEFAULT_BATCH_UPLOAD_CONCURRENCY = 5
 DEFAULT_BATCH_DOWNLOAD_MAX_MB = 8
 DEFAULT_FACE_CLUSTERING_ENABLED = True
 FACE_CLUSTER_EPS_MIN = 0.05
@@ -42,8 +46,10 @@ FACE_CLUSTER_EPS_MAX = 1.5
 IS_VERCEL = os.getenv("VERCEL") == "1"
 CONFIG_BATCH_UPLOAD_MAX_FILES_CAP = 20 if IS_VERCEL else None
 CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP = 3 if IS_VERCEL else None
+CLOUD_API_CONCURRENCY_CAP = 5
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
+FaceClusterProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
 def _read_positive_int(
@@ -110,6 +116,16 @@ def _validate_processing_scope(run_public_classification: bool, run_face_cluster
         raise HTTPException(status_code=400, detail="至少選擇一項：可公開性判定或人臉分群")
 
 
+def _validate_cloud_api_concurrency(concurrency: int) -> None:
+    if concurrency < 1:
+        raise HTTPException(status_code=400, detail="一次處理張數必須至少為 1")
+    if concurrency > CLOUD_API_CONCURRENCY_CAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"雲端模式一次處理張數必須介於 1 到 {CLOUD_API_CONCURRENCY_CAP}",
+        )
+
+
 def _skip_session_face_clustering(session_id: str) -> dict[str, Any]:
     session = _batch_sessions[session_id]
     session["face_clusters"] = []
@@ -161,10 +177,11 @@ def load_config() -> dict[str, Any]:
     )
     for key, env_key, default, minimum, maximum in (
         ("batch_upload_max_files", "BATCH_UPLOAD_MAX_FILES", DEFAULT_BATCH_UPLOAD_MAX_FILES, 1, CONFIG_BATCH_UPLOAD_MAX_FILES_CAP),
-        ("batch_upload_max_file_mb", "BATCH_UPLOAD_MAX_FILE_MB", DEFAULT_BATCH_UPLOAD_MAX_FILE_MB, 1, 20),
-        ("batch_upload_max_total_mb", "BATCH_UPLOAD_MAX_TOTAL_MB", DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB, 1, 100),
+        # 先不限制上限，避免本機 / .env / config.json 的批次容量參數被硬性擋掉。
+        ("batch_upload_max_file_mb", "BATCH_UPLOAD_MAX_FILE_MB", DEFAULT_BATCH_UPLOAD_MAX_FILE_MB, 1, None),
+        ("batch_upload_max_total_mb", "BATCH_UPLOAD_MAX_TOTAL_MB", DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB, 1, None),
         ("batch_upload_concurrency", "BATCH_UPLOAD_CONCURRENCY", DEFAULT_BATCH_UPLOAD_CONCURRENCY, 1, CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP),
-        ("batch_download_max_mb", "BATCH_DOWNLOAD_MAX_MB", DEFAULT_BATCH_DOWNLOAD_MAX_MB, 1, 100),
+        ("batch_download_max_mb", "BATCH_DOWNLOAD_MAX_MB", DEFAULT_BATCH_DOWNLOAD_MAX_MB, 1, None),
     ):
         config[key] = _read_positive_int(
             os.environ.get(env_key, raw_config.get(key, default)),
@@ -173,10 +190,10 @@ def load_config() -> dict[str, Any]:
             minimum=minimum,
             maximum=maximum,
         )
-    config["host"] = str(raw_config.get("host", "0.0.0.0") or "0.0.0.0")
+    config["host"] = str(os.environ.get("HOST", raw_config.get("host", "0.0.0.0")) or "0.0.0.0")
     config["port"] = _read_positive_int(
-        raw_config.get("port", 8000) or 8000,
-        key_name="port",
+        os.environ.get("PORT", raw_config.get("port", 8000)) or 8000,
+        key_name="PORT",
         default=8000,
         minimum=1,
         maximum=65535,
@@ -290,7 +307,12 @@ async def _persist_photo_result(session_id: str, owner_id: str, result: dict[str
     if not batch_state_store.enabled:
         return
     try:
-        await batch_state_store.add_photo_result(session_id, owner_id, result)
+        session = _batch_sessions.get(session_id) or {}
+        await batch_state_store.add_photo_result(
+            session_id,
+            owner_id,
+            {**result, "user_account": str(session.get("user_account") or "")},
+        )
     except Exception:
         logger.exception("Failed to persist photo result session=%s", session_id)
 
@@ -304,7 +326,45 @@ async def _persist_session_update(session_id: str, updates: dict[str, Any]) -> N
         logger.exception("Failed to persist batch session update=%s", session_id)
 
 
-async def _classify_session_faces(session_id: str) -> dict[str, Any]:
+def _face_cluster_progress_event(session_id: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+    progress = snapshot.get("progress") if isinstance(snapshot.get("progress"), dict) else {}
+    return {
+        "status": "face_cluster_progress",
+        "session_id": session_id,
+        "job_id": snapshot.get("job_id"),
+        "job_status": snapshot.get("status", "queued"),
+        "stage": snapshot.get("stage", "queued"),
+        "queue_position": snapshot.get("queue_position"),
+        "progress": {
+            "completed": int(progress.get("completed") or snapshot.get("completed") or 0),
+            "total": int(progress.get("total") or snapshot.get("total") or 0),
+            "percent": float(progress.get("percent") or 0),
+        },
+    }
+
+
+def _face_cluster_starting_event(session_id: str) -> dict[str, Any]:
+    session = _batch_sessions.get(session_id) or {}
+    results = session.get("results") or []
+    return {
+        "status": "face_cluster_progress",
+        "session_id": session_id,
+        "job_id": None,
+        "job_status": "starting",
+        "stage": "uploading",
+        "queue_position": None,
+        "progress": {
+            "completed": 0,
+            "total": len(results),
+            "percent": 0,
+        },
+    }
+
+
+async def _classify_session_faces(
+    session_id: str,
+    progress_callback: FaceClusterProgressCallback | None = None,
+) -> dict[str, Any]:
     session = _batch_sessions[session_id]
     if not FACE_CLUSTERING_ENABLED:
         session["face_clusters"] = []
@@ -319,7 +379,21 @@ async def _classify_session_faces(session_id: str) -> dict[str, Any]:
         processing_info = session.get("processing_info", {})
         eps = float(processing_info.get("face_cluster_eps", DEFAULT_CLUSTER_EPS))
         min_samples = int(processing_info.get("face_cluster_min_samples", DEFAULT_CLUSTER_MIN_SAMPLES))
-        clusters = await cluster_batch_results(session.get("results", []), eps=eps, min_samples=min_samples)
+        clusters = await cluster_batch_results(
+            session.get("results", []),
+            eps=eps,
+            min_samples=min_samples,
+            progress_callback=progress_callback,
+        )
+        if session.get("cancel_requested"):
+            session["face_clusters"] = []
+            session["face_clustering"] = {
+                "available": False,
+                "reason": "cancelled",
+                "cluster_count": 0,
+                "message": "人物整理已中止。",
+            }
+            return session["face_clustering"]
         session["face_clusters"] = clusters
         if batch_state_store.enabled:
             try:
@@ -333,14 +407,103 @@ async def _classify_session_faces(session_id: str) -> dict[str, Any]:
             "min_samples": min_samples,
         }
     except Exception as exc:
-        logger.warning("Face clustering unavailable session=%s error=%s", session_id, exc)
+        logger.exception(
+            "Face clustering unavailable session=%s error_type=%s error=%r",
+            session_id,
+            type(exc).__name__,
+            exc,
+        )
         session["face_clusters"] = []
-        session["face_clustering"] = {
-            "available": False,
-            "cluster_count": 0,
-            "message": "人臉分類服務目前無法使用，請檢查 classifier API。",
-        }
+        if session.get("cancel_requested"):
+            session["face_clustering"] = {
+                "available": False,
+                "reason": "cancelled",
+                "cluster_count": 0,
+                "message": "人物整理已中止。",
+            }
+        else:
+            session["face_clustering"] = {
+                "available": False,
+                "cluster_count": 0,
+                "message": "人臉分類服務目前無法使用，請檢查 classifier API。",
+            }
     return session["face_clustering"]
+
+
+async def _request_batch_cancel(session: dict[str, Any]) -> dict[str, Any]:
+    session["cancel_requested"] = True
+    session["cancelled_at"] = datetime.now().isoformat()
+
+    job_id = str(session.get("face_cluster_job_id") or "").strip() or None
+    if not job_id:
+        return {
+            "success": True,
+            "session_id": session.get("session_id"),
+            "job_id": None,
+            "message": "已記下中止請求，會在目前階段結束後停止。",
+        }
+
+    try:
+        result = await cancel_cluster_job(job_id)
+    except Exception as exc:
+        logger.exception(
+            "Failed to cancel face cluster job session=%s job_id=%s",
+            session.get("session_id"),
+            job_id,
+        )
+        return {
+            "success": False,
+            "session_id": session.get("session_id"),
+            "job_id": job_id,
+            "message": f"中止請求送出失敗：{exc}",
+        }
+
+    session["face_cluster_cancel_requested"] = True
+    return {
+        "success": True,
+        "session_id": session.get("session_id"),
+        "job_id": job_id,
+        "message": str(result.get("message") or "已送出中止請求，會在目前照片處理完後停止。"),
+        "cancel_requested": bool(result.get("cancel_requested", True)),
+        "status": result.get("status"),
+    }
+
+
+def _start_face_clustering_task(
+    session_id: str,
+    *,
+    enabled: bool,
+) -> tuple[asyncio.Task[dict[str, Any]], asyncio.Queue[dict[str, Any]]]:
+    progress_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    async def on_progress(snapshot: dict[str, Any]) -> None:
+        session = _batch_sessions.get(session_id)
+        if session is not None:
+            session["face_cluster_job_id"] = snapshot.get("job_id")
+            if (
+                session.get("cancel_requested")
+                and snapshot.get("job_id")
+                and not session.get("face_cluster_cancel_requested")
+            ):
+                session["face_cluster_cancel_requested"] = True
+                try:
+                    await cancel_cluster_job(str(snapshot["job_id"]))
+                except Exception:
+                    logger.exception(
+                        "Failed to cancel delayed face cluster job session=%s job_id=%s",
+                        session_id,
+                        snapshot.get("job_id"),
+                    )
+        await progress_queue.put(_face_cluster_progress_event(session_id, snapshot))
+
+    async def run() -> dict[str, Any]:
+        if not enabled:
+            return _skip_session_face_clustering(session_id)
+        if "progress_callback" not in inspect.signature(_classify_session_faces).parameters:
+            return await _classify_session_faces(session_id)
+        return await _classify_session_faces(session_id, progress_callback=on_progress)
+
+    return asyncio.create_task(run()), progress_queue
 
 
 # ---------------------------------------------------------------------------
@@ -446,27 +609,64 @@ async def get_frontend_config():
 @app.get("/api/user/me")
 async def get_current_user(request: Request):
     """取得目前登入的 Google 帳號資訊"""
+    userinfo = _get_google_userinfo(request)
+    if userinfo is None:
+        return {"logged_in": False}
+    return {
+        "logged_in": True,
+        "email": userinfo.get("email"),
+        "name": userinfo.get("name"),
+        "picture": userinfo.get("picture"),
+    }
+
+
+def _get_google_userinfo(request: Request) -> dict[str, Any] | None:
+    cached = request.session.get("google_userinfo")
+    if isinstance(cached, dict) and cached.get("email"):
+        return cached
     try:
         creds = get_drive_credentials(request)
     except Exception:
-        # 任何原因導致無法取得憑證都視為未登入
-        return {"logged_in": False}
-    
+        return None
+
     from googleapiclient.discovery import build
     try:
-        # 使用 oauth2 service 取得使用者資訊
         service = build("oauth2", "v2", credentials=creds, cache_discovery=False)
         userinfo = service.userinfo().get().execute()
-        return {
-            "logged_in": True,
-            "email": userinfo.get("email"),
-            "name": userinfo.get("name"),
-            "picture": userinfo.get("picture")
-        }
+        if isinstance(userinfo, dict):
+            request.session["google_userinfo"] = {
+                "email": userinfo.get("email"),
+                "name": userinfo.get("name"),
+                "picture": userinfo.get("picture"),
+            }
+        return userinfo if isinstance(userinfo, dict) else None
     except Exception as e:
         logger.error(f"取得使用者資訊失敗: {e}")
-        # 如果憑證還在但 API 呼叫失敗，通常也是授權有問題
-        return {"logged_in": False, "error": str(e)}
+        return None
+
+
+def _get_batch_user_account(request: Request, batch_mode: str) -> str:
+    if batch_mode != "drive":
+        return ""
+    userinfo = _get_google_userinfo(request)
+    email = userinfo.get("email") if isinstance(userinfo, dict) else ""
+    return str(email or "")
+
+
+def _validate_oauth_request_host(request: Request) -> None:
+    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
+    if not redirect_uri:
+        return
+    redirect_host = (urlparse(redirect_uri).hostname or "").lower()
+    request_host = (request.url.hostname or "").lower()
+    if redirect_host and request_host and redirect_host != request_host:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Google 登入網址需固定使用 {redirect_host}。"
+                f"目前你是從 {request_host} 開啟，請改用 {redirect_uri.rsplit('/auth/callback', 1)[0]}"
+            ),
+        )
 
 @app.get("/auth/logout")
 async def google_logout(request: Request):
@@ -638,6 +838,7 @@ async def batch_upload_stream(
         "session_id": current_session_id,
         "owner_id": owner_id,
         "batch_mode": "upload",
+        "user_account": _get_batch_user_account(request, "upload"),
         "start_time": start_time.isoformat(),
         "end_time": None,
         "results": [],
@@ -650,6 +851,10 @@ async def batch_upload_stream(
             "run_face_clustering": run_face_clustering,
         },
         "completed": False,
+        "cancel_requested": False,
+        "cancelled_at": None,
+        "face_cluster_job_id": None,
+        "face_cluster_cancel_requested": False,
     }
     await _persist_session_created(_batch_sessions[current_session_id])
 
@@ -669,11 +874,37 @@ async def batch_upload_stream(
 
             _batch_sessions[current_session_id]["end_time"] = datetime.now().isoformat()
             _batch_sessions[current_session_id]["completed"] = True
-            face_clustering = (
-                await _classify_session_faces(current_session_id)
-                if run_face_clustering
-                else _skip_session_face_clustering(current_session_id)
+            if _batch_sessions[current_session_id].get("cancel_requested"):
+                await _persist_session_update(
+                    current_session_id,
+                    {
+                        "status": "cancelled",
+                        "completed_at": _batch_sessions[current_session_id]["end_time"],
+                        "result_count": len(_batch_sessions[current_session_id]["results"]),
+                    },
+                )
+                yield json.dumps(
+                    {
+                        "status": "cancelled",
+                        "session_id": current_session_id,
+                        "message": "已中止本次整理。",
+                    },
+                    ensure_ascii=False,
+                ) + "\n"
+                return
+            if run_face_clustering and FACE_CLUSTERING_ENABLED:
+                yield json.dumps(_face_cluster_starting_event(current_session_id), ensure_ascii=False) + "\n"
+            face_task, face_progress_queue = _start_face_clustering_task(
+                current_session_id,
+                enabled=run_face_clustering,
             )
+            while not face_task.done() or not face_progress_queue.empty():
+                try:
+                    progress_event = await asyncio.wait_for(face_progress_queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+                yield json.dumps(progress_event, ensure_ascii=False) + "\n"
+            face_clustering = await face_task
             await _persist_session_update(
                 current_session_id,
                 {
@@ -740,6 +971,7 @@ async def batch_visualize(req: BatchRequest, request: Request):
         "session_id": session_id,
         "owner_id": owner_id,
         "batch_mode": "local",
+        "user_account": _get_batch_user_account(request, "local"),
         "start_time": start_time.isoformat(),
         "end_time": None,
         "results": [],
@@ -831,6 +1063,7 @@ class DriveBatchRequest(BaseModel):
 async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
     """雲端硬碟批量處理入口 (舊 - 一次性回傳)"""
     _validate_processing_scope(req.run_public_classification, req.run_face_clustering)
+    _validate_cloud_api_concurrency(req.concurrency)
     user_key = request.session.get("user_key")
     if not user_key:
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
@@ -886,6 +1119,7 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
 async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request):
     """雲端硬碟批量處理入口 (新 - 串流即時回傳進度)"""
     _validate_processing_scope(req.run_public_classification, req.run_face_clustering)
+    _validate_cloud_api_concurrency(req.concurrency)
     user_key = request.session.get("user_key")
     if not user_key:
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
@@ -937,6 +1171,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
             "session_id": session_id,
             "owner_id": owner_id,
             "batch_mode": "drive",
+            "user_account": _get_batch_user_account(request, "drive"),
             "start_time": start_time.isoformat(),
             "end_time": None,
             "results": [],
@@ -948,7 +1183,11 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                 "run_public_classification": req.run_public_classification,
                 "run_face_clustering": req.run_face_clustering,
             },
-            "completed": False
+            "completed": False,
+            "cancel_requested": False,
+            "cancelled_at": None,
+            "face_cluster_job_id": None,
+            "face_cluster_cancel_requested": False,
         }
         await _persist_session_created(_batch_sessions[session_id])
 
@@ -976,11 +1215,37 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                 # 標記完成
                 _batch_sessions[session_id]["end_time"] = datetime.now().isoformat()
                 _batch_sessions[session_id]["completed"] = True
-                face_clustering = (
-                    await _classify_session_faces(session_id)
-                    if req.run_face_clustering
-                    else _skip_session_face_clustering(session_id)
+                if _batch_sessions[session_id].get("cancel_requested"):
+                    await _persist_session_update(
+                        session_id,
+                        {
+                            "status": "cancelled",
+                            "completed_at": _batch_sessions[session_id]["end_time"],
+                            "result_count": len(_batch_sessions[session_id]["results"]),
+                        },
+                    )
+                    yield json.dumps(
+                        {
+                            "status": "cancelled",
+                            "session_id": session_id,
+                            "message": "已中止本次整理。",
+                        },
+                        ensure_ascii=False,
+                    ) + "\n"
+                    return
+                if req.run_face_clustering and FACE_CLUSTERING_ENABLED:
+                    yield json.dumps(_face_cluster_starting_event(session_id), ensure_ascii=False) + "\n"
+                face_task, face_progress_queue = _start_face_clustering_task(
+                    session_id,
+                    enabled=req.run_face_clustering,
                 )
+                while not face_task.done() or not face_progress_queue.empty():
+                    try:
+                        progress_event = await asyncio.wait_for(face_progress_queue.get(), timeout=0.5)
+                    except asyncio.TimeoutError:
+                        continue
+                    yield json.dumps(progress_event, ensure_ascii=False) + "\n"
+                face_clustering = await face_task
                 await _persist_session_update(
                     session_id,
                     {
@@ -1109,6 +1374,7 @@ async def save_collaborative_memory(request: Request, folder_id: str = Form(...)
 @app.get("/auth/google")
 def google_auth(request: Request):
     try:
+        _validate_oauth_request_host(request)
         user_key = request.session.get("user_key")
         if not user_key:
             user_key = uuid.uuid4().hex
@@ -1121,6 +1387,8 @@ def google_auth(request: Request):
             request.session["oauth_code_verifier"] = code_verifier
         
         return RedirectResponse(url=auth_url)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Auth URL Error")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1130,7 +1398,10 @@ def google_auth_callback(request: Request, code: str, state: str):
     try:
         expected_state = request.session.get("oauth_state")
         if not expected_state or state != expected_state:
-            raise HTTPException(status_code=400, detail="Invalid OAuth state")
+            raise HTTPException(
+                status_code=400,
+                detail="Google 登入驗證失效，通常是因為混用了 localhost、127.0.0.1 或 0.0.0.0，請固定用同一個網址重新登入。",
+            )
         
         user_key = request.session.get("oauth_user_key")
         if not user_key:
@@ -1148,6 +1419,8 @@ def google_auth_callback(request: Request, code: str, state: str):
 
         # 授權成功後，導向回前端並帶上成功標記
         return RedirectResponse(url="/?auth=success")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Auth Callback Error")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1274,6 +1547,10 @@ class FaceClusterUpdateRequest(BaseModel):
     notes: Optional[str] = None
 
 
+class BatchCancelRequest(BaseModel):
+    job_id: Optional[str] = None
+
+
 class DriveBatchExportRequest(BaseModel):
     session_id: str
     target_folder_id: str
@@ -1395,7 +1672,7 @@ def _drive_query_literal(value: str) -> str:
 def _copy_people_folders_to_drive(
     credentials,
     target_folder_id: str,
-    people_folders: list[dict[str, Any]],
+    photo_angle_folders: list[dict[str, Any]],
 ) -> dict[str, Any]:
     from googleapiclient.discovery import build
 
@@ -1426,8 +1703,8 @@ def _copy_people_folders_to_drive(
     errors: list[str] = []
     folders_created_or_reused = 0
 
-    for folder in people_folders:
-        folder_name = str(folder.get("name") or "未命名人物").strip()[:80] or "未命名人物"
+    for folder in photo_angle_folders:
+        folder_name = str(folder.get("name") or "無人").strip()[:80] or "無人"
         photos = folder.get("photos") or []
         if not photos:
             continue
@@ -1485,13 +1762,13 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
             content,
         )
         people_copy = {"copied_count": 0, "folder_count": 0, "errors": []}
-        people_folders = req.document.get("people_folders")
-        if isinstance(people_folders, list) and people_folders:
+        photo_angle_folders = req.document.get("photo_angle_folders")
+        if isinstance(photo_angle_folders, list) and photo_angle_folders:
             people_copy = await run_in_threadpool(
                 _copy_people_folders_to_drive,
                 credentials,
                 target_folder_id,
-                people_folders,
+                photo_angle_folders,
             )
     except HTTPException:
         raise
@@ -1506,6 +1783,7 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
                     file_name,
                     "failed",
                     {"target_folder_id": target_folder_id, "error": str(exc)},
+                    str(session.get("user_account") or ""),
                 )
             except Exception:
                 logger.exception("Failed to persist failed export metadata session=%s", session_id)
@@ -1513,19 +1791,25 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
 
     if batch_state_store.enabled:
         try:
-            await batch_state_store.save_photo_assignments(session_id, session["owner_id"], req.document)
+            await batch_state_store.save_photo_assignments(
+                session_id,
+                session["owner_id"],
+                req.document,
+                str(session.get("user_account") or ""),
+            )
             await batch_state_store.create_export_record(
                 session_id,
                 session["owner_id"],
                 "drive",
                 saved.get("name") or file_name,
                 "created",
-                    {
-                        "target_folder_id": target_folder_id,
-                        "file_id": saved.get("id"),
-                        "people_copy": people_copy,
-                    },
-                )
+                {
+                    "target_folder_id": target_folder_id,
+                    "file_id": saved.get("id"),
+                    "people_copy": people_copy,
+                },
+                str(session.get("user_account") or ""),
+            )
         except Exception:
             logger.exception("Failed to persist Drive export metadata session=%s", session_id)
 
@@ -1541,6 +1825,23 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
 async def get_face_clusters(session_id: str, request: Request):
     session = await _owned_batch_session_async(request, session_id)
     return {"session_id": session_id, "clusters": session.get("face_clusters", [])}
+
+
+@app.post("/batch_sessions/{session_id}/cancel")
+async def cancel_batch_session(session_id: str, request: Request, req: BatchCancelRequest | None = None):
+    session = await _owned_batch_session_async(request, session_id)
+    processing_info = session.get("processing_info") if isinstance(session.get("processing_info"), dict) else {}
+    has_active_face_job = bool(processing_info.get("run_face_clustering")) and not session.get("face_clustering")
+    if session.get("completed") and not has_active_face_job:
+        return {
+            "success": True,
+            "session_id": session_id,
+            "job_id": session.get("face_cluster_job_id"),
+            "message": "這場整理已經結束，不需要再中止。",
+        }
+    if req and req.job_id and not session.get("face_cluster_job_id"):
+        session["face_cluster_job_id"] = req.job_id
+    return await _request_batch_cancel(session)
 
 
 @app.patch("/face_clusters/{session_id}/{cluster_id}")

@@ -743,6 +743,24 @@ button:disabled {
     color: var(--ink-strong);
 }
 
+.loading-detail {
+    color: var(--ink-body);
+    font-size: 0.95rem;
+    line-height: 1.6;
+    margin: -0.35rem 0 0.85rem;
+    min-height: 1.5em;
+}
+
+.loading-actions {
+    margin-top: 1.1rem;
+    display: flex;
+    justify-content: center;
+}
+
+.loading-cancel-btn {
+    min-width: 180px;
+}
+
 body.app-busy {
     overflow: hidden;
 }
@@ -878,22 +896,56 @@ body.app-busy {
 }
 
 .logout-btn {
-    background: rgba(59, 50, 43, 0.06);
-    border: none;
-    color: var(--text-primary);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 239, 232, 0.92));
+    border: 1px solid rgba(186, 123, 73, 0.28);
+    color: #7b5538;
     cursor: pointer;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
+    min-width: 72px;
+    height: 36px;
+    padding: 0 0.95rem;
+    border-radius: 999px;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.2s;
+    gap: 0.25rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    box-shadow: 0 6px 16px rgba(190, 164, 137, 0.10);
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
 }
 
 .logout-btn:hover {
-    background: var(--danger-color);
-    transform: scale(1.1);
+    background: linear-gradient(180deg, rgba(255, 250, 245, 0.98), rgba(245, 231, 218, 0.95));
+    border-color: rgba(186, 123, 73, 0.52);
+    color: #8a4f2c;
+    transform: translateY(-1px);
+    box-shadow: 0 10px 22px rgba(190, 164, 137, 0.16);
+}
+
+.logout-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 4px 10px rgba(190, 164, 137, 0.12);
+}
+
+.logout-btn:focus-visible {
+    outline: 2px solid rgba(186, 123, 73, 0.32);
+    outline-offset: 2px;
+}
+
+.logout-btn-label {
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+}
+
+@media (max-width: 640px) {
+    .logout-btn {
+        min-width: 64px;
+        height: 34px;
+        padding: 0 0.85rem;
+        font-size: 0.78rem;
+    }
 }
 
 .status-msg {
@@ -1658,7 +1710,7 @@ body.app-busy {
     gap: 1rem;
 }
 
-.face-workspace-toolbar > div {
+.face-workspace-toolbar-copy {
     display: flex;
     flex-direction: column;
     gap: 0.12rem;
@@ -1670,26 +1722,41 @@ body.app-busy {
 }
 
 .relationship-view-switch {
-    display: inline-flex;
-    gap: 0.25rem;
-    padding: 0.2rem;
-    border: 1px solid var(--glass-border);
+    display: inline-grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: center;
+    flex-shrink: 0;
+    gap: 0.32rem;
+    min-width: 15rem;
+    padding: 0.28rem;
+    border: 1px solid rgba(206, 176, 146, 0.74);
     border-radius: 999px;
-    background: var(--surface-muted);
+    background: rgba(248, 241, 231, 0.92);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 .relationship-view-switch button {
     border: 0;
     border-radius: 999px;
-    padding: 0.4rem 0.8rem;
+    min-width: 0;
+    padding: 0.72rem 1.1rem;
     background: transparent;
-    color: var(--text-secondary);
+    color: rgba(111, 89, 71, 0.82);
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
     cursor: pointer;
+    transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.relationship-view-switch button:hover {
+    color: var(--accent-color);
 }
 
 .relationship-view-switch button.active {
     background: var(--accent-color);
     color: #fff;
+    box-shadow: 0 10px 22px rgba(193, 92, 48, 0.2);
 }
 
 .face-panel-heading {
@@ -2166,11 +2233,35 @@ body.app-busy {
 }
 
 .photo-person-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    min-width: 0;
+    gap: 0.42rem;
     border-radius: 999px;
-    padding: 0.32rem 0.6rem;
+    padding: 0.26rem 0.62rem 0.26rem 0.28rem;
     background: var(--accent-soft);
     color: var(--accent-color);
     font-size: 0.78rem;
+    line-height: 1.15;
+}
+
+.photo-person-chip .face-cluster-avatar {
+    width: 1.85rem;
+    height: 1.85rem;
+    font-size: 0.72rem;
+    box-shadow: 0 0 0 2px rgba(255, 250, 243, 0.82);
+}
+
+.photo-person-chip .face-cluster-avatar-photo {
+    border-radius: 50%;
+}
+
+.photo-person-chip-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .photo-people-empty {
@@ -2307,6 +2398,11 @@ body.app-busy {
 
     .face-evidence-transfer {
         grid-template-columns: 1fr;
+    }
+
+    .relationship-view-switch {
+        width: 100%;
+        min-width: 0;
     }
 }
 

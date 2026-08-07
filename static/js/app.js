@@ -193,39 +193,49 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function syncProcessingScope() {
-        const runPublic = batchRunPublic.checked;
-        const runFaces = batchRunFaces.checked;
+        const runPublic = batchRunPublic ? batchRunPublic.checked : false;
+        const runFaces = batchRunFaces ? batchRunFaces.checked : true;
         const noFeatureSelected = !runPublic && !runFaces;
         const clusterPanel = document.getElementById('cluster-settings-panel');
         const publicPanel = document.getElementById('batch-public-settings-panel');
 
-        batchRunPublic.closest('.processing-option').classList.toggle('selected', runPublic);
-        batchRunFaces.closest('.processing-option').classList.toggle('selected', runFaces);
+        batchRunPublic?.closest('.processing-option')?.classList.toggle('selected', runPublic);
+        batchRunFaces?.closest('.processing-option')?.classList.toggle('selected', runFaces);
         clusterPanel.classList.toggle('is-inactive', !runFaces);
-        publicPanel.classList.toggle('is-inactive', !runPublic);
+        publicPanel?.classList.toggle('is-inactive', !runPublic);
         clusterPanel.querySelectorAll('button, input').forEach(control => { control.disabled = !runFaces; });
-        publicPanel.querySelectorAll('button, input').forEach(control => { control.disabled = !runPublic; });
-        document.getElementById('btn-edit-collaborative-memory').disabled = !runPublic;
-        document.getElementById('btn-add-memory-local').disabled = !runPublic;
+        publicPanel?.querySelectorAll('button, input').forEach(control => { control.disabled = !runPublic; });
+        const editMemoryBtn = document.getElementById('btn-edit-collaborative-memory');
+        if (editMemoryBtn) editMemoryBtn.disabled = batchRunPublic ? !runPublic : false;
+        const addMemoryLocalBtn = document.getElementById('btn-add-memory-local');
+        if (addMemoryLocalBtn) addMemoryLocalBtn.disabled = batchRunPublic ? !runPublic : false;
 
         analyzeBatchBtn.disabled = noFeatureSelected;
-        processingScopeHint.classList.toggle('error', noFeatureSelected);
-        if (noFeatureSelected) {
-            processingScopeHint.textContent = '至少選擇一項功能才能開始。';
-            analyzeBatchBtn.textContent = '請先選擇要執行的功能';
-        } else if (runPublic && runFaces) {
-            processingScopeHint.textContent = '兩項都會執行，可個別關閉。';
-            analyzeBatchBtn.textContent = '開始判定並分群';
-        } else if (runPublic) {
-            processingScopeHint.textContent = '只判定可公開性，不執行人臉分群。';
-            analyzeBatchBtn.textContent = '開始判定可公開性';
+        if (processingScopeHint) {
+            processingScopeHint.classList.toggle('error', noFeatureSelected);
+            if (noFeatureSelected) {
+                processingScopeHint.textContent = '至少選擇一項功能才能開始。';
+                analyzeBatchBtn.textContent = '請先選擇要執行的功能';
+            } else if (runPublic && runFaces) {
+                processingScopeHint.textContent = '兩項都會執行，可個別關閉。';
+                analyzeBatchBtn.textContent = '開始判定並分群';
+            } else if (runPublic) {
+                processingScopeHint.textContent = '只判定可公開性，不執行人臉分群。';
+                analyzeBatchBtn.textContent = '開始判定可公開性';
+            } else {
+                processingScopeHint.textContent = '只做人臉分群，不呼叫可公開性判定。';
+                analyzeBatchBtn.textContent = '開始人臉分群';
+            }
         } else {
-            processingScopeHint.textContent = '只做人臉分群，不呼叫可公開性判定。';
-            analyzeBatchBtn.textContent = '開始人臉分群';
+            analyzeBatchBtn.textContent = noFeatureSelected
+                ? '請先選擇要執行的功能'
+                : runFaces
+                    ? '開始人臉分群'
+                    : '開始看這些照片';
         }
     }
 
-    [batchRunPublic, batchRunFaces].forEach(input => input.addEventListener('change', syncProcessingScope));
+    [batchRunPublic, batchRunFaces].filter(Boolean).forEach(input => input.addEventListener('change', syncProcessingScope));
     syncProcessingScope();
 
     function readFaceClusterParams() {
@@ -260,7 +270,7 @@ document.addEventListener('DOMContentLoaded', () => {
             maxFiles: config?.batch_upload_max_files || 3,
             maxFileBytes: (config?.batch_upload_max_file_mb || 2) * 1024 * 1024,
             maxTotalBytes: (config?.batch_upload_max_total_mb || 4) * 1024 * 1024,
-            defaultConcurrency: config?.batch_upload_concurrency || 2,
+            defaultConcurrency: config?.batch_upload_concurrency || 5,
         };
     }
 
@@ -674,6 +684,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!loadingControlStates) {
                 loadingControlStates = new Map();
                 document.querySelectorAll('button, input, select, textarea').forEach(control => {
+                    if (control.dataset.allowBusy === 'true') return;
                     loadingControlStates.set(control, control.disabled);
                     control.disabled = true;
                 });
@@ -908,8 +919,79 @@ document.addEventListener('DOMContentLoaded', () => {
     const streamSuccessEl = document.getElementById('stream-success-count');
     const streamFailedEl = document.getElementById('stream-failed-count');
     const streamPendingEl = document.getElementById('stream-pending-count');
+    const loadingTextEl = document.getElementById('loading-text');
+    const loadingDetailEl = document.getElementById('loading-detail');
+    const loadingCancelBtn = document.getElementById('loading-cancel-btn');
+    const progressSuccessLabel = document.querySelector('.stat-item.success .label');
+    const progressFailedLabel = document.querySelector('.stat-item.failed .label');
+    const progressPendingLabel = document.querySelector('.stat-item.pending .label');
+    let currentBatchAbortController = null;
+    let currentBatchCancelRequested = false;
+    let currentFaceClusterJobId = null;
+
+    const FACE_CLUSTER_STAGE_LABELS = {
+        starting: '正在準備整理照片中的人物…',
+        uploading: '正在把照片送去人臉分類服務…',
+        connection_wait: '人臉分類服務回應比較慢，正在等它接上…',
+        queued: '正在排隊，準備開始分辨人物…',
+        detecting: '正在分辨照片中的人物…',
+        clustering: '正在把同一個人整理在一起…',
+        completed: '人物整理完成，正在帶回結果…',
+        failed: '人物整理沒有完成',
+        cancelled: '人物整理已取消',
+    };
+
+    function setLoadingMessage(text, detail = '') {
+        if (loadingTextEl) loadingTextEl.textContent = text;
+        if (loadingDetailEl) loadingDetailEl.textContent = detail;
+    }
+
+    function setLoadingCancelButton({ visible, disabled = false, label = '中止這次整理' }) {
+        if (!loadingCancelBtn) return;
+        loadingCancelBtn.textContent = label;
+        loadingCancelBtn.disabled = disabled;
+        loadingCancelBtn.classList.toggle('hidden', !visible);
+    }
+
+    async function cancelCurrentBatchOperation() {
+        if (!currentBatchAbortController || currentBatchCancelRequested) return;
+        currentBatchCancelRequested = true;
+        setLoadingCancelButton({ visible: true, disabled: true, label: '正在送出中止…' });
+
+        try {
+            if (window._currentSessionId) {
+                const response = await fetch(`/batch_sessions/${encodeURIComponent(window._currentSessionId)}/cancel`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ job_id: currentFaceClusterJobId || null }),
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(payload.detail || payload.message || '中止請求沒有送成功');
+                }
+                showToast(payload.message || '已送出中止請求');
+            }
+        } catch (error) {
+            showToast(error.message || '中止請求沒有送成功', 'error');
+        } finally {
+            currentBatchAbortController.abort();
+        }
+    }
+
+    function setProgressLabels(mode) {
+        if (mode === 'faces') {
+            if (progressSuccessLabel) progressSuccessLabel.textContent = '已分辨';
+            if (progressFailedLabel) progressFailedLabel.textContent = '佇列';
+            if (progressPendingLabel) progressPendingLabel.textContent = '還有';
+            return;
+        }
+        if (progressSuccessLabel) progressSuccessLabel.textContent = '看完了';
+        if (progressFailedLabel) progressFailedLabel.textContent = '沒看成';
+        if (progressPendingLabel) progressPendingLabel.textContent = '還剩';
+    }
 
     function updateProgressUI(current, total, success, failed) {
+        setProgressLabels('photos');
         if (total === 0) {
             progressFill.style.width = '0%';
             progressPercent.textContent = '0%';
@@ -928,13 +1010,38 @@ document.addEventListener('DOMContentLoaded', () => {
         streamPendingEl.textContent = total - current;
     }
 
+    function updateFaceClusterProgressUI(event) {
+        setProgressLabels('faces');
+        const progress = event.progress || {};
+        const completed = Number(progress.completed || 0);
+        const total = Number(progress.total || 0);
+        const remaining = Math.max(total - completed, 0);
+        const percent = total > 0 ? Math.min(Math.round((completed / total) * 100), 100) : 0;
+        const queuePosition = Number.isFinite(Number(event.queue_position)) ? Number(event.queue_position) : null;
+        const jobsAhead = queuePosition ? Math.max(queuePosition - 1, 0) : null;
+        const stageText = FACE_CLUSTER_STAGE_LABELS[event.stage] || FACE_CLUSTER_STAGE_LABELS[event.job_status] || '正在整理照片中的人物…';
+
+        progressFill.style.width = percent + '%';
+        progressPercent.textContent = percent + '%';
+        progressCount.textContent = total > 0 ? `${completed} / ${total}` : '等待中';
+        streamSuccessEl.textContent = total > 0 ? completed : 0;
+        streamFailedEl.textContent = queuePosition || '—';
+        streamPendingEl.textContent = total > 0 ? remaining : '—';
+        setLoadingMessage(
+            stageText,
+            total > 0
+                ? `已分辨 ${completed} / ${total} 張。${jobsAhead !== null ? `前面還有 ${jobsAhead} 個工作。` : '結果會整理好再回來。'}`
+                : jobsAhead !== null ? `已排入佇列，前面還有 ${jobsAhead} 個工作。` : '已送到人臉分類服務，正在等它回報進度。'
+        );
+    }
+
     // === Batch Mode Handling ===
     analyzeBatchBtn.addEventListener('click', async () => {
         const source = document.querySelector('input[name="batch-source"]:checked').value;
         batchMode = source === 'local' ? 'upload' : source;
         const currentConcurrency = parseInt(batchConcurrency.value) || 3;
-        const runPublicClassification = batchRunPublic.checked;
-        const runFaceClustering = batchRunFaces.checked;
+        const runPublicClassification = batchRunPublic ? batchRunPublic.checked : false;
+        const runFaceClustering = batchRunFaces ? batchRunFaces.checked : true;
         let faceClusterParams = getFaceClusterDefaults();
 
         if (!runPublicClassification && !runFaceClustering) {
@@ -1003,11 +1110,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify(body)
             };
         }
-
         const busyLabel = runPublicClassification && runFaceClustering
             ? '判定並整理人物'
             : runPublicClassification ? '判定照片' : '整理人物';
         if (!(await beginSharedBusy(busyLabel))) return;
+        currentBatchAbortController = new AbortController();
+        currentBatchCancelRequested = false;
+        currentFaceClusterJobId = null;
+        requestOptions.signal = currentBatchAbortController.signal;
 
         // Reset and Show Progress UI
         updateProgressUI(0, 0, 0, 0);
@@ -1032,9 +1142,15 @@ document.addEventListener('DOMContentLoaded', () => {
         splitViewer.classList.add('hidden');
         emptyState.classList.remove('hidden');
         showLoading(true);
-        document.getElementById('loading-text').textContent = runPublicClassification && runFaceClustering
-            ? '正在判定照片並整理人物…'
-            : runPublicClassification ? '正在判定照片是否適合分享…' : '正在整理照片中的人物…';
+        setLoadingCancelButton({ visible: true });
+        setLoadingMessage(
+            runPublicClassification && runFaceClustering
+                ? '正在判定照片並整理人物…'
+                : runPublicClassification ? '正在判定照片是否適合分享…' : '正在整理照片中的人物…',
+            runFaceClustering
+                ? '先一張一張看過照片，接著會回報人物分群進度。'
+                : '照片會一張一張回來，完成後就能查看結果。'
+        );
 
         try {
             const response = await fetch(endpoint, requestOptions);
@@ -1069,6 +1185,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         const data = JSON.parse(line);
 
                         // 進度與結果處理
+                        if (data.status === 'face_cluster_progress') {
+                            if (data.job_id) currentFaceClusterJobId = data.job_id;
+                            updateFaceClusterProgressUI(data);
+                            continue;
+                        }
+
                         if (data.status === 'ok') {
                             // Drive 串流模式：每行一筆 NDJSON
                             successCount++;
@@ -1094,6 +1216,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else if (data.status === 'completed') {
                             setCurrentFaceClusters(data.face_clusters);
                             faceClusteringInfo = data.face_clustering || null;
+                        } else if (data.status === 'cancelled') {
+                            throw new Error(data.message || '已中止本次整理');
                         } else if (data.results && Array.isArray(data.results)) {
                             // 本機批次模式：一次性完整 JSON 回應
                             totalImages = data.total || data.results.length;
@@ -1168,12 +1292,27 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
         } catch (e) {
-            showToast(e.message, 'error');
+            if (e.name === 'AbortError' || currentBatchCancelRequested) {
+                showToast('已中止本次整理');
+            } else {
+                showToast(e.message, 'error');
+            }
         } finally {
             showLoading(false);
+            setLoadingCancelButton({ visible: false, disabled: false });
+            currentBatchAbortController = null;
+            currentBatchCancelRequested = false;
+            currentFaceClusterJobId = null;
             endSharedBusy();
-            document.getElementById('loading-text').textContent = '正在一張一張看過去…';
+            setLoadingMessage('正在一張一張看過去…', '照片會一張一張回來，完成後再整理人物。');
         }
+    });
+
+    loadingCancelBtn?.addEventListener('click', () => {
+        cancelCurrentBatchOperation().catch(error => {
+            console.error('cancel batch failed', error);
+            showToast('中止請求沒有送成功', 'error');
+        });
     });
 
     function updatePageIndicator() {
@@ -1392,6 +1531,13 @@ document.addEventListener('DOMContentLoaded', () => {
         </span>`;
     }
 
+    function renderPhotoPersonChip(cluster) {
+        return `<span class="photo-person-chip" title="${escapeHtml(cluster.display_name || cluster.cluster_id)}">
+            ${renderClusterLeadPreview(cluster)}
+            <span class="photo-person-chip-name">${escapeHtml(cluster.display_name || cluster.cluster_id)}</span>
+        </span>`;
+    }
+
     function recalculateFaceClusterCounts(cluster) {
         const evidence = Array.isArray(cluster?.evidence_photos) ? cluster.evidence_photos : [];
         const photoNames = new Set(evidence.map(item => String(item.file_name || '')).filter(Boolean));
@@ -1541,7 +1687,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 .map(clusterId => peopleById.get(String(clusterId)))
                 .filter(Boolean);
             const peopleChips = assignedPeople.map(cluster =>
-                `<span class="photo-person-chip">${escapeHtml(cluster.display_name)}</span>`
+                renderPhotoPersonChip(cluster)
             ).join('');
             return `<article class="photo-relation-card${isExpanded ? ' expanded' : ''}">
                 <button class="photo-relation-toggle" type="button" data-photo-action="toggle-photo"
@@ -1564,12 +1710,13 @@ document.addEventListener('DOMContentLoaded', () => {
             </article>`;
         }).join('');
         container.innerHTML = `<div class="photo-relation-list">${photoItems || '<p class="face-empty-copy">沒有可顯示的照片</p>'}</div>`;
+        cropFaceEvidenceImages(container);
     }
 
     function renderFaceWorkspace(container) {
         container.innerHTML = `<section class="face-workspace" aria-label="人物與照片關聯結果">
             <div class="face-workspace-toolbar">
-                <div><strong>${relationshipViewMode === 'people' ? '偵測到的人物' : '辨識過的照片'}</strong><span>列表預設收合</span></div>
+                <div class="face-workspace-toolbar-copy"><strong>${relationshipViewMode === 'people' ? '偵測到的人物' : '辨識過的照片'}</strong><span>列表預設收合</span></div>
                 <div class="relationship-view-switch" role="group" aria-label="結果檢視角度">
                     <button type="button" data-relationship-view="people" class="${relationshipViewMode === 'people' ? 'active' : ''}">人物角度</button>
                     <button type="button" data-relationship-view="photos" class="${relationshipViewMode === 'photos' ? 'active' : ''}">照片角度</button>
@@ -1790,6 +1937,33 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function cloneExportData(exportData) {
+        if (typeof structuredClone === 'function') return structuredClone(exportData);
+        return JSON.parse(JSON.stringify(exportData));
+    }
+
+    function addArchiveRelativePaths(exportData, folderPhotoEntries) {
+        const archiveByFileName = new Map(
+            folderPhotoEntries.map(entry => [entry.photo.file_name, entry.archiveRelativePath]),
+        );
+        const nextExport = cloneExportData(exportData);
+        (nextExport.photos || []).forEach(photo => {
+            const archivePath = archiveByFileName.get(photo.file_name);
+            if (archivePath) photo.archive_relative_path = archivePath;
+        });
+        (nextExport.photo_angle_folders || []).forEach(folder => {
+            (folder.photos || []).forEach(photo => {
+                const archivePath = archiveByFileName.get(photo.file_name);
+                if (archivePath) photo.archive_relative_path = archivePath;
+            });
+        });
+        (nextExport.results || []).forEach(result => {
+            const archivePath = archiveByFileName.get(result.file_name || result.file);
+            if (archivePath) result.archive_relative_path = archivePath;
+        });
+        return nextExport;
+    }
+
     async function saveExportToDrive(document) {
         const targetFolderId = driveTargetId.value.trim();
         if (batchMode !== 'drive' || !targetFolderId) return { attempted: false };
@@ -1847,19 +2021,34 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const exportData = buildBatchResultExport();
-        const json = JSON.stringify(exportData, null, 2);
-        const jsonBlob = new Blob([json], { type: 'application/json;charset=utf-8' });
         const wantsPhotoFolders = Boolean(includeAnnotatedDownload?.checked);
         const folderPhotoEntries = [];
-        (exportData.people_folders || []).forEach(folder => {
+        (exportData.photo_angle_folders || []).forEach(folder => {
             (folder.photos || []).forEach(photo => {
                 const sourceFile = findSelectedBatchFile(photo.file_name);
                 if (!sourceFile) return;
-                folderPhotoEntries.push({ folderName: folder.name, photo, sourceFile });
+                const folderName = safeZipPathSegment(folder.name, `group_${folderPhotoEntries.length + 1}`);
+                const photoName = safeZipPathSegment(photo.file_name, sourceFile.name || `image_${folderPhotoEntries.length + 1}.jpg`);
+                folderPhotoEntries.push({
+                    folderName,
+                    photoName,
+                    archiveRelativePath: `${folderName}/${photoName}`,
+                    photo,
+                    sourceFile,
+                });
             });
         });
+        const exportDocument = wantsPhotoFolders && folderPhotoEntries.length > 0
+            ? addArchiveRelativePaths(exportData, folderPhotoEntries)
+            : exportData;
+        const json = JSON.stringify(exportDocument, null, 2);
+        const jsonBlob = new Blob([json], { type: 'application/json;charset=utf-8' });
         const imageBytes = folderPhotoEntries.reduce((total, item) => total + item.sourceFile.size, 0);
-        const maxBytes = (config?.batch_download_max_mb || 8) * 1024 * 1024;
+        // 本機原圖已由瀏覽器持有，沿用上傳總量限制即可；雲端模式仍保留
+        // 下載大小保護，避免一次把大量 Drive 檔案組成瀏覽器 ZIP。
+        const maxBytes = batchMode === 'upload'
+            ? Infinity
+            : (config?.batch_download_max_mb || 8) * 1024 * 1024;
         downloadBatchResultsBtn.disabled = true;
         showLoading(true);
         document.getElementById('loading-text').textContent = '正在整理下載內容…';
@@ -1876,7 +2065,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const reason = typeof JSZip === 'undefined'
                         ? '壓縮元件未載入'
                         : folderPhotoEntries.length === 0
-                            ? '找不到可放入人物資料夾的本機原圖'
+                            ? '找不到可放入照片分類資料夾的本機原圖'
                             : `照片資料夾超過 ${config?.batch_download_max_mb || 8}MB 上限`;
                     localMessage = `${reason}，已自動改下載 JSON`;
                     localMessageType = 'error';
@@ -1884,19 +2073,18 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const zip = new JSZip();
                 zip.file('result.json', json);
-                folderPhotoEntries.forEach((entry, index) => {
-                    const folder = zip.folder(safeZipPathSegment(entry.folderName, `person_${index + 1}`));
-                    const photoName = safeZipPathSegment(entry.photo.file_name, entry.sourceFile.name || `image_${index + 1}.jpg`);
-                    folder.file(photoName, entry.sourceFile);
+                folderPhotoEntries.forEach(entry => {
+                    const folder = zip.folder(entry.folderName);
+                    folder.file(entry.photoName, entry.sourceFile);
                 });
                 const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 4 } });
-                if (zipBlob.size > maxBytes) {
+                if (Number.isFinite(maxBytes) && zipBlob.size > maxBytes) {
                     downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
                     localMessage = `照片資料夾超過 ${config?.batch_download_max_mb || 8}MB 上限，已自動改下載 JSON`;
                     localMessageType = 'error';
                 } else {
                     downloadBlob(zipBlob, `photo_people_${Date.now()}.zip`);
-                    localMessage = '已下載 JSON 與人物照片資料夾 ZIP';
+                    localMessage = '已下載 JSON 與照片分類資料夾 ZIP';
                 }
             }
 
@@ -2291,9 +2479,9 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log("Config loaded:", !!config.google_client_id);
             document.getElementById('batch-upload-limits').textContent =
                 `最多 ${config.batch_upload_max_files} 張，單檔 ${config.batch_upload_max_file_mb}MB、合計 ${config.batch_upload_max_total_mb}MB 以內`;
-            batchConcurrency.value = String(config.batch_upload_concurrency || 2);
+            batchConcurrency.value = String(config.batch_upload_concurrency || 5);
             applyFaceClusterDefaults();
-            if (!config.face_clustering_enabled) {
+            if (batchRunFaces && !config.face_clustering_enabled) {
                 batchRunFaces.checked = false;
                 batchRunFaces.disabled = true;
             }
