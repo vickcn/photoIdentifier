@@ -35,6 +35,39 @@ document.addEventListener('DOMContentLoaded', () => {
     const driveFolderId = document.getElementById('drive-folder-id');
     const driveTargetId = document.getElementById('drive-target-id');
 
+    function getSelectedBatchSource() {
+        return document.querySelector('input[name="batch-source"]:checked')?.value || 'local';
+    }
+
+    function getBatchConcurrencyCap(source = getSelectedBatchSource()) {
+        if (source === 'drive') {
+            return config?.batch_upload_concurrency_cloud_cap || 3;
+        }
+        return config?.batch_upload_concurrency_local_cap || config?.batch_upload_concurrency || 5;
+    }
+
+    function syncBatchConcurrencyInput(source = getSelectedBatchSource()) {
+        const cap = getBatchConcurrencyCap(source);
+        batchConcurrency.max = String(cap);
+        batchConcurrency.min = '1';
+        const currentValue = parseInt(batchConcurrency.value, 10);
+        if (!Number.isFinite(currentValue) || currentValue < 1) {
+            batchConcurrency.value = '1';
+            return;
+        }
+        if (currentValue > cap) {
+            batchConcurrency.value = String(cap);
+        }
+    }
+
+    function validateBatchConcurrency(source, value) {
+        const cap = getBatchConcurrencyCap(source);
+        if (!Number.isFinite(value) || value < 1 || value > cap) {
+            const modeLabel = source === 'drive' ? '雲端模式' : '本機模式';
+            throw new Error(`${modeLabel}一次看幾張必須介於 1 到 ${cap}`);
+        }
+    }
+
     // === Batch Source Switching ===
     batchSourceRadios.forEach(radio => {
         radio.addEventListener('change', (e) => {
@@ -46,7 +79,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 driveBatchInputs.classList.remove('hidden');
                 tryFetchServerToken();
             }
+            syncBatchConcurrencyInput(e.target.value);
         });
+    });
+
+    batchConcurrency?.addEventListener('change', () => {
+        syncBatchConcurrencyInput();
     });
 
     googleLoginBtn.addEventListener('click', () => {
@@ -1127,6 +1165,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const runPublicClassification = batchRunPublic ? batchRunPublic.checked : false;
         const runFaceClustering = batchRunFaces ? batchRunFaces.checked : true;
         let faceClusterParams = getFaceClusterDefaults();
+
+        try {
+            validateBatchConcurrency(source, currentConcurrency);
+        } catch (error) {
+            showToast(error.message, 'error');
+            return;
+        }
 
         if (!runPublicClassification && !runFaceClustering) {
             showToast('至少選擇一項要執行的功能', 'error');
@@ -2582,6 +2627,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('batch-upload-limits').textContent =
                 `最多 ${config.batch_upload_max_files} 張，單檔 ${config.batch_upload_max_file_mb}MB、合計 ${config.batch_upload_max_total_mb}MB 以內`;
             batchConcurrency.value = String(config.batch_upload_concurrency || 5);
+            syncBatchConcurrencyInput();
             applyFaceClusterDefaults();
             if (batchRunFaces && !config.face_clustering_enabled) {
                 batchRunFaces.checked = false;

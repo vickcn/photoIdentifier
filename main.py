@@ -50,7 +50,8 @@ FACE_CLUSTER_EPS_MAX = 1.5
 IS_VERCEL = os.getenv("VERCEL") == "1"
 CONFIG_BATCH_UPLOAD_MAX_FILES_CAP = 20 if IS_VERCEL else None
 CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP = None
-CLOUD_API_CONCURRENCY_CAP = 5
+LOCAL_BATCH_CONCURRENCY_CAP = 5
+CLOUD_API_CONCURRENCY_CAP = 3
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 FaceClusterProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
@@ -127,6 +128,16 @@ def _validate_cloud_api_concurrency(concurrency: int) -> None:
         raise HTTPException(
             status_code=400,
             detail=f"雲端模式一次處理張數必須介於 1 到 {CLOUD_API_CONCURRENCY_CAP}",
+        )
+
+
+def _validate_local_api_concurrency(concurrency: int) -> None:
+    if concurrency < 1:
+        raise HTTPException(status_code=400, detail="一次處理張數必須至少為 1")
+    if concurrency > LOCAL_BATCH_CONCURRENCY_CAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"本機模式一次處理張數必須介於 1 到 {LOCAL_BATCH_CONCURRENCY_CAP}",
         )
 
 
@@ -619,6 +630,8 @@ async def get_frontend_config():
         "batch_upload_max_file_mb": BATCH_UPLOAD_MAX_FILE_MB,
         "batch_upload_max_total_mb": BATCH_UPLOAD_MAX_TOTAL_MB,
         "batch_upload_concurrency": BATCH_UPLOAD_CONCURRENCY,
+        "batch_upload_concurrency_local_cap": LOCAL_BATCH_CONCURRENCY_CAP,
+        "batch_upload_concurrency_cloud_cap": CLOUD_API_CONCURRENCY_CAP,
         "batch_download_max_mb": BATCH_DOWNLOAD_MAX_MB,
         "face_clustering_enabled": FACE_CLUSTERING_ENABLED,
         "face_cluster_default_eps": DEFAULT_CLUSTER_EPS,
@@ -823,10 +836,7 @@ async def batch_upload_stream(
     run_face_clustering: bool = Form(True),
 ):
     _validate_processing_scope(run_public_classification, run_face_clustering)
-    if concurrency < 1:
-        raise HTTPException(status_code=400, detail="一次處理張數必須至少為 1")
-    if IS_VERCEL and concurrency > 3:
-        raise HTTPException(status_code=400, detail="Vercel 環境下一次處理張數必須介於 1 到 3")
+    _validate_local_api_concurrency(concurrency)
 
     try:
         color_rules = json.loads(color_rules_json) if color_rules_json else None
