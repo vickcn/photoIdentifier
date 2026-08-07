@@ -1,0 +1,5 @@
+[project]
+name = "app"
+version = "0.1.0"
+dependencies = [ "fastapi>=0.115.0", "uvicorn[standard]>=0.35.0", "python-multipart>=0.0.20", "pydantic>=2.0.0", "python-dotenv>=1.0.1", "google-api-python-client", "google-auth", "google-auth-oauthlib", "google-auth-httplib2", "google-cloud-firestore", "itsdangerous", "httpx", "jinja2", "pillow" ]
+requires-python = "~=3.12.0"
