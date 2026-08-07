@@ -129,6 +129,137 @@ def _read_bool(raw_value: Any, *, key_name: str, default: bool) -> bool:
     return default
 
 
+def _parse_session_time(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat()
+
+
+def _session_terminal(status: Any) -> bool:
+    return str(status or "").lower() in {"completed", "failed", "cancelled", "expired"}
+
+
+def _session_timeout_defaults(start_time_iso: str) -> dict[str, Any]:
+    return {
+        "status": "processing",
+        "stage": "queued",
+        "queued_at": start_time_iso,
+        "started_at": None,
+        "last_progress_at": start_time_iso,
+        "queued_timeout_sec": _read_positive_int(
+            os.getenv("BATCH_SESSION_QUEUED_TIMEOUT_SEC"),
+            key_name="BATCH_SESSION_QUEUED_TIMEOUT_SEC",
+            default=900,
+            minimum=30,
+        ),
+        "running_timeout_sec": _read_positive_int(
+            os.getenv("BATCH_SESSION_RUNNING_TIMEOUT_SEC"),
+            key_name="BATCH_SESSION_RUNNING_TIMEOUT_SEC",
+            default=1800,
+            minimum=30,
+        ),
+        "progress_stale_timeout_sec": _read_positive_int(
+            os.getenv("BATCH_SESSION_PROGRESS_STALE_TIMEOUT_SEC"),
+            key_name="BATCH_SESSION_PROGRESS_STALE_TIMEOUT_SEC",
+            default=180,
+            minimum=30,
+        ),
+        "timeout_reason": None,
+    }
+
+
+def _touch_session_progress(session: dict[str, Any]) -> str:
+    now_iso = _now_iso()
+    session["last_progress_at"] = now_iso
+    return now_iso
+
+
+def _mark_session_started(session: dict[str, Any], stage: str) -> str:
+    now_iso = _touch_session_progress(session)
+    session["status"] = "processing"
+    session["stage"] = stage
+    if not session.get("started_at"):
+        session["started_at"] = now_iso
+    return now_iso
+
+
+async def _apply_session_timeout(session: dict[str, Any]) -> bool:
+    status = str(session.get("status") or "")
+    if _session_terminal(status):
+        return False
+
+    now = datetime.now()
+    queued_at = _parse_session_time(session.get("queued_at") or session.get("start_time"))
+    started_at = _parse_session_time(session.get("started_at"))
+    last_progress_at = _parse_session_time(session.get("last_progress_at") or session.get("start_time"))
+    queued_timeout_sec = int(session.get("queued_timeout_sec") or 900)
+    running_timeout_sec = int(session.get("running_timeout_sec") or 1800)
+    progress_stale_timeout_sec = int(session.get("progress_stale_timeout_sec") or 180)
+    stage = str(session.get("stage") or "")
+    timeout_reason: str | None = None
+    terminal_status: str | None = None
+    terminal_stage: str | None = None
+    error_message: str | None = None
+
+    if stage == "queued" and queued_at is not None and (now - queued_at).total_seconds() > queued_timeout_sec:
+        timeout_reason = "queued_timeout"
+        terminal_status = "expired"
+        terminal_stage = "expired"
+        error_message = "工作排隊逾時，請重新整理後再試一次。"
+    elif started_at is not None and (now - started_at).total_seconds() > running_timeout_sec:
+        timeout_reason = "running_timeout"
+        terminal_status = "failed"
+        terminal_stage = "timeout"
+        error_message = "工作處理時間過長，已自動停止。"
+    elif last_progress_at is not None and (now - last_progress_at).total_seconds() > progress_stale_timeout_sec:
+        timeout_reason = "progress_stale_timeout"
+        terminal_status = "failed"
+        terminal_stage = "stalled"
+        error_message = "工作太久沒有新進度，已自動停止。"
+
+    if terminal_status is None:
+        return False
+
+    session_id = str(session["session_id"])
+    owner_id = str(session["owner_id"])
+    end_time = _now_iso()
+    session["status"] = terminal_status
+    session["stage"] = terminal_stage
+    session["timeout_reason"] = timeout_reason
+    session["error_message"] = error_message
+    session["completed"] = True
+    session["end_time"] = end_time
+    logger.warning(
+        "batch.session.timeout session=%s status=%s stage=%s reason=%s",
+        session_id,
+        terminal_status,
+        terminal_stage,
+        timeout_reason,
+    )
+    await _persist_session_update(
+        session_id,
+        {
+            "status": terminal_status,
+            "stage": terminal_stage,
+            "completed_at": end_time,
+            "finished_at": end_time,
+            "timeout_reason": timeout_reason,
+            "error_message": error_message,
+            "last_progress_at": session.get("last_progress_at"),
+            "result_count": len(session.get("results") or []),
+        },
+    )
+    _release_batch_slot(owner_id, session_id)
+    return True
+
+
 def _read_face_cluster_params(raw_eps: Any, raw_min_samples: Any, *, max_files: int) -> tuple[float, int]:
     try:
         eps = float(raw_eps)
@@ -604,6 +735,7 @@ def _start_face_clustering_task(
     async def on_progress(snapshot: dict[str, Any]) -> None:
         session = _batch_sessions.get(session_id)
         if session is not None:
+            session["last_progress_at"] = _now_iso()
             session["face_cluster_job_id"] = snapshot.get("job_id")
             if (
                 session.get("cancel_requested")
@@ -973,12 +1105,13 @@ async def batch_upload_stream(
         _release_batch_slot(owner_id, current_session_id)
         raise
     start_time = datetime.now()
+    start_time_iso = start_time.isoformat()
     _batch_sessions[current_session_id] = {
         "session_id": current_session_id,
         "owner_id": owner_id,
         "batch_mode": "upload",
         "user_account": _get_batch_user_account(request, "upload"),
-        "start_time": start_time.isoformat(),
+        "start_time": start_time_iso,
         "end_time": None,
         "results": [],
         "processing_info": {
@@ -995,6 +1128,7 @@ async def batch_upload_stream(
         "cancelled_at": None,
         "face_cluster_job_id": None,
         "face_cluster_cancel_requested": False,
+        **_session_timeout_defaults(start_time_iso),
     }
     await _persist_session_created(_batch_sessions[current_session_id])
 
@@ -1106,6 +1240,7 @@ async def batch_visualize(req: BatchRequest, request: Request):
     session_id = req.session_id or str(uuid.uuid4())
     owner_id = _acquire_batch_slot(request, session_id)
     start_time = datetime.now()
+    start_time_iso = start_time.isoformat()
 
     # 初始化 session storage
     _batch_sessions[session_id] = {
@@ -1113,7 +1248,7 @@ async def batch_visualize(req: BatchRequest, request: Request):
         "owner_id": owner_id,
         "batch_mode": "local",
         "user_account": _get_batch_user_account(request, "local"),
-        "start_time": start_time.isoformat(),
+        "start_time": start_time_iso,
         "end_time": None,
         "results": [],
         "processing_info": {
@@ -1125,7 +1260,12 @@ async def batch_visualize(req: BatchRequest, request: Request):
             "run_public_classification": req.run_public_classification,
             "run_face_clustering": req.run_face_clustering,
         },
-        "completed": False
+        "completed": False,
+        "cancel_requested": False,
+        "cancelled_at": None,
+        "face_cluster_job_id": None,
+        "face_cluster_cancel_requested": False,
+        **_session_timeout_defaults(start_time_iso),
     }
     await _persist_session_created(_batch_sessions[session_id])
 
@@ -1257,12 +1397,13 @@ def _batch_status_payload(session: dict[str, Any]) -> dict[str, Any]:
         "face_clustering": session.get("face_clustering"),
         "face_clusters": session.get("face_clusters", []),
         "error_message": session.get("error_message"),
+        "timeout_reason": session.get("timeout_reason"),
     }
     return payload
 
 
 async def _advance_drive_session(session: dict[str, Any], request: Request) -> None:
-    if session.get("status") in {"completed", "failed", "cancelled"}:
+    if _session_terminal(session.get("status")):
         return
     session_id = str(session["session_id"])
     owner_id = str(session["owner_id"])
@@ -1288,8 +1429,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
     concurrency = max(1, min(int(processing_info.get("concurrency") or 1), CLOUD_API_CONCURRENCY_CAP))
 
     if next_index < len(drive_files):
-        session["status"] = "processing"
-        session["stage"] = "photos"
+        _mark_session_started(session, "photos")
         creds = get_drive_credentials(request)
         batch_items = drive_files[next_index: next_index + concurrency]
         tasks = [
@@ -1310,12 +1450,15 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
                 await _persist_photo_result(session_id, owner_id, result)
         processing_info["drive_next_index"] = next_index + len(batch_items)
         processing_info["stage"] = "photos"
+        last_progress_at = _touch_session_progress(session)
         await _persist_session_update(
             session_id,
             {
                 "status": "processing",
                 "stage": "photos",
                 "result_count": len(session.get("results") or []),
+                "started_at": session.get("started_at"),
+                "last_progress_at": last_progress_at,
                 "processing_info": processing_info,
             },
         )
@@ -1378,7 +1521,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
             )
             _release_batch_slot(owner_id, session_id)
             return
-        session["stage"] = "face_uploading"
+        _mark_session_started(session, "face_uploading")
         job = await create_cluster_job_from_results(
             session.get("results") or [],
             eps=float(processing_info.get("face_cluster_eps", DEFAULT_CLUSTER_EPS)),
@@ -1390,6 +1533,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
         processing_info["face_cluster_current_start_index"] = 0
         processing_info["face_cluster_current_batch_size"] = len(images)
         session["face_cluster_progress"] = _face_cluster_progress_event(session_id, job)
+        last_progress_at = _touch_session_progress(session)
         await _persist_session_update(
             session_id,
             {
@@ -1397,6 +1541,8 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
                 "stage": "face_clustering",
                 "face_cluster_job_id": session["face_cluster_job_id"],
                 "face_cluster_progress": session["face_cluster_progress"],
+                "started_at": session.get("started_at"),
+                "last_progress_at": last_progress_at,
                 "processing_info": processing_info,
             },
         )
@@ -1412,15 +1558,18 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
         "total": len(images),
     }
     session["face_cluster_progress"] = _face_cluster_progress_event(session_id, snapshot)
-    session["stage"] = "face_clustering"
+    _mark_session_started(session, "face_clustering")
     status = snapshot.get("status")
     if status in {"queued", "running"}:
+        last_progress_at = _touch_session_progress(session)
         await _persist_session_update(
             session_id,
             {
                 "status": "processing",
                 "stage": "face_clustering",
                 "face_cluster_progress": session["face_cluster_progress"],
+                "started_at": session.get("started_at"),
+                "last_progress_at": last_progress_at,
             },
         )
         return
@@ -1501,6 +1650,7 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
     session_id = req.session_id or str(uuid.uuid4())
     owner_id = _acquire_batch_slot(request, session_id)
     start_time = datetime.now()
+    start_time_iso = start_time.isoformat()
     collaborative_memory = await _load_drive_collaborative_memory(req, creds)
     _batch_sessions[session_id] = {
         "session_id": session_id,
@@ -1509,7 +1659,7 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
         "user_account": _get_batch_user_account(request, "drive"),
         "status": "processing",
         "stage": "queued",
-        "start_time": start_time.isoformat(),
+        "start_time": start_time_iso,
         "end_time": None,
         "results": [],
         "face_clusters": [],
@@ -1533,6 +1683,7 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
         "cancelled_at": None,
         "face_cluster_job_id": None,
         "face_cluster_cancel_requested": False,
+        **_session_timeout_defaults(start_time_iso),
     }
     await _persist_session_created(_batch_sessions[session_id])
     return _batch_status_payload(_batch_sessions[session_id])
@@ -1543,6 +1694,8 @@ async def get_batch_session_status(session_id: str, request: Request):
     session = await _owned_batch_session_async(request, session_id)
     async with _batch_session_lock(session_id):
         session = await _owned_batch_session_async(request, session_id)
+        if await _apply_session_timeout(session):
+            return _batch_status_payload(session)
         if session.get("batch_mode") == "drive":
             try:
                 await _advance_drive_session(session, request)

@@ -1,5 +1,7 @@
 # MEMORY
 
+> 這份檔案是專案概覽與長期記錄入口；較細的狀態筆記、欄位定義與近期決策請同步看 [`MEMORY.md`](/Users/kexuen/projects/photoIdentifier/MEMORY.md)。
+
 ## 目前進度
 
 - Firebase 專案已初始化並綁定到 `vision-493709`。

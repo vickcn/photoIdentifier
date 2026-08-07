@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_ACTIVE_TTL_DAYS = 7
 DEFAULT_HISTORY_TTL_DAYS = 30
+DEFAULT_QUEUED_TIMEOUT_SEC = 900
+DEFAULT_RUNNING_TIMEOUT_SEC = 1800
+DEFAULT_PROGRESS_STALE_TIMEOUT_SEC = 180
 
 
 def utc_now() -> datetime:
@@ -145,18 +148,32 @@ class FirestoreBatchStateStore:
             self._client = firestore.Client(project=project_id, database=database)
 
     async def create_session(self, session: dict[str, Any]) -> None:
+        processing_info = strip_image_payload(session.get("processing_info", {}))
         payload = {
             "session_id": session["session_id"],
             "owner_id": session["owner_id"],
             "batch_mode": session.get("batch_mode"),
             "user_account": str(session.get("user_account") or ""),
-            "status": "processing",
+            "status": session.get("status") or "processing",
+            "stage": session.get("stage") or "queued",
             "created_at": session.get("start_time") or iso_utc(),
+            "queued_at": session.get("start_time") or iso_utc(),
+            "started_at": session.get("start_time") or None,
             "updated_at": iso_utc(),
             "completed_at": None,
+            "finished_at": None,
             "expires_at": expires_after(DEFAULT_ACTIVE_TTL_DAYS),
-            "processing_info": strip_image_payload(session.get("processing_info", {})),
+            "processing_info": processing_info,
             "result_count": 0,
+            "cancel_requested": bool(session.get("cancel_requested", False)),
+            "cancelled_at": session.get("cancelled_at"),
+            "face_cluster_job_id": session.get("face_cluster_job_id"),
+            "face_cluster_cancel_requested": bool(session.get("face_cluster_cancel_requested", False)),
+            "last_progress_at": session.get("last_progress_at") or session.get("start_time") or iso_utc(),
+            "queued_timeout_sec": int(session.get("queued_timeout_sec") or DEFAULT_QUEUED_TIMEOUT_SEC),
+            "running_timeout_sec": int(session.get("running_timeout_sec") or DEFAULT_RUNNING_TIMEOUT_SEC),
+            "progress_stale_timeout_sec": int(session.get("progress_stale_timeout_sec") or DEFAULT_PROGRESS_STALE_TIMEOUT_SEC),
+            "timeout_reason": session.get("timeout_reason"),
         }
         info = session.get("processing_info", {})
         if "face_cluster_eps" in info:
@@ -170,6 +187,8 @@ class FirestoreBatchStateStore:
 
     async def update_session(self, session_id: str, updates: dict[str, Any]) -> None:
         payload = {**updates, "updated_at": iso_utc()}
+        if "status" in payload and payload["status"] in {"completed", "failed", "cancelled", "expired"}:
+            payload.setdefault("finished_at", payload.get("completed_at") or iso_utc())
         await run_in_threadpool(
             self._client.collection("batch_sessions").document(session_id).set,
             strip_image_payload(payload),
@@ -254,9 +273,9 @@ class FirestoreBatchStateStore:
                 for doc in photo_docs
             ]
             session["face_clusters"] = [doc.to_dict() for doc in cluster_docs]
-            session["completed"] = session.get("status") == "completed"
+            session["completed"] = str(session.get("status") or "") in {"completed", "failed", "cancelled", "expired"}
             session["start_time"] = session.get("created_at")
-            session["end_time"] = session.get("completed_at")
+            session["end_time"] = session.get("completed_at") or session.get("finished_at")
             return session
 
         return await run_in_threadpool(read)
