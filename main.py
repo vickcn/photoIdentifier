@@ -59,6 +59,18 @@ logger = logging.getLogger(__name__)
 FaceClusterProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
+def _log_validation_rejection(scope: str, field: str, *, value: Any, minimum: Any | None = None, maximum: Any | None = None, reason: str) -> None:
+    logger.warning(
+        "validation_rejected scope=%s field=%s value=%r minimum=%r maximum=%r reason=%s",
+        scope,
+        field,
+        value,
+        minimum,
+        maximum,
+        reason,
+    )
+
+
 def _read_positive_int(
     raw_value: Any,
     *,
@@ -99,8 +111,10 @@ def _read_face_cluster_params(raw_eps: Any, raw_min_samples: Any, *, max_files: 
     try:
         eps = float(raw_eps)
     except (TypeError, ValueError) as exc:
+        _log_validation_rejection("face_cluster", "eps", value=raw_eps, minimum=FACE_CLUSTER_EPS_MIN, maximum=FACE_CLUSTER_EPS_MAX, reason="not_a_number")
         raise HTTPException(status_code=400, detail="分群 eps 必須是數字") from exc
     if not FACE_CLUSTER_EPS_MIN <= eps <= FACE_CLUSTER_EPS_MAX:
+        _log_validation_rejection("face_cluster", "eps", value=eps, minimum=FACE_CLUSTER_EPS_MIN, maximum=FACE_CLUSTER_EPS_MAX, reason="out_of_range")
         raise HTTPException(
             status_code=400,
             detail=f"分群 eps 必須介於 {FACE_CLUSTER_EPS_MIN} 到 {FACE_CLUSTER_EPS_MAX}",
@@ -109,8 +123,10 @@ def _read_face_cluster_params(raw_eps: Any, raw_min_samples: Any, *, max_files: 
     try:
         min_samples = int(raw_min_samples)
     except (TypeError, ValueError) as exc:
+        _log_validation_rejection("face_cluster", "min_samples", value=raw_min_samples, minimum=1, maximum=max_files, reason="not_an_integer")
         raise HTTPException(status_code=400, detail="分群 min_samples 必須是整數") from exc
     if not 1 <= min_samples <= max_files:
+        _log_validation_rejection("face_cluster", "min_samples", value=min_samples, minimum=1, maximum=max_files, reason="out_of_range")
         raise HTTPException(
             status_code=400,
             detail=f"分群 min_samples 必須介於 1 到 {max_files}",
@@ -120,13 +136,16 @@ def _read_face_cluster_params(raw_eps: Any, raw_min_samples: Any, *, max_files: 
 
 def _validate_processing_scope(run_public_classification: bool, run_face_clustering: bool) -> None:
     if not run_public_classification and not run_face_clustering:
+        _log_validation_rejection("processing_scope", "features", value={"run_public_classification": run_public_classification, "run_face_clustering": run_face_clustering}, reason="all_disabled")
         raise HTTPException(status_code=400, detail="至少選擇一項：可公開性判定或人臉分群")
 
 
 def _validate_cloud_api_concurrency(concurrency: int) -> None:
     if concurrency < 1:
+        _log_validation_rejection("cloud_batch", "concurrency", value=concurrency, minimum=1, maximum=CLOUD_API_CONCURRENCY_CAP, reason="below_minimum")
         raise HTTPException(status_code=400, detail="一次處理張數必須至少為 1")
     if concurrency > CLOUD_API_CONCURRENCY_CAP:
+        _log_validation_rejection("cloud_batch", "concurrency", value=concurrency, minimum=1, maximum=CLOUD_API_CONCURRENCY_CAP, reason="above_maximum")
         raise HTTPException(
             status_code=400,
             detail=f"雲端模式一次處理張數必須介於 1 到 {CLOUD_API_CONCURRENCY_CAP}",
@@ -135,8 +154,10 @@ def _validate_cloud_api_concurrency(concurrency: int) -> None:
 
 def _validate_local_api_concurrency(concurrency: int) -> None:
     if concurrency < 1:
+        _log_validation_rejection("local_batch", "concurrency", value=concurrency, minimum=1, maximum=LOCAL_BATCH_CONCURRENCY_CAP, reason="below_minimum")
         raise HTTPException(status_code=400, detail="一次處理張數必須至少為 1")
     if concurrency > LOCAL_BATCH_CONCURRENCY_CAP:
+        _log_validation_rejection("local_batch", "concurrency", value=concurrency, minimum=1, maximum=LOCAL_BATCH_CONCURRENCY_CAP, reason="above_maximum")
         raise HTTPException(
             status_code=400,
             detail=f"本機模式一次處理張數必須介於 1 到 {LOCAL_BATCH_CONCURRENCY_CAP}",
@@ -145,9 +166,11 @@ def _validate_local_api_concurrency(concurrency: int) -> None:
 
 def _validate_batch_file_count(file_count: int, *, max_files: int, mode: str) -> None:
     if file_count < 1:
+        _log_validation_rejection(f"{mode}_batch", "file_count", value=file_count, minimum=1, maximum=max_files, reason="below_minimum")
         raise HTTPException(status_code=400, detail="請先準備至少 1 張照片")
     if file_count > max_files:
         mode_label = "Google 雲端" if mode == "cloud" else "這台電腦"
+        _log_validation_rejection(f"{mode}_batch", "file_count", value=file_count, minimum=1, maximum=max_files, reason="above_maximum")
         raise HTTPException(
             status_code=400,
             detail=f"{mode_label}這次先幫我準備 1 到 {max_files} 張照片就好，整理起來會比較穩。",

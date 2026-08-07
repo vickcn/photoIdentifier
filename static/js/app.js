@@ -79,13 +79,23 @@ document.addEventListener('DOMContentLoaded', () => {
         if (batchConcurrencyHint) {
             batchConcurrencyHint.textContent = getBatchConcurrencyHint(source);
         }
-        const currentValue = parseInt(batchConcurrency.value, 10);
-        if (!Number.isFinite(currentValue) || currentValue < 1) {
-            batchConcurrency.value = '1';
-            return;
-        }
-        if (currentValue > cap) {
-            batchConcurrency.value = String(cap);
+        const normalized = clampNumberValue(batchConcurrency.value, {
+            fallback: 1,
+            minimum: 1,
+            maximum: cap,
+            integer: true,
+        });
+        if (String(normalized) !== String(batchConcurrency.value)) {
+            logBatchValidationFailure({
+                scope: source === 'drive' ? 'cloud_batch' : 'local_batch',
+                field: 'concurrency',
+                input: batchConcurrency.value,
+                normalized,
+                minimum: 1,
+                maximum: cap,
+                reason: 'input_normalized',
+            });
+            batchConcurrency.value = String(normalized);
         }
     }
 
@@ -98,6 +108,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function validateBatchConcurrency(source, value) {
         const cap = getBatchConcurrencyCap(source);
         if (!Number.isFinite(value) || value < 1 || value > cap) {
+            logBatchValidationFailure({
+                scope: source === 'drive' ? 'cloud_batch' : 'local_batch',
+                field: 'concurrency',
+                input: value,
+                minimum: 1,
+                maximum: cap,
+                reason: 'out_of_range',
+            });
             throw new Error(`這次先幫我一次看 1 到 ${cap} 張就好，整理起來會比較穩。`);
         }
     }
@@ -119,6 +137,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     batchConcurrency?.addEventListener('change', () => {
+        syncBatchConcurrencyInput();
+    });
+    batchConcurrency?.addEventListener('blur', () => {
         syncBatchConcurrencyInput();
     });
 
@@ -246,6 +267,15 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    function clampNumberValue(rawValue, { fallback, minimum, maximum, integer = false }) {
+        let value = integer ? parseInt(rawValue, 10) : Number(rawValue);
+        if (!Number.isFinite(value)) value = fallback;
+        if (integer) value = Math.round(value);
+        value = Math.max(minimum, value);
+        value = Math.min(maximum, value);
+        return value;
+    }
+
     function syncFaceClusterSummary() {
         const summary = document.getElementById('cluster-settings-summary');
         if (!summary) return;
@@ -262,6 +292,46 @@ document.addEventListener('DOMContentLoaded', () => {
         faceClusterMinSamplesInput.min = '1';
         faceClusterMinSamplesInput.max = String(defaults.minSamplesMax);
         faceClusterMinSamplesInput.value = String(defaults.minSamples);
+        syncFaceClusterSummary();
+    }
+
+    function normalizeFaceClusterInputs() {
+        const defaults = getFaceClusterDefaults();
+        const normalizedEps = clampNumberValue(faceClusterEpsInput.value, {
+            fallback: defaults.eps,
+            minimum: defaults.epsMin,
+            maximum: defaults.epsMax,
+        });
+        if (String(normalizedEps) !== String(faceClusterEpsInput.value)) {
+            logBatchValidationFailure({
+                scope: 'face_cluster',
+                field: 'eps',
+                input: faceClusterEpsInput.value,
+                normalized: normalizedEps,
+                minimum: defaults.epsMin,
+                maximum: defaults.epsMax,
+                reason: 'input_normalized',
+            });
+            faceClusterEpsInput.value = String(normalizedEps);
+        }
+        const normalizedMinSamples = clampNumberValue(faceClusterMinSamplesInput.value, {
+            fallback: defaults.minSamples,
+            minimum: 1,
+            maximum: defaults.minSamplesMax,
+            integer: true,
+        });
+        if (String(normalizedMinSamples) !== String(faceClusterMinSamplesInput.value)) {
+            logBatchValidationFailure({
+                scope: 'face_cluster',
+                field: 'min_samples',
+                input: faceClusterMinSamplesInput.value,
+                normalized: normalizedMinSamples,
+                minimum: 1,
+                maximum: defaults.minSamplesMax,
+                reason: 'input_normalized',
+            });
+            faceClusterMinSamplesInput.value = String(normalizedMinSamples);
+        }
         syncFaceClusterSummary();
     }
 
@@ -310,16 +380,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
     [batchRunPublic, batchRunFaces].filter(Boolean).forEach(input => input.addEventListener('change', syncProcessingScope));
     syncProcessingScope();
+    faceClusterEpsInput?.addEventListener('change', normalizeFaceClusterInputs);
+    faceClusterEpsInput?.addEventListener('blur', normalizeFaceClusterInputs);
+    faceClusterMinSamplesInput?.addEventListener('change', normalizeFaceClusterInputs);
+    faceClusterMinSamplesInput?.addEventListener('blur', normalizeFaceClusterInputs);
 
     function readFaceClusterParams() {
         const defaults = getFaceClusterDefaults();
         const eps = Number(faceClusterEpsInput.value || defaults.eps);
         const minSamples = Number(faceClusterMinSamplesInput.value || defaults.minSamples);
         if (!Number.isFinite(eps) || eps < defaults.epsMin || eps > defaults.epsMax) {
-            throw new Error(`分群 eps 必須介於 ${defaults.epsMin} 到 ${defaults.epsMax}`);
+            logBatchValidationFailure({
+                scope: 'face_cluster',
+                field: 'eps',
+                input: eps,
+                minimum: defaults.epsMin,
+                maximum: defaults.epsMax,
+                reason: 'out_of_range',
+            });
+            throw new Error(`分群設定先幫我放在 ${defaults.epsMin} 到 ${defaults.epsMax} 之間，這樣比較穩。`);
         }
         if (!Number.isInteger(minSamples) || minSamples < 1 || minSamples > defaults.minSamplesMax) {
-            throw new Error(`分群 min_samples 必須介於 1 到 ${defaults.minSamplesMax}`);
+            logBatchValidationFailure({
+                scope: 'face_cluster',
+                field: 'min_samples',
+                input: minSamples,
+                minimum: 1,
+                maximum: defaults.minSamplesMax,
+                reason: 'out_of_range',
+            });
+            throw new Error(`分群設定先幫我放在 1 到 ${defaults.minSamplesMax} 之間，這樣比較容易整理得準。`);
         }
         return { eps, minSamples };
     }
@@ -340,11 +430,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function validateBatchFiles(files, source = getSelectedBatchSource()) {
         const limits = getBatchUploadLimits(source);
-        if (files.length > limits.maxFiles) return `一次最多選 ${limits.maxFiles} 張照片`;
+        if (files.length > limits.maxFiles) {
+            logBatchValidationFailure({
+                scope: source === 'drive' ? 'cloud_batch' : 'local_batch',
+                field: 'file_count',
+                input: files.length,
+                minimum: 1,
+                maximum: limits.maxFiles,
+                reason: 'above_maximum',
+            });
+            return `這次先幫我挑 1 到 ${limits.maxFiles} 張照片就好，整理起來會比較穩。`;
+        }
         const oversized = files.find(file => file.size > limits.maxFileBytes);
-        if (oversized) return `${oversized.name} 超過單檔大小限制`;
+        if (oversized) {
+            logBatchValidationFailure({
+                scope: source === 'drive' ? 'cloud_batch' : 'local_batch',
+                field: 'file_size_bytes',
+                input: oversized.size,
+                maximum: limits.maxFileBytes,
+                reason: 'file_too_large',
+                fileName: oversized.name,
+            });
+            return `${oversized.name} 有點太大了，先幫我換成 ${Math.round(limits.maxFileBytes / 1024 / 1024)}MB 以內的版本。`;
+        }
         const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-        if (totalBytes > limits.maxTotalBytes) return '選取照片的總大小超過限制';
+        if (totalBytes > limits.maxTotalBytes) {
+            logBatchValidationFailure({
+                scope: source === 'drive' ? 'cloud_batch' : 'local_batch',
+                field: 'total_size_bytes',
+                input: totalBytes,
+                maximum: limits.maxTotalBytes,
+                reason: 'total_size_too_large',
+            });
+            return '這批照片有點太大了，先少放一點，整理起來會比較順。';
+        }
         return null;
     }
 
@@ -643,6 +762,20 @@ document.addEventListener('DOMContentLoaded', () => {
         toastEl.textContent = msg;
         toastEl.className = `toast show ${type}`;
         setTimeout(() => toastEl.classList.remove('show'), 3000);
+    }
+
+    function logBatchValidationFailure(payload) {
+        console.warn('[batch-validation]', {
+            at: new Date().toISOString(),
+            ...payload,
+        });
+    }
+
+    function logBatchRequestFailure(payload) {
+        console.error('[batch-request-failure]', {
+            at: new Date().toISOString(),
+            ...payload,
+        });
     }
 
     let loadingControlStates = null;
@@ -1312,6 +1445,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const response = await fetch(endpoint, requestOptions);
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) {
+                    logBatchRequestFailure({
+                        source,
+                        stage: 'batch_start',
+                        endpoint,
+                        sessionId,
+                        status: response.status,
+                        payload: data,
+                    });
                     throw new Error(data.detail || data.error_message || '沒能開始，再試一次好嗎');
                 }
                 applyDriveStatusPayload(data);
@@ -1330,6 +1471,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!response.ok) {
                 const err = await response.json();
+                logBatchRequestFailure({
+                    source,
+                    stage: 'batch_start',
+                    endpoint,
+                    sessionId,
+                    status: response.status,
+                    payload: err,
+                });
                 throw new Error(err.detail || '沒能開始，再試一次好嗎');
             }
 
@@ -1465,6 +1614,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
         } catch (e) {
+            logBatchRequestFailure({
+                source,
+                stage: 'batch_runtime',
+                endpoint,
+                sessionId,
+                error: e?.message || String(e),
+                cancelRequested: currentBatchCancelRequested,
+            });
             if (e.name === 'AbortError' || currentBatchCancelRequested) {
                 showToast('已中止本次整理');
             } else {
