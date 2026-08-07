@@ -15,6 +15,7 @@ from PIL import Image
 
 DEFAULT_CLUSTER_EPS = 0.9
 DEFAULT_CLUSTER_MIN_SAMPLES = 2
+DEFAULT_CLUSTER_BATCH_SIZE = 20
 DEFAULT_CLUSTER_JOB_POLL_INTERVAL_SEC = 1.0
 DEFAULT_CLUSTER_JOB_TIMEOUT_SEC = 900.0
 DEFAULT_INSIGHT_API_CONNECT_TIMEOUT_SEC = 20.0
@@ -218,16 +219,35 @@ async def cluster_batch_results(
     *,
     eps: float = DEFAULT_CLUSTER_EPS,
     min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
+    batch_size: int = DEFAULT_CLUSTER_BATCH_SIZE,
     progress_callback: ProgressCallback | None = None,
 ) -> list[dict]:
     images, source_by_name = prepare_cluster_images(results)
     if not images:
         return []
+    async def on_global_progress(snapshot: dict[str, Any]) -> None:
+        progress = snapshot.get("progress") if isinstance(snapshot.get("progress"), dict) else {}
+        completed = min(int(progress.get("completed") or snapshot.get("completed") or 0), len(images))
+        aggregate = {
+            **snapshot,
+            "progress": {
+                "completed": completed,
+                "total": len(images),
+                "percent": round(completed / len(images) * 100, 1),
+            },
+        }
+        if progress_callback is not None:
+            result = progress_callback(aggregate)
+            if result is not None:
+                await result
+
+    # The classifier receives one logical job and performs detection in small
+    # internal batches before fitting DBSCAN once across all embeddings.
     response = await InsightApiClient().cluster(
         images,
         eps=eps,
         min_samples=min_samples,
-        progress_callback=progress_callback,
+        progress_callback=on_global_progress,
     )
     return build_clusters_from_response(response, source_by_name)
 
@@ -300,11 +320,16 @@ async def create_cluster_job_from_results(
     *,
     eps: float = DEFAULT_CLUSTER_EPS,
     min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
+    start_index: int = 0,
+    batch_size: int = DEFAULT_CLUSTER_BATCH_SIZE,
 ) -> dict:
     images, _source_by_name = prepare_cluster_images(results)
     if not images:
         return {"job_id": None, "status": "success", "result": {"images": []}}
-    return await InsightApiClient().create_cluster_job(images, eps=eps, min_samples=min_samples)
+    # One classifier job owns the complete dataset. The classifier itself
+    # detects images in bounded internal batches, then fits globally.
+    job = await InsightApiClient().create_cluster_job(images, eps=eps, min_samples=min_samples)
+    return {**job, "batch_start_index": 0, "batch_size": len(images), "total": len(images)}
 
 
 async def get_cluster_job_snapshot(job_id: str) -> dict:

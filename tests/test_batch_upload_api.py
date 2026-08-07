@@ -24,7 +24,9 @@ class BatchUploadApiTests(unittest.TestCase):
         response = self.client.get("/api/config")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["batch_upload_max_files"], main.BATCH_UPLOAD_MAX_FILES)
+        self.assertEqual(response.json()["batch_upload_batch_size"], main.BATCH_UPLOAD_BATCH_SIZE)
+        self.assertEqual(response.json()["batch_upload_total_max_files"], main.BATCH_UPLOAD_TOTAL_MAX_FILES)
+        self.assertEqual(response.json()["batch_upload_max_files"], main.BATCH_UPLOAD_TOTAL_MAX_FILES)
         self.assertEqual(response.json()["batch_upload_max_file_mb"], main.BATCH_UPLOAD_MAX_FILE_MB)
         self.assertEqual(response.json()["batch_upload_max_total_mb"], main.BATCH_UPLOAD_MAX_TOTAL_MB)
         self.assertEqual(response.json()["batch_upload_concurrency"], main.BATCH_UPLOAD_CONCURRENCY)
@@ -52,7 +54,8 @@ class BatchUploadApiTests(unittest.TestCase):
             temp_config_path.write_text(
                 json.dumps(
                     {
-                        "batch_upload_max_files": 9,
+                        "batch_upload_batch_size": 9,
+                        "batch_upload_total_max_files": 99,
                         "batch_upload_max_file_mb": 7,
                         "batch_upload_max_total_mb": 21,
                         "batch_upload_concurrency": 5,
@@ -66,7 +69,8 @@ class BatchUploadApiTests(unittest.TestCase):
                 patch.dict(
                     os.environ,
                     {
-                        "BATCH_UPLOAD_MAX_FILES": "3",
+                        "BATCH_UPLOAD_BATCH_SIZE": "3",
+                        "BATCH_UPLOAD_TOTAL_MAX_FILES": "33",
                         "BATCH_UPLOAD_MAX_FILE_MB": "2",
                         "BATCH_UPLOAD_MAX_TOTAL_MB": "4",
                         "BATCH_UPLOAD_CONCURRENCY": "1",
@@ -77,7 +81,8 @@ class BatchUploadApiTests(unittest.TestCase):
             ):
                 config = main.load_config()
 
-        self.assertEqual(config["batch_upload_max_files"], 3)
+        self.assertEqual(config["batch_upload_batch_size"], 3)
+        self.assertEqual(config["batch_upload_total_max_files"], 33)
         self.assertEqual(config["batch_upload_max_file_mb"], 2)
         self.assertEqual(config["batch_upload_max_total_mb"], 4)
         self.assertEqual(config["batch_upload_concurrency"], 1)
@@ -89,12 +94,11 @@ class BatchUploadApiTests(unittest.TestCase):
             temp_config_path.write_text(json.dumps({}), encoding="utf-8")
             with (
                 patch.object(main, "CONFIG_PATH", temp_config_path),
-                patch.object(main, "CONFIG_BATCH_UPLOAD_MAX_FILES_CAP", None),
                 patch.object(main, "CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP", None),
                 patch.dict(
                     os.environ,
                     {
-                        "BATCH_UPLOAD_MAX_FILES": "30",
+                        "BATCH_UPLOAD_BATCH_SIZE": "30",
                         "BATCH_UPLOAD_CONCURRENCY": "20",
                     },
                     clear=False,
@@ -102,7 +106,7 @@ class BatchUploadApiTests(unittest.TestCase):
             ):
                 config = main.load_config()
 
-        self.assertEqual(config["batch_upload_max_files"], 30)
+        self.assertEqual(config["batch_upload_batch_size"], 30)
         self.assertEqual(config["batch_upload_concurrency"], 20)
 
     def test_face_clustering_env_overrides_config_json(self):
@@ -299,16 +303,16 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(vercel_config["env"]["FACE_CLUSTERING_ENABLED"], "true")
         self.assertEqual(vercel_config["env"]["VERCEL_SUPPORT_LARGE_FUNCTIONS"], "1")
 
-    def test_batch_upload_stream_rejects_too_many_files(self):
+    def test_batch_upload_stream_rejects_too_many_files_over_total_limit(self):
         files = [
             ("files", (f"{index}.jpg", b"x", "image/jpeg"))
-            for index in range(main.BATCH_UPLOAD_MAX_FILES + 1)
+            for index in range(main.BATCH_UPLOAD_TOTAL_MAX_FILES + 1)
         ]
 
         response = self.client.post("/batch_upload_stream/", files=files)
 
         self.assertEqual(response.status_code, 413)
-        self.assertIn("Google 雲端", response.json()["detail"])
+        self.assertIn("一次最多上傳", response.json()["detail"])
 
     def test_batch_upload_rejects_when_same_client_is_already_busy(self):
         main._active_batch_owners["owner-a"] = "existing-session"

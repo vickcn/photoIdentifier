@@ -56,9 +56,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function getBatchUploadLimits(source = getSelectedBatchSource()) {
         return {
-            maxFiles: source === 'drive'
-                ? (config?.batch_upload_max_files_cloud || 20)
-                : (config?.batch_upload_max_files_local || config?.batch_upload_max_files || 200),
+            totalMaxFiles: config?.batch_upload_total_max_files || 200,
+            batchSize: source === 'drive'
+                ? (config?.batch_upload_batch_size_cloud || config?.batch_upload_max_files_cloud || 20)
+                : (config?.batch_upload_batch_size_local || config?.batch_upload_max_files_local || config?.batch_upload_batch_size || config?.batch_upload_max_files || 20),
             maxFileBytes: (config?.batch_upload_max_file_mb || 2) * 1024 * 1024,
             maxTotalBytes: (config?.batch_upload_max_total_mb || 4) * 1024 * 1024,
             defaultConcurrency: config?.batch_upload_concurrency || 5,
@@ -67,9 +68,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function getBatchUploadLimitsHint(source = getSelectedBatchSource()) {
         if (source === 'drive') {
-            return config?.batch_upload_limits_cloud_message || `Google 雲端這次最多先整理 ${getBatchUploadLimits(source).maxFiles} 張，這樣比較不容易卡住。`;
+            return config?.batch_upload_limits_cloud_message || `Google 雲端會每 ${getBatchUploadLimits(source).batchSize} 張分成一批送出，全部準備好後再整理人物。`;
         }
-        return config?.batch_upload_limits_local_message || `這台電腦這次最多先整理 ${getBatchUploadLimits(source).maxFiles} 張，單檔 ${config?.batch_upload_max_file_mb || 2}MB、合計 ${config?.batch_upload_max_total_mb || 4}MB 以內。`;
+        const limits = getBatchUploadLimits(source);
+        return config?.batch_upload_limits_local_message || `這台電腦一次可先準備 ${limits.totalMaxFiles} 張，會每 ${limits.batchSize} 張分成一批整理；單檔 ${config?.batch_upload_max_file_mb || 2}MB、合計 ${config?.batch_upload_max_total_mb || 4}MB 以內。`;
     }
 
     function syncBatchConcurrencyInput(source = getSelectedBatchSource()) {
@@ -263,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
             minSamples: Number(config?.face_cluster_default_min_samples ?? 2),
             epsMin: Number(config?.face_cluster_eps_min ?? 0.05),
             epsMax: Number(config?.face_cluster_eps_max ?? 1.5),
-            minSamplesMax: getBatchUploadLimits().maxFiles,
+            minSamplesMax: getBatchUploadLimits().batchSize,
         };
     }
 
@@ -430,16 +432,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function validateBatchFiles(files, source = getSelectedBatchSource()) {
         const limits = getBatchUploadLimits(source);
-        if (files.length > limits.maxFiles) {
+        if (source === 'local' && files.length > limits.totalMaxFiles) {
             logBatchValidationFailure({
                 scope: source === 'drive' ? 'cloud_batch' : 'local_batch',
                 field: 'file_count',
                 input: files.length,
                 minimum: 1,
-                maximum: limits.maxFiles,
+                maximum: limits.totalMaxFiles,
                 reason: 'above_maximum',
             });
-            return `這次先幫我挑 1 到 ${limits.maxFiles} 張照片就好，整理起來會比較穩。`;
+            return `這次先幫我挑 1 到 ${limits.totalMaxFiles} 張照片就好，我會分批慢慢整理。`;
         }
         const oversized = files.find(file => file.size > limits.maxFileBytes);
         if (oversized) {
@@ -1217,7 +1219,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const percent = total > 0 ? Math.min(Math.round((completed / total) * 100), 100) : 0;
         const queuePosition = Number.isFinite(Number(event.queue_position)) ? Number(event.queue_position) : null;
         const jobsAhead = queuePosition ? Math.max(queuePosition - 1, 0) : null;
-        const stageText = FACE_CLUSTER_STAGE_LABELS[event.stage] || FACE_CLUSTER_STAGE_LABELS[event.job_status] || '正在整理照片中的人物…';
+        const stageText = FACE_CLUSTER_STAGE_LABELS[event.stage]
+            || FACE_CLUSTER_STAGE_LABELS[event.job_status]
+            || (String(event.stage || '').startsWith('detecting_batch_')
+                ? '正在分批辨識照片中的人物…'
+                : '正在整理照片中的人物…');
 
         progressFill.style.width = percent + '%';
         progressPercent.textContent = percent + '%';
@@ -1228,7 +1234,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setLoadingMessage(
             stageText,
             total > 0
-                ? `已分辨 ${completed} / ${total} 張。${jobsAhead !== null ? `前面還有 ${jobsAhead} 個工作。` : '結果會整理好再回來。'}`
+                ? `已分辨 ${completed} / ${total} 張。${jobsAhead !== null ? `前面還有 ${jobsAhead} 個工作。` : '全部辨識完後，會一起整理人物。'}`
                 : jobsAhead !== null ? `已排入佇列，前面還有 ${jobsAhead} 個工作。` : '已送到人臉分類服務，正在等它回報進度。'
         );
     }
