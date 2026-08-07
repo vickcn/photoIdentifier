@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Optional
 from datetime import datetime
@@ -58,6 +59,26 @@ CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP = None
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 FaceClusterProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
+
+
+def _setup_logging() -> None:
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return
+    level_name = os.environ.get("LOG_LEVEL", "INFO").strip().upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+    if level <= logging.DEBUG:
+        logging.getLogger("httpx").setLevel(logging.INFO)
+        logging.getLogger("httpcore").setLevel(logging.INFO)
+        logging.getLogger("urllib3").setLevel(logging.INFO)
+        logging.getLogger("multipart").setLevel(logging.WARNING)
+        logging.getLogger("python_multipart").setLevel(logging.WARNING)
+        logging.getLogger("watchfiles").setLevel(logging.WARNING)
+        logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
+
+
+_setup_logging()
 
 
 def _log_validation_rejection(scope: str, field: str, *, value: Any, minimum: Any | None = None, maximum: Any | None = None, reason: str) -> None:
@@ -450,6 +471,13 @@ async def _classify_session_faces(
     progress_callback: FaceClusterProgressCallback | None = None,
 ) -> dict[str, Any]:
     session = _batch_sessions[session_id]
+    started_at = time.perf_counter()
+    logger.info(
+        "face.cluster.start session=%s result_count=%s enabled=%s",
+        session_id,
+        len(session.get("results") or []),
+        FACE_CLUSTERING_ENABLED,
+    )
     if not FACE_CLUSTERING_ENABLED:
         session["face_clusters"] = []
         session["face_clustering"] = {
@@ -480,6 +508,12 @@ async def _classify_session_faces(
             }
             return session["face_clustering"]
         session["face_clusters"] = clusters
+        logger.info(
+            "face.cluster.success session=%s cluster_count=%s elapsed_sec=%.3f",
+            session_id,
+            len(clusters),
+            time.perf_counter() - started_at,
+        )
         if batch_state_store.enabled:
             try:
                 await batch_state_store.save_face_clusters(session_id, session["owner_id"], clusters)
@@ -512,6 +546,12 @@ async def _classify_session_faces(
                 "cluster_count": 0,
                 "message": "人臉分類服務目前無法使用，請檢查 classifier API。",
             }
+        logger.error(
+            "face.cluster.failed session=%s reason=%s elapsed_sec=%.3f",
+            session_id,
+            session.get("face_clustering", {}).get("message"),
+            time.perf_counter() - started_at,
+        )
     return session["face_clustering"]
 
 
@@ -583,9 +623,12 @@ def _start_face_clustering_task(
 
     async def run() -> dict[str, Any]:
         if not enabled:
+            logger.info("face.cluster.skip session=%s reason=disabled", session_id)
             return _skip_session_face_clustering(session_id)
         if "progress_callback" not in inspect.signature(_classify_session_faces).parameters:
+            logger.info("face.cluster.dispatch session=%s mode=legacy", session_id)
             return await _classify_session_faces(session_id)
+        logger.info("face.cluster.dispatch session=%s mode=progress", session_id)
         return await _classify_session_faces(session_id, progress_callback=on_progress)
 
     return asyncio.create_task(run()), progress_queue

@@ -59,17 +59,24 @@ class InsightApiClient:
         min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
         progress_callback: ProgressCallback | None = None,
     ) -> dict:
+        submit_started_at = time.perf_counter()
+        logger.info("insight.cluster.submit image_count=%s eps=%s min_samples=%s", len(images), eps, min_samples)
         files = [("files", (name, data, content_type)) for name, data, content_type in images]
         job = await self._post(
             "/v1/faces/cluster/jobs",
             files=files,
             params={"eps": eps, "min_samples": min_samples},
         )
+        submit_elapsed = time.perf_counter() - submit_started_at
         job_id = job.get("job_id")
         if not job_id:
             raise RuntimeError("Insight API 未回傳 job_id")
+        logger.info("insight.cluster.job_created job_id=%s status=%s submit_elapsed_sec=%.3f", job_id, job.get("status"), submit_elapsed)
         await self._emit_progress(progress_callback, job)
-        return await self._wait_for_cluster_job(str(job_id), progress_callback=progress_callback)
+        wait_started_at = time.perf_counter()
+        result = await self._wait_for_cluster_job(str(job_id), progress_callback=progress_callback)
+        logger.info("insight.cluster.done job_id=%s total_elapsed_sec=%.3f", job_id, time.perf_counter() - submit_started_at)
+        return result
 
     async def create_cluster_job(
         self,
@@ -110,6 +117,8 @@ class InsightApiClient:
         deadline = time.monotonic() + timeout_sec
         path = f"/v1/faces/cluster/jobs/{job_id}"
         latest_snapshot: dict[str, Any] = {"job_id": job_id, "status": "queued", "stage": "queued"}
+        last_log_signature: tuple[Any, ...] | None = None
+        logger.info("insight.cluster.wait_start job_id=%s poll_interval=%s timeout_sec=%s", job_id, poll_interval, timeout_sec)
 
         while True:
             try:
@@ -134,17 +143,46 @@ class InsightApiClient:
                 await asyncio.sleep(min(max(poll_interval, 1.0) * 2, 5.0))
                 continue
             latest_snapshot = snapshot
+            progress = snapshot.get("progress") if isinstance(snapshot.get("progress"), dict) else {}
+            log_signature = (
+                snapshot.get("status"),
+                snapshot.get("stage"),
+                snapshot.get("queue_position"),
+                progress.get("completed"),
+                progress.get("total"),
+            )
+            if log_signature != last_log_signature:
+                logger.info(
+                    "insight.cluster.poll job_id=%s status=%s stage=%s completed=%s/%s queue_position=%s elapsed_sec=%.3f",
+                    job_id,
+                    snapshot.get("status"),
+                    snapshot.get("stage"),
+                    progress.get("completed"),
+                    progress.get("total"),
+                    snapshot.get("queue_position"),
+                    time.monotonic() - (deadline - timeout_sec),
+                )
+                last_log_signature = log_signature
             await self._emit_progress(progress_callback, snapshot)
             status = snapshot.get("status")
             if status == "success":
                 result = snapshot.get("result")
                 if not isinstance(result, dict):
                     raise RuntimeError(f"Insight API job {job_id} 完成但沒有 result")
+                logger.info(
+                    "insight.cluster.success job_id=%s image_count=%s face_count=%s cluster_count=%s",
+                    job_id,
+                    result.get("image_count"),
+                    result.get("face_count"),
+                    result.get("cluster_count"),
+                )
                 return result
             if status == "failed":
                 message = snapshot.get("error_message") or "未知錯誤"
+                logger.error("insight.cluster.failed job_id=%s error=%s", job_id, message)
                 raise RuntimeError(f"Insight API job {job_id} 失敗: {message}")
             if status == "cancelled":
+                logger.warning("insight.cluster.cancelled job_id=%s", job_id)
                 raise RuntimeError(f"Insight API job {job_id} 已取消")
             if status not in {"queued", "running"}:
                 raise RuntimeError(f"Insight API job {job_id} 狀態異常: {status}")
@@ -225,6 +263,8 @@ async def cluster_batch_results(
     images, source_by_name = prepare_cluster_images(results)
     if not images:
         return []
+    started_at = time.perf_counter()
+    logger.info("insight.cluster_batch_results.start image_count=%s eps=%s min_samples=%s", len(images), eps, min_samples)
     async def on_global_progress(snapshot: dict[str, Any]) -> None:
         progress = snapshot.get("progress") if isinstance(snapshot.get("progress"), dict) else {}
         completed = min(int(progress.get("completed") or snapshot.get("completed") or 0), len(images))
@@ -248,6 +288,13 @@ async def cluster_batch_results(
         eps=eps,
         min_samples=min_samples,
         progress_callback=on_global_progress,
+    )
+    logger.info(
+        "insight.cluster_batch_results.done image_count=%s face_count=%s cluster_count=%s elapsed_sec=%.3f",
+        len(images),
+        response.get("face_count"),
+        response.get("cluster_count"),
+        time.perf_counter() - started_at,
     )
     return build_clusters_from_response(response, source_by_name)
 
