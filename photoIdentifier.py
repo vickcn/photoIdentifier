@@ -348,6 +348,92 @@ async def batch_process_drive(
     finally:
         await download_client.aclose()
 
+
+async def list_drive_image_files(folder_id: str, credentials) -> list[dict]:
+    from googleapiclient.discovery import build
+
+    drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    q = f"'{folder_id}' in parents and trashed = false"
+    res = drive_service.files().list(q=q, fields="files(id, name, mimeType)", pageSize=1000).execute()
+    all_files = res.get("files", [])
+    return [f for f in all_files if "image/" in f.get("mimeType", "")]
+
+
+async def process_drive_file_item(
+    file_item: dict,
+    *,
+    index: int,
+    total: int,
+    credentials,
+    color_rules: list | None = None,
+    collaborative_memory: str | None = None,
+    evaluate_public: bool = True,
+) -> dict:
+    import httpx
+
+    file_id = file_item["id"]
+    file_name = file_item["name"]
+    mime_type = file_item["mimeType"]
+    try:
+        url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+        headers = {"Authorization": f"Bearer {credentials.token}"}
+        async with httpx.AsyncClient(timeout=float(REQUEST_TIMEOUT), follow_redirects=True) as client:
+            resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            raise Exception(f"Drive Download Failed: HTTP {resp.status_code}")
+        image_bytes = resp.content
+
+        analysis, drawn_bytes = await asyncio.wait_for(
+            process_and_visualize_photo(
+                image_bytes,
+                mime_type,
+                color_rules=color_rules,
+                collaborative_memory=collaborative_memory,
+                evaluate_public=evaluate_public,
+            ),
+            timeout=float(REQUEST_TIMEOUT),
+        )
+
+        preview_io = io.BytesIO()
+        with Image.open(io.BytesIO(drawn_bytes)) as img:
+            img.thumbnail((800, 800))
+            img.save(preview_io, format="JPEG", quality=75)
+        preview_b64 = base64.b64encode(preview_io.getvalue()).decode("utf-8")
+
+        orig_io = io.BytesIO()
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            img.thumbnail((800, 800))
+            img.save(orig_io, format="JPEG", quality=75)
+        orig_b64 = base64.b64encode(orig_io.getvalue()).decode("utf-8")
+
+        ai_decision = "safe" if analysis.moderation_status == "public" else "unsafe" if analysis.moderation_status == "private" else "pending"
+        result_dict = analysis.model_dump()
+        result_dict["ai_decision"] = ai_decision
+
+        return {
+            "status": "ok",
+            "index": index + 1,
+            "total": total,
+            "file_name": file_name,
+            "drive_id": file_id,
+            "result": result_dict,
+            "drawn_image_b64": preview_b64,
+            "original_image_b64": orig_b64,
+        }
+    except Exception as e:
+        print(f"[ERROR] Stream failed for {file_name}: {repr(e)}")
+        return {
+            "status": "error",
+            "index": index + 1,
+            "total": total,
+            "file_name": file_name,
+            "drive_id": file_id,
+            "error": str(e),
+        }
+
+
 async def batch_process_drive_stream(
     folder_id: str,
     credentials,
@@ -386,10 +472,7 @@ async def batch_process_drive_stream(
         unsafe_target_id = await asyncio.to_thread(get_or_create_subfolder, "Unsafe_Results", target_folder_id)
 
     # 2. 列出圖片
-    q = f"'{folder_id}' in parents and trashed = false"
-    res = drive_service.files().list(q=q, fields="files(id, name, mimeType)", pageSize=1000).execute()
-    all_files = res.get("files", [])
-    files = [f for f in all_files if 'image/' in f['mimeType']]
+    files = await list_drive_image_files(folder_id, credentials)
     
     total = len(files)
     if total == 0:
@@ -398,86 +481,20 @@ async def batch_process_drive_stream(
 
     semaphore = asyncio.Semaphore(concurrency)
 
-    import httpx
-    download_headers = {"Authorization": f"Bearer {credentials.token}"}
-    download_client = httpx.AsyncClient(timeout=float(REQUEST_TIMEOUT), follow_redirects=True)
-
     async def process_task(file_item, index):
         async with semaphore:
-            file_id = file_item["id"]
-            file_name = file_item["name"]
-            mime_type = file_item["mimeType"]
-            try:
-                # 下載 (httpx)
-                url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-                resp = await download_client.get(url, headers=download_headers)
-                if resp.status_code != 200:
-                    raise Exception(f"Drive Download Failed: HTTP {resp.status_code}")
-                image_bytes = resp.content
+            return await process_drive_file_item(
+                file_item,
+                index=index,
+                total=total,
+                credentials=credentials,
+                color_rules=color_rules,
+                collaborative_memory=collaborative_memory,
+                evaluate_public=evaluate_public,
+            )
 
-                # 辨識 (使用 config.json 中設定的 timeout，防止 AI API 掛住)
-                analysis, drawn_bytes = await asyncio.wait_for(
-                    process_and_visualize_photo(
-                        image_bytes,
-                        mime_type,
-                        color_rules=color_rules,
-                        collaborative_memory=collaborative_memory,
-                        evaluate_public=evaluate_public,
-                    ),
-                    timeout=float(REQUEST_TIMEOUT)
-                )
-
-                # 注意：不再自動上傳歸檔，歸檔交由 /finalize_review/ 處理
-
-                # 轉 B64 供前端預覽 (縮圖一下避免 SSE 封包過大)
-                from PIL import Image
-                
-                # 1. 標註圖預覽
-                preview_io = io.BytesIO()
-                with Image.open(io.BytesIO(drawn_bytes)) as img:
-                    img.thumbnail((800, 800))
-                    img.save(preview_io, format="JPEG", quality=75)
-                preview_b64 = base64.b64encode(preview_io.getvalue()).decode('utf-8')
-                
-                # 2. 原圖預覽
-                orig_io = io.BytesIO()
-                with Image.open(io.BytesIO(image_bytes)) as img:
-                    # 轉換為 RGB 模式，避免 RGBA 存 JPEG 發生錯誤
-                    if img.mode in ("RGBA", "P"):
-                        img = img.convert("RGB")
-                    img.thumbnail((800, 800))
-                    img.save(orig_io, format="JPEG", quality=75)
-                orig_b64 = base64.b64encode(orig_io.getvalue()).decode('utf-8')
-
-                ai_decision = "safe" if analysis.moderation_status == "public" else "unsafe" if analysis.moderation_status == "private" else "pending"
-                result_dict = analysis.model_dump()
-                result_dict["ai_decision"] = ai_decision
-
-                return {
-                    "status": "ok",
-                    "index": index + 1,
-                    "total": total,
-                    "file_name": file_name,
-                    "drive_id": file_id,
-                    "result": result_dict,
-                    "drawn_image_b64": preview_b64,
-                    "original_image_b64": orig_b64,
-                }
-            except Exception as e:
-                print(f"[ERROR] Stream failed for {file_name}: {repr(e)}")
-                return {
-                    "status": "error",
-                    "index": index + 1,
-                    "total": total,
-                    "file_name": file_name,
-                    "error": str(e)
-                }
-
-    try:
-        # 使用 as_completed 讓完成的結果立即傳出
-        pending_tasks = [process_task(f, i) for i, f in enumerate(files)]
-        for finished_task in asyncio.as_completed(pending_tasks):
-            result = await finished_task
-            yield result
-    finally:
-        await download_client.aclose()
+    # 使用 as_completed 讓完成的結果立即傳出
+    pending_tasks = [process_task(f, i) for i, f in enumerate(files)]
+    for finished_task in asyncio.as_completed(pending_tasks):
+        result = await finished_task
+        yield result

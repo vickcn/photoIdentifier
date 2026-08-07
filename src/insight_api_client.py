@@ -70,6 +70,23 @@ class InsightApiClient:
         await self._emit_progress(progress_callback, job)
         return await self._wait_for_cluster_job(str(job_id), progress_callback=progress_callback)
 
+    async def create_cluster_job(
+        self,
+        images: Sequence[tuple[str, bytes, str]],
+        *,
+        eps: float = DEFAULT_CLUSTER_EPS,
+        min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
+    ) -> dict:
+        files = [("files", (name, data, content_type)) for name, data, content_type in images]
+        return await self._post(
+            "/v1/faces/cluster/jobs",
+            files=files,
+            params={"eps": eps, "min_samples": min_samples},
+        )
+
+    async def get_cluster_job(self, job_id: str) -> dict:
+        return await self._get(f"/v1/faces/cluster/jobs/{job_id}")
+
     async def cancel_cluster_job(self, job_id: str) -> dict:
         return await self._post(f"/v1/faces/cluster/jobs/{job_id}/cancel")
 
@@ -203,6 +220,19 @@ async def cluster_batch_results(
     min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
     progress_callback: ProgressCallback | None = None,
 ) -> list[dict]:
+    images, source_by_name = prepare_cluster_images(results)
+    if not images:
+        return []
+    response = await InsightApiClient().cluster(
+        images,
+        eps=eps,
+        min_samples=min_samples,
+        progress_callback=progress_callback,
+    )
+    return build_clusters_from_response(response, source_by_name)
+
+
+def prepare_cluster_images(results: list[dict]) -> tuple[list[tuple[str, bytes, str]], dict[str, dict]]:
     images: list[tuple[str, bytes, str]] = []
     source_by_name: dict[str, dict] = {}
     for index, result in enumerate(results, start=1):
@@ -218,15 +248,10 @@ async def cluster_batch_results(
         )
         images.append((file_name, image_bytes, "image/jpeg"))
         source_by_name[file_name] = result
+    return images, source_by_name
 
-    if not images:
-        return []
-    response = await InsightApiClient().cluster(
-        images,
-        eps=eps,
-        min_samples=min_samples,
-        progress_callback=progress_callback,
-    )
+
+def build_clusters_from_response(response: dict, source_by_name: dict[str, dict]) -> list[dict]:
     grouped: dict[tuple[str, int], list[dict]] = {}
     noise_index = 0
     for image in response.get("images", []):
@@ -268,3 +293,19 @@ async def cluster_batch_results(
 
 async def cancel_cluster_job(job_id: str) -> dict:
     return await InsightApiClient().cancel_cluster_job(job_id)
+
+
+async def create_cluster_job_from_results(
+    results: list[dict],
+    *,
+    eps: float = DEFAULT_CLUSTER_EPS,
+    min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
+) -> dict:
+    images, _source_by_name = prepare_cluster_images(results)
+    if not images:
+        return {"job_id": None, "status": "success", "result": {"images": []}}
+    return await InsightApiClient().create_cluster_job(images, eps=eps, min_samples=min_samples)
+
+
+async def get_cluster_job_snapshot(job_id: str) -> dict:
+    return await InsightApiClient().get_cluster_job(job_id)

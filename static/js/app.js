@@ -928,6 +928,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentBatchAbortController = null;
     let currentBatchCancelRequested = false;
     let currentFaceClusterJobId = null;
+    const DRIVE_BATCH_POLL_INTERVAL_MS = 1500;
 
     const FACE_CLUSTER_STAGE_LABELS = {
         starting: '正在準備整理照片中的人物…',
@@ -1035,6 +1036,89 @@ document.addEventListener('DOMContentLoaded', () => {
         );
     }
 
+    function wait(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function applyDriveStatusPayload(data) {
+        if (data.session_id) window._currentSessionId = data.session_id;
+        const results = Array.isArray(data.results) ? data.results : [];
+        currentBatchResults = [];
+        batchFailureDetails = [];
+        results.forEach(item => {
+            if (item.status === 'ok') {
+                if (publicClassificationWasRun(item)) {
+                    const result = item.result || item;
+                    const aiStatus = result.moderation_status || (result.is_safe_for_public ? 'public' : 'private');
+                    item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                    item.ai_decision = item.ai_decision || item.user_decision;
+                } else {
+                    item.public_classification_performed = false;
+                }
+                currentBatchResults.push(item);
+            } else if (item.status === 'error') {
+                recordBatchFailure(item);
+            }
+        });
+
+        const progress = data.progress || {};
+        const total = Number(progress.total || data.total || results.length || 0);
+        const completed = Number(progress.completed || (Number(data.success || 0) + Number(data.failed || 0)));
+        updateProgressUI(completed, total, Number(data.success || 0), Number(data.failed || 0));
+
+        if (data.face_cluster_progress) {
+            if (data.face_cluster_progress.job_id) currentFaceClusterJobId = data.face_cluster_progress.job_id;
+            updateFaceClusterProgressUI(data.face_cluster_progress);
+        } else if (data.stage === 'queued') {
+            setLoadingMessage('正在整理雲端照片…', '已建立工作，正在準備讀取照片。');
+        } else if (data.stage === 'photos') {
+            setLoadingMessage('正在整理雲端照片…', `已看過 ${completed} / ${total} 張，會一段一段帶回結果。`);
+        } else if (data.stage === 'face_uploading') {
+            setLoadingMessage('正在把照片送去人臉分類服務…', '照片已讀完，正在建立人物分群工作。');
+        }
+
+        if (Array.isArray(data.face_clusters)) {
+            setCurrentFaceClusters(data.face_clusters);
+        }
+        faceClusteringInfo = data.face_clustering || faceClusteringInfo;
+    }
+
+    async function pollDriveBatchStatus(sessionId, signal) {
+        let connectionFailures = 0;
+        while (true) {
+            if (signal?.aborted || currentBatchCancelRequested) {
+                throw new DOMException('Aborted', 'AbortError');
+            }
+            let data;
+            try {
+                const response = await fetch(`/batch_sessions/${encodeURIComponent(sessionId)}/status`, { signal });
+                data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(data.detail || data.error_message || '讀取整理進度失敗');
+                }
+                connectionFailures = 0;
+            } catch (error) {
+                if (error.name === 'AbortError') throw error;
+                connectionFailures += 1;
+                if (connectionFailures >= 2) {
+                    setLoadingMessage('連線不太穩，正在重新確認進度…', '畫面會繼續等服務回報，不會把已完成的結果弄丟。');
+                }
+                await wait(Math.min(DRIVE_BATCH_POLL_INTERVAL_MS * connectionFailures, 6000));
+                continue;
+            }
+
+            applyDriveStatusPayload(data);
+            if (data.status === 'completed') return data;
+            if (data.status === 'cancelled') {
+                throw new Error(data.message || '已中止本次整理');
+            }
+            if (data.status === 'failed') {
+                throw new Error(data.error_message || '雲端照片整理沒有完成');
+            }
+            await wait(DRIVE_BATCH_POLL_INTERVAL_MS);
+        }
+    }
+
     // === Batch Mode Handling ===
     analyzeBatchBtn.addEventListener('click', async () => {
         const source = document.querySelector('input[name="batch-source"]:checked').value;
@@ -1091,7 +1175,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast('請先選一個 Google 雲端資料夾', 'error');
                 return;
             }
-            endpoint = '/batch_drive_stream/'; // 切換到串流 API
+            endpoint = '/batch_drive_start/';
             body = {
                 folder_id: fId,
                 target_folder_id: tId || null,
@@ -1153,6 +1237,24 @@ document.addEventListener('DOMContentLoaded', () => {
         );
 
         try {
+            if (source !== 'local') {
+                const response = await fetch(endpoint, requestOptions);
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(data.detail || data.error_message || '沒能開始，再試一次好嗎');
+                }
+                applyDriveStatusPayload(data);
+                const finalData = await pollDriveBatchStatus(sessionId, currentBatchAbortController.signal);
+                applyDriveStatusPayload(finalData);
+                showToast(`看完了。${Number(finalData.success || 0)} 張看過${Number(finalData.failed || 0) ? `，${Number(finalData.failed || 0)} 張沒看成` : ''}`);
+                flushBatchFailureSummary();
+                organizeArea.classList.add('hidden');
+                if (currentBatchResults.length > 0) {
+                    showBatchOverview();
+                }
+                return;
+            }
+
             const response = await fetch(endpoint, requestOptions);
 
             if (!response.ok) {

@@ -28,9 +28,13 @@ from urllib.parse import urlparse
 from src.insight_api_client import (
     DEFAULT_CLUSTER_EPS,
     DEFAULT_CLUSTER_MIN_SAMPLES,
+    build_clusters_from_response,
     cancel_cluster_job,
     cluster_batch_results,
+    create_cluster_job_from_results,
     detect_normalized_bboxes,
+    get_cluster_job_snapshot,
+    prepare_cluster_images,
 )
 from src.batch_state_store import create_batch_state_store
 
@@ -232,12 +236,21 @@ app.add_middleware(
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
 from src.google_auth import get_auth_url, exchange_code_for_token, load_user_credentials, token_store, DEFAULT_SCOPES
 from src.metrics import compute_batch_metrics, collect_changed_files, compute_analysis_stats, format_metrics_for_export
-from photoIdentifier import process_and_visualize_photo, batch_process_folder, batch_process_drive, batch_process_drive_stream, batch_process_uploads_stream
+from photoIdentifier import (
+    process_and_visualize_photo,
+    batch_process_folder,
+    batch_process_drive,
+    batch_process_drive_stream,
+    batch_process_uploads_stream,
+    list_drive_image_files,
+    process_drive_file_item,
+)
 from src.upload_batch import read_upload_batch
 
 # Session storage for batch operations
 _batch_sessions: dict[str, dict] = {}
 _active_batch_owners: dict[str, str] = {}
+_batch_session_locks: dict[str, asyncio.Lock] = {}
 batch_state_store = create_batch_state_store()
 
 
@@ -271,6 +284,14 @@ def _acquire_batch_slot(request: Request, session_id: str) -> str:
 def _release_batch_slot(owner_id: str, session_id: str) -> None:
     if _active_batch_owners.get(owner_id) == session_id:
         _active_batch_owners.pop(owner_id, None)
+
+
+def _batch_session_lock(session_id: str) -> asyncio.Lock:
+    lock = _batch_session_locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _batch_session_locks[session_id] = lock
+    return lock
 
 
 def _owned_batch_session(request: Request, session_id: str) -> dict[str, Any]:
@@ -1059,6 +1080,353 @@ class DriveBatchRequest(BaseModel):
     run_public_classification: bool = False
     run_face_clustering: bool = True
 
+
+async def _load_drive_collaborative_memory(req: DriveBatchRequest, creds) -> str | None:
+    collaborative_memory = req.collaborative_memory
+    if collaborative_memory or not req.run_public_classification:
+        return collaborative_memory
+    try:
+        from googleapiclient.discovery import build
+        drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        q = f"name = '.photoidentifier_memory.md' and '{req.folder_id}' in parents and trashed = false"
+        res = drive_service.files().list(q=q, fields="files(id)").execute()
+        files = res.get("files", [])
+        if not files:
+            return None
+        file_id = files[0]["id"]
+        import httpx
+        url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+        headers = {"Authorization": f"Bearer {creds.token}"}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            return None
+        content = resp.text
+        return content[:1000] if len(content) > 1000 else content
+    except Exception as exc:
+        logger.warning("無法獲取協作記憶文件: %s", exc)
+        return None
+
+
+def _batch_status_payload(session: dict[str, Any]) -> dict[str, Any]:
+    results = session.get("results") or []
+    processing_info = session.get("processing_info") if isinstance(session.get("processing_info"), dict) else {}
+    drive_files = processing_info.get("drive_files") if isinstance(processing_info.get("drive_files"), list) else []
+    total = int(processing_info.get("file_count") or len(drive_files) or len(results))
+    failed_count = sum(1 for item in results if item.get("status") == "error")
+    success_count = sum(1 for item in results if item.get("status") == "ok")
+    processed = success_count + failed_count
+    status = session.get("status") or ("completed" if session.get("completed") else "processing")
+    payload = {
+        "status": status,
+        "session_id": session.get("session_id"),
+        "batch_mode": session.get("batch_mode"),
+        "stage": session.get("stage") or processing_info.get("stage") or "processing",
+        "message": session.get("message"),
+        "results": results,
+        "success": success_count,
+        "failed": failed_count,
+        "total": total,
+        "progress": {
+            "completed": processed,
+            "total": total,
+            "percent": round(processed / total * 100, 1) if total else 0,
+        },
+        "face_cluster_progress": session.get("face_cluster_progress"),
+        "face_clustering": session.get("face_clustering"),
+        "face_clusters": session.get("face_clusters", []),
+        "error_message": session.get("error_message"),
+    }
+    return payload
+
+
+async def _advance_drive_session(session: dict[str, Any], request: Request) -> None:
+    if session.get("status") in {"completed", "failed", "cancelled"}:
+        return
+    session_id = str(session["session_id"])
+    owner_id = str(session["owner_id"])
+    if session.get("cancel_requested"):
+        session["status"] = "cancelled"
+        session["stage"] = "cancelled"
+        session["completed"] = True
+        session["end_time"] = datetime.now().isoformat()
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "cancelled",
+                "completed_at": session["end_time"],
+                "result_count": len(session.get("results") or []),
+            },
+        )
+        _release_batch_slot(owner_id, session_id)
+        return
+
+    processing_info = session.get("processing_info") if isinstance(session.get("processing_info"), dict) else {}
+    drive_files = processing_info.get("drive_files") if isinstance(processing_info.get("drive_files"), list) else []
+    next_index = int(processing_info.get("drive_next_index") or 0)
+    concurrency = max(1, min(int(processing_info.get("concurrency") or 1), CLOUD_API_CONCURRENCY_CAP))
+
+    if next_index < len(drive_files):
+        session["status"] = "processing"
+        session["stage"] = "photos"
+        creds = get_drive_credentials(request)
+        batch_items = drive_files[next_index: next_index + concurrency]
+        tasks = [
+            process_drive_file_item(
+                item,
+                index=next_index + offset,
+                total=len(drive_files),
+                credentials=creds,
+                color_rules=processing_info.get("color_rules"),
+                collaborative_memory=processing_info.get("collaborative_memory"),
+                evaluate_public=bool(processing_info.get("run_public_classification")),
+            )
+            for offset, item in enumerate(batch_items)
+        ]
+        for result in await asyncio.gather(*tasks):
+            session.setdefault("results", []).append(result)
+            if result.get("status") == "ok":
+                await _persist_photo_result(session_id, owner_id, result)
+        processing_info["drive_next_index"] = next_index + len(batch_items)
+        processing_info["stage"] = "photos"
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "processing",
+                "stage": "photos",
+                "result_count": len(session.get("results") or []),
+                "processing_info": processing_info,
+            },
+        )
+        return
+
+    if not bool(processing_info.get("run_face_clustering")):
+        face_clustering = _skip_session_face_clustering(session_id)
+        session["status"] = "completed"
+        session["stage"] = "completed"
+        session["completed"] = True
+        session["end_time"] = datetime.now().isoformat()
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "completed",
+                "completed_at": session["end_time"],
+                "result_count": len(session.get("results") or []),
+                "face_clustering": face_clustering,
+            },
+        )
+        _release_batch_slot(owner_id, session_id)
+        return
+
+    if not FACE_CLUSTERING_ENABLED:
+        face_clustering = _skip_session_face_clustering(session_id)
+        face_clustering["reason"] = "disabled"
+        session["status"] = "completed"
+        session["stage"] = "completed"
+        session["completed"] = True
+        session["end_time"] = datetime.now().isoformat()
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "completed",
+                "completed_at": session["end_time"],
+                "result_count": len(session.get("results") or []),
+                "face_clustering": face_clustering,
+            },
+        )
+        _release_batch_slot(owner_id, session_id)
+        return
+
+    if not session.get("face_cluster_job_id"):
+        images, _source_by_name = prepare_cluster_images(session.get("results") or [])
+        if not images:
+            session["face_clusters"] = []
+            session["face_clustering"] = {"available": True, "cluster_count": 0}
+            session["status"] = "completed"
+            session["stage"] = "completed"
+            session["completed"] = True
+            session["end_time"] = datetime.now().isoformat()
+            await _persist_session_update(
+                session_id,
+                {
+                    "status": "completed",
+                    "completed_at": session["end_time"],
+                    "result_count": len(session.get("results") or []),
+                    "face_clustering": session["face_clustering"],
+                },
+            )
+            _release_batch_slot(owner_id, session_id)
+            return
+        session["stage"] = "face_uploading"
+        job = await create_cluster_job_from_results(
+            session.get("results") or [],
+            eps=float(processing_info.get("face_cluster_eps", DEFAULT_CLUSTER_EPS)),
+            min_samples=int(processing_info.get("face_cluster_min_samples", DEFAULT_CLUSTER_MIN_SAMPLES)),
+        )
+        session["face_cluster_job_id"] = job.get("job_id")
+        session["face_cluster_progress"] = _face_cluster_progress_event(session_id, job)
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "processing",
+                "stage": "face_clustering",
+                "face_cluster_job_id": session["face_cluster_job_id"],
+                "face_cluster_progress": session["face_cluster_progress"],
+            },
+        )
+        return
+
+    snapshot = await get_cluster_job_snapshot(str(session["face_cluster_job_id"]))
+    session["face_cluster_progress"] = _face_cluster_progress_event(session_id, snapshot)
+    session["stage"] = "face_clustering"
+    status = snapshot.get("status")
+    if status in {"queued", "running"}:
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "processing",
+                "stage": "face_clustering",
+                "face_cluster_progress": session["face_cluster_progress"],
+            },
+        )
+        return
+    if status == "success":
+        result = snapshot.get("result") if isinstance(snapshot.get("result"), dict) else {}
+        _images, source_by_name = prepare_cluster_images(session.get("results") or [])
+        clusters = build_clusters_from_response(result, source_by_name)
+        session["face_clusters"] = clusters
+        session["face_clustering"] = {
+            "available": True,
+            "cluster_count": len(clusters),
+            "eps": float(processing_info.get("face_cluster_eps", DEFAULT_CLUSTER_EPS)),
+            "min_samples": int(processing_info.get("face_cluster_min_samples", DEFAULT_CLUSTER_MIN_SAMPLES)),
+        }
+        if batch_state_store.enabled:
+            await batch_state_store.save_face_clusters(session_id, owner_id, clusters)
+        session["status"] = "completed"
+        session["stage"] = "completed"
+        session["completed"] = True
+        session["end_time"] = datetime.now().isoformat()
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "completed",
+                "completed_at": session["end_time"],
+                "result_count": len(session.get("results") or []),
+                "face_clustering": session["face_clustering"],
+                "face_cluster_progress": session["face_cluster_progress"],
+            },
+        )
+        _release_batch_slot(owner_id, session_id)
+        return
+    if status == "cancelled":
+        session["status"] = "cancelled"
+        session["stage"] = "cancelled"
+        session["completed"] = True
+        session["end_time"] = datetime.now().isoformat()
+        await _persist_session_update(session_id, {"status": "cancelled", "completed_at": session["end_time"]})
+        _release_batch_slot(owner_id, session_id)
+        return
+
+    session["status"] = "failed"
+    session["stage"] = "failed"
+    session["error_message"] = snapshot.get("error_message") or "人臉分群沒有完成"
+    session["completed"] = True
+    session["end_time"] = datetime.now().isoformat()
+    await _persist_session_update(
+        session_id,
+        {
+            "status": "failed",
+            "completed_at": session["end_time"],
+            "error_message": session["error_message"],
+            "face_cluster_progress": session.get("face_cluster_progress"),
+        },
+    )
+    _release_batch_slot(owner_id, session_id)
+
+
+@app.post("/batch_drive_start/")
+async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
+    _validate_processing_scope(req.run_public_classification, req.run_face_clustering)
+    _validate_cloud_api_concurrency(req.concurrency)
+    user_key = request.session.get("user_key")
+    if not user_key:
+        raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
+
+    creds = get_drive_credentials(request)
+    if req.run_face_clustering:
+        face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
+            req.face_cluster_eps,
+            req.face_cluster_min_samples,
+        )
+    else:
+        face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
+    drive_files = await list_drive_image_files(req.folder_id, creds)
+    session_id = req.session_id or str(uuid.uuid4())
+    owner_id = _acquire_batch_slot(request, session_id)
+    start_time = datetime.now()
+    collaborative_memory = await _load_drive_collaborative_memory(req, creds)
+    _batch_sessions[session_id] = {
+        "session_id": session_id,
+        "owner_id": owner_id,
+        "batch_mode": "drive",
+        "user_account": _get_batch_user_account(request, "drive"),
+        "status": "processing",
+        "stage": "queued",
+        "start_time": start_time.isoformat(),
+        "end_time": None,
+        "results": [],
+        "face_clusters": [],
+        "processing_info": {
+            "folder_id": req.folder_id,
+            "target_folder_id": req.target_folder_id,
+            "file_count": len(drive_files),
+            "drive_files": drive_files,
+            "drive_next_index": 0,
+            "concurrency": req.concurrency,
+            "color_rules": req.color_rules,
+            "collaborative_memory": collaborative_memory,
+            "face_cluster_eps": face_cluster_eps,
+            "face_cluster_min_samples": face_cluster_min_samples,
+            "run_public_classification": req.run_public_classification,
+            "run_face_clustering": req.run_face_clustering,
+        },
+        "completed": False,
+        "cancel_requested": False,
+        "cancelled_at": None,
+        "face_cluster_job_id": None,
+        "face_cluster_cancel_requested": False,
+    }
+    await _persist_session_created(_batch_sessions[session_id])
+    return _batch_status_payload(_batch_sessions[session_id])
+
+
+@app.get("/batch_sessions/{session_id}/status")
+async def get_batch_session_status(session_id: str, request: Request):
+    session = await _owned_batch_session_async(request, session_id)
+    async with _batch_session_lock(session_id):
+        session = await _owned_batch_session_async(request, session_id)
+        if session.get("batch_mode") == "drive":
+            try:
+                await _advance_drive_session(session, request)
+            except Exception as exc:
+                logger.exception("Drive batch status tick failed session=%s", session_id)
+                session["status"] = "failed"
+                session["stage"] = "failed"
+                session["error_message"] = str(exc) or "雲端批次處理中斷"
+                session["completed"] = True
+                session["end_time"] = datetime.now().isoformat()
+                await _persist_session_update(
+                    session_id,
+                    {
+                        "status": "failed",
+                        "completed_at": session["end_time"],
+                        "error_message": session["error_message"],
+                    },
+                )
+                _release_batch_slot(str(session.get("owner_id")), session_id)
+    return _batch_status_payload(session)
+
 @app.post("/batch_drive/")
 async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
     """雲端硬碟批量處理入口 (舊 - 一次性回傳)"""
@@ -1841,7 +2209,17 @@ async def cancel_batch_session(session_id: str, request: Request, req: BatchCanc
         }
     if req and req.job_id and not session.get("face_cluster_job_id"):
         session["face_cluster_job_id"] = req.job_id
-    return await _request_batch_cancel(session)
+    result = await _request_batch_cancel(session)
+    await _persist_session_update(
+        session_id,
+        {
+            "cancel_requested": True,
+            "cancelled_at": session.get("cancelled_at"),
+            "face_cluster_job_id": session.get("face_cluster_job_id"),
+            "face_cluster_cancel_requested": session.get("face_cluster_cancel_requested", False),
+        },
+    )
+    return result
 
 
 @app.patch("/face_clusters/{session_id}/{cluster_id}")
