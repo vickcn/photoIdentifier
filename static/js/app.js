@@ -55,12 +55,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getBatchUploadLimits(source = getSelectedBatchSource()) {
+        const localRequestMaxBytes = (config?.local_upload_request_max_total_mb || 4) * 1024 * 1024;
         return {
             totalMaxFiles: config?.batch_upload_total_max_files || 200,
             batchSize: source === 'drive'
                 ? (config?.batch_upload_batch_size_cloud || config?.batch_upload_max_files_cloud || 20)
                 : (config?.batch_upload_batch_size_local || config?.batch_upload_max_files_local || config?.batch_upload_batch_size || config?.batch_upload_max_files || 20),
-            maxFileBytes: (config?.batch_upload_max_file_mb || 2) * 1024 * 1024,
+            localRequestMaxFiles: config?.local_upload_request_max_files || 3,
+            localRequestMaxBytes,
+            maxFileBytes: source === 'local'
+                ? Math.min((config?.batch_upload_max_file_mb || 2) * 1024 * 1024, localRequestMaxBytes)
+                : (config?.batch_upload_max_file_mb || 2) * 1024 * 1024,
             maxTotalBytes: (config?.batch_upload_max_total_mb || 4) * 1024 * 1024,
             defaultConcurrency: config?.batch_upload_concurrency || 5,
         };
@@ -72,6 +77,26 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const limits = getBatchUploadLimits(source);
         return config?.batch_upload_limits_local_message || `這台電腦一次可先準備 ${limits.totalMaxFiles} 張，會每 ${limits.batchSize} 張分成一批整理；單檔 ${config?.batch_upload_max_file_mb || 2}MB、合計 ${config?.batch_upload_max_total_mb || 4}MB 以內。`;
+    }
+
+    function buildLocalUploadChunks(files) {
+        const limits = getBatchUploadLimits('local');
+        const chunks = [];
+        let currentChunk = [];
+        let currentBytes = 0;
+        files.forEach(file => {
+            const wouldExceedCount = currentChunk.length >= limits.localRequestMaxFiles;
+            const wouldExceedBytes = currentChunk.length > 0 && currentBytes + file.size > limits.localRequestMaxBytes;
+            if (wouldExceedCount || wouldExceedBytes) {
+                chunks.push(currentChunk);
+                currentChunk = [];
+                currentBytes = 0;
+            }
+            currentChunk.push(file);
+            currentBytes += file.size;
+        });
+        if (currentChunk.length > 0) chunks.push(currentChunk);
+        return chunks;
     }
 
     function syncBatchConcurrencyInput(source = getSelectedBatchSource()) {
@@ -1452,6 +1477,8 @@ document.addEventListener('DOMContentLoaded', () => {
         let endpoint = '/batch_upload_stream/';
         let body = {};
         let requestOptions;
+        let localUploadChunks = [];
+        let localUploadCommonFields = null;
 
         if (source === 'local') {
             const validationError = validateBatchFiles(batchSelectedFiles, 'local');
@@ -1459,18 +1486,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast(validationError || '請先選擇這場活動的照片', 'error');
                 return;
             }
-            const formData = new FormData();
-            batchSelectedFiles.forEach(file => formData.append('files', file, file.name));
-            formData.append('concurrency', String(currentConcurrency));
-            formData.append('color_rules_json', JSON.stringify(colorSwatches));
-            formData.append('session_id', sessionId);
-            formData.append('face_cluster_eps', String(faceClusterParams.eps));
-            formData.append('face_cluster_min_samples', String(faceClusterParams.minSamples));
-            formData.append('run_public_classification', String(runPublicClassification));
-            formData.append('run_face_clustering', String(runFaceClustering));
+            localUploadChunks = buildLocalUploadChunks(batchSelectedFiles);
+            localUploadCommonFields = {
+                concurrency: String(currentConcurrency),
+                color_rules_json: JSON.stringify(colorSwatches),
+                session_id: sessionId,
+                face_cluster_eps: String(faceClusterParams.eps),
+                face_cluster_min_samples: String(faceClusterParams.minSamples),
+                run_public_classification: String(runPublicClassification),
+                run_face_clustering: String(runFaceClustering),
+                upload_chunk_total: String(localUploadChunks.length),
+                upload_total_files: String(batchSelectedFiles.length),
+            };
             const memory = window._collaborativeMemories?.local;
-            if (memory) formData.append('collaborative_memory', memory);
-            requestOptions = { method: 'POST', body: formData };
+            if (memory) localUploadCommonFields.collaborative_memory = memory;
+            requestOptions = { method: 'POST' };
         } else {
             const fId = driveFolderId.value.trim();
             const tId = driveTargetId.value.trim();
@@ -1568,136 +1598,159 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            const response = await fetch(endpoint, requestOptions);
-
-            if (!response.ok) {
-                const err = await response.json();
-                logBatchRequestFailure({
-                    source,
-                    stage: 'batch_start',
-                    endpoint,
-                    sessionId,
-                    status: response.status,
-                    payload: err,
-                });
-                throw new Error(err.detail || '沒能開始，再試一次好嗎');
-            }
-
-            // 處理串流結果
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
             let successCount = 0;
             let failedCount = 0;
-            let totalImages = 0;
-            let buffer = '';
+            let totalImages = batchSelectedFiles.length;
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
+            for (let chunkIndex = 0; chunkIndex < localUploadChunks.length; chunkIndex++) {
+                if (currentBatchAbortController.signal.aborted || currentBatchCancelRequested) {
+                    throw new DOMException('Aborted', 'AbortError');
+                }
+                const formData = new FormData();
+                localUploadChunks[chunkIndex].forEach(file => formData.append('files', file, file.name));
+                Object.entries(localUploadCommonFields || {}).forEach(([key, value]) => {
+                    formData.append(key, value);
+                });
+                formData.append('upload_chunk_index', String(chunkIndex));
+                setLoadingMessage(
+                    runPublicClassification && runFaceClustering
+                        ? '正在判定照片並整理人物…'
+                        : runPublicClassification ? '正在判定照片是否適合分享…' : '正在整理照片中的人物…',
+                    `正在上傳第 ${chunkIndex + 1} / ${localUploadChunks.length} 批，已完成 ${successCount + failedCount} / ${totalImages} 張。`
+                );
 
-                // 將二進位數據轉為文字
-                buffer += decoder.decode(value, { stream: true });
+                const response = await fetch(endpoint, {
+                    ...requestOptions,
+                    body: formData,
+                    signal: currentBatchAbortController.signal,
+                });
 
-                // NDJSON 處理：根據換行符號切割每一行完整的 JSON
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // 未完成的行留到下次處理
+                if (!response.ok) {
+                    const err = await response.json();
+                    logBatchRequestFailure({
+                        source,
+                        stage: 'batch_start',
+                        endpoint,
+                        sessionId,
+                        status: response.status,
+                        payload: err,
+                    });
+                    throw new Error(err.detail || '沒能開始，再試一次好嗎');
+                }
 
-                for (const line of lines) {
-                    if (!line.trim()) continue;
-                    try {
-                        const data = JSON.parse(line);
+                // 處理串流結果
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
 
-                        // 進度與結果處理
-                        if (data.status === 'face_cluster_progress') {
-                            if (data.job_id) currentFaceClusterJobId = data.job_id;
-                            updateFaceClusterProgressUI(data);
-                            continue;
-                        }
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
 
-                        if (data.status === 'ok') {
-                            // Drive 串流模式：每行一筆 NDJSON
-                            successCount++;
-                            totalImages = data.total;
-                            const result = data.result || data;
-                            if (publicClassificationWasRun(data)) {
-                                const aiStatus = result.moderation_status || (result.is_safe_for_public ? 'public' : 'private');
-                                if (!result.ai_decision) {
-                                    result.ai_decision = aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending';
-                                }
-                                data.user_decision = data.user_decision || result.ai_decision;
-                                data.ai_decision = result.ai_decision;
-                            } else {
-                                data.public_classification_performed = false;
+                    // 將二進位數據轉為文字
+                    buffer += decoder.decode(value, { stream: true });
+
+                    // NDJSON 處理：根據換行符號切割每一行完整的 JSON
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // 未完成的行留到下次處理
+
+                    for (const line of lines) {
+                        if (!line.trim()) continue;
+                        try {
+                            const data = JSON.parse(line);
+
+                            // 進度與結果處理
+                            if (data.status === 'face_cluster_progress') {
+                                if (data.job_id) currentFaceClusterJobId = data.job_id;
+                                updateFaceClusterProgressUI(data);
+                                continue;
                             }
-                            // 保持 session_id
-                            if (data.session_id) window._currentSessionId = data.session_id;
-                            currentBatchResults.push(data);
-                        } else if (data.status === 'error') {
-                            failedCount++;
-                            totalImages = data.total || totalImages;
-                            recordBatchFailure(data);
-                        } else if (data.status === 'completed') {
-                            setCurrentFaceClusters(data.face_clusters);
-                            faceClusteringInfo = data.face_clustering || null;
-                        } else if (data.status === 'cancelled') {
-                            throw new Error(data.message || '已中止本次整理');
-                        } else if (data.results && Array.isArray(data.results)) {
-                            // 本機批次模式：一次性完整 JSON 回應
-                            totalImages = data.total || data.results.length;
-                            if (data.temp_folder) currentTempFolder = data.temp_folder;
-                            if (data.session_id) window._currentSessionId = data.session_id;
-                            data.results.forEach(item => {
-                                if (item.status === 'ok') {
-                                    if (publicClassificationWasRun(item)) {
-                                        const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
-                                        item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
-                                        item.ai_decision = item.ai_decision || item.user_decision;
+
+                            if (data.status === 'ok') {
+                                // Drive 串流模式：每行一筆 NDJSON
+                                successCount++;
+                                totalImages = data.total;
+                                const result = data.result || data;
+                                if (publicClassificationWasRun(data)) {
+                                    const aiStatus = result.moderation_status || (result.is_safe_for_public ? 'public' : 'private');
+                                    if (!result.ai_decision) {
+                                        result.ai_decision = aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending';
                                     }
-                                    currentBatchResults.push(item);
-                                    successCount++;
+                                    data.user_decision = data.user_decision || result.ai_decision;
+                                    data.ai_decision = result.ai_decision;
                                 } else {
-                                    failedCount++;
-                                    recordBatchFailure(item);
+                                    data.public_classification_performed = false;
                                 }
-                            });
-                            setCurrentFaceClusters(data.face_clusters);
-                            faceClusteringInfo = data.face_clustering || null;
+                                // 保持 session_id
+                                if (data.session_id) window._currentSessionId = data.session_id;
+                                currentBatchResults.push(data);
+                            } else if (data.status === 'error') {
+                                failedCount++;
+                                totalImages = data.total || totalImages;
+                                recordBatchFailure(data);
+                            } else if (data.status === 'completed') {
+                                setCurrentFaceClusters(data.face_clusters);
+                                faceClusteringInfo = data.face_clustering || null;
+                            } else if (data.status === 'cancelled') {
+                                throw new Error(data.message || '已中止本次整理');
+                            } else if (data.results && Array.isArray(data.results)) {
+                                // 本機批次模式：一次性完整 JSON 回應
+                                totalImages = data.total || data.results.length;
+                                if (data.temp_folder) currentTempFolder = data.temp_folder;
+                                if (data.session_id) window._currentSessionId = data.session_id;
+                                data.results.forEach(item => {
+                                    if (item.status === 'ok') {
+                                        if (publicClassificationWasRun(item)) {
+                                            const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
+                                            item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                                            item.ai_decision = item.ai_decision || item.user_decision;
+                                        }
+                                        currentBatchResults.push(item);
+                                        successCount++;
+                                    } else {
+                                        failedCount++;
+                                        recordBatchFailure(item);
+                                    }
+                                });
+                                setCurrentFaceClusters(data.face_clusters);
+                                faceClusteringInfo = data.face_clustering || null;
+                            }
+
+                            // 更新 UI 進度
+                            updateProgressUI(successCount + failedCount, totalImages, successCount, failedCount);
+                            saveBatchViewSnapshot({ active: true });
+
+                        } catch (err) {
+                            console.error('JSON parsing data error:', line, err);
                         }
-
-                        // 更新 UI 進度
-                        updateProgressUI(successCount + failedCount, totalImages, successCount, failedCount);
-                        saveBatchViewSnapshot({ active: true });
-
-                    } catch (err) {
-                        console.error('JSON parsing data error:', line, err);
                     }
                 }
-            }
 
-            // 一次性 JSON（本機資料夾模式）通常不以換行結尾，需處理最後的 buffer。
-            if (buffer.trim()) {
-                const data = JSON.parse(buffer);
-                if (data.results && Array.isArray(data.results)) {
-                    totalImages = data.total || data.results.length;
-                    if (data.temp_folder) currentTempFolder = data.temp_folder;
-                    if (data.session_id) window._currentSessionId = data.session_id;
-                    data.results.forEach(item => {
-                        if (item.status === 'ok') {
-                            if (publicClassificationWasRun(item)) {
-                                const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
-                                item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
-                                item.ai_decision = item.ai_decision || item.user_decision;
+                // 一次性 JSON（本機資料夾模式）通常不以換行結尾，需處理最後的 buffer。
+                if (buffer.trim()) {
+                    const data = JSON.parse(buffer);
+                    if (data.results && Array.isArray(data.results)) {
+                        totalImages = data.total || data.results.length;
+                        if (data.temp_folder) currentTempFolder = data.temp_folder;
+                        if (data.session_id) window._currentSessionId = data.session_id;
+                        data.results.forEach(item => {
+                            if (item.status === 'ok') {
+                                if (publicClassificationWasRun(item)) {
+                                    const aiStatus = item.moderation_status || (item.is_safe_for_public ? 'public' : 'private');
+                                    item.user_decision = item.user_decision || (aiStatus === 'public' ? 'safe' : aiStatus === 'private' ? 'unsafe' : 'pending');
+                                    item.ai_decision = item.ai_decision || item.user_decision;
+                                }
+                                currentBatchResults.push(item);
+                                successCount++;
+                            } else {
+                                failedCount++;
+                                recordBatchFailure(item);
                             }
-                            currentBatchResults.push(item);
-                            successCount++;
-                        } else {
-                            failedCount++;
-                            recordBatchFailure(item);
-                        }
-                    });
-                    setCurrentFaceClusters(data.face_clusters);
-                    faceClusteringInfo = data.face_clustering || null;
-                    updateProgressUI(successCount + failedCount, totalImages, successCount, failedCount);
+                        });
+                        setCurrentFaceClusters(data.face_clusters);
+                        faceClusteringInfo = data.face_clustering || null;
+                        updateProgressUI(successCount + failedCount, totalImages, successCount, failedCount);
+                    }
                 }
             }
 

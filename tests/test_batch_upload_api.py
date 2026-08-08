@@ -30,6 +30,8 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(response.json()["batch_upload_max_file_mb"], main.BATCH_UPLOAD_MAX_FILE_MB)
         self.assertEqual(response.json()["batch_upload_max_total_mb"], main.BATCH_UPLOAD_MAX_TOTAL_MB)
         self.assertEqual(response.json()["batch_upload_concurrency"], main.BATCH_UPLOAD_CONCURRENCY)
+        self.assertEqual(response.json()["local_upload_request_max_files"], main.LOCAL_UPLOAD_REQUEST_MAX_FILES)
+        self.assertEqual(response.json()["local_upload_request_max_total_mb"], main.LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB)
         self.assertEqual(response.json()["batch_download_max_mb"], main.BATCH_DOWNLOAD_MAX_MB)
         self.assertEqual(response.json()["face_cluster_default_eps"], main.DEFAULT_CLUSTER_EPS)
         self.assertEqual(response.json()["face_cluster_default_min_samples"], main.DEFAULT_CLUSTER_MIN_SAMPLES)
@@ -165,6 +167,84 @@ class BatchUploadApiTests(unittest.TestCase):
         other_response = TestClient(main.app).get("/face_clusters/upload-test")
         self.assertEqual(own_response.status_code, 200)
         self.assertEqual(other_response.status_code, 404)
+
+    def test_batch_upload_stream_allows_local_upload_chunks_to_complete_one_session(self):
+        async def fake_batch_stream(images, **kwargs):
+            for image in images:
+                yield {
+                    "status": "ok",
+                    "file_name": image.filename,
+                    "total": len(images),
+                    "index": 1,
+                    "result": {"moderation_status": "public", "is_safe_for_public": True},
+                    "original_image_b64": "b3JpZ2luYWw=",
+                    "drawn_image_b64": "ZHJhd24=",
+                }
+
+        classify_calls = []
+
+        async def fake_classify_session_faces(session_id):
+            classify_calls.append(session_id)
+            self.assertEqual(
+                [result["file_name"] for result in main._batch_sessions[session_id]["results"]],
+                ["one.jpg", "two.jpg"],
+            )
+            main._batch_sessions[session_id]["face_clusters"] = []
+            return {"available": True, "cluster_count": 0}
+
+        with (
+            patch.object(main, "batch_process_uploads_stream", fake_batch_stream, create=True),
+            patch.object(main, "_classify_session_faces", fake_classify_session_faces),
+        ):
+            first_response = self.client.post(
+                "/batch_upload_stream/",
+                files=[("files", ("one.jpg", b"one", "image/jpeg"))],
+                data={
+                    "concurrency": "1",
+                    "session_id": "upload-test",
+                    "upload_chunk_index": "0",
+                    "upload_chunk_total": "2",
+                    "upload_total_files": "2",
+                },
+            )
+            second_response = self.client.post(
+                "/batch_upload_stream/",
+                files=[("files", ("two.jpg", b"two", "image/jpeg"))],
+                data={
+                    "concurrency": "1",
+                    "session_id": "upload-test",
+                    "upload_chunk_index": "1",
+                    "upload_chunk_total": "2",
+                    "upload_total_files": "2",
+                },
+            )
+
+        self.assertEqual(first_response.status_code, 200)
+        first_events = [json.loads(line) for line in first_response.text.splitlines()]
+        self.assertEqual([event["status"] for event in first_events], ["ok"])
+        self.assertEqual(first_events[0]["index"], 1)
+        self.assertEqual(first_events[0]["total"], 2)
+        self.assertEqual(second_response.status_code, 200)
+        second_events = [json.loads(line) for line in second_response.text.splitlines()]
+        self.assertEqual([event["status"] for event in second_events], ["ok", "face_cluster_progress", "completed"])
+        self.assertEqual(second_events[0]["index"], 2)
+        self.assertEqual(second_events[0]["total"], 2)
+        self.assertEqual(classify_calls, ["upload-test"])
+
+    def test_batch_upload_stream_rejects_chunk_that_does_not_start_at_zero(self):
+        response = self.client.post(
+            "/batch_upload_stream/",
+            files=[("files", ("two.jpg", b"two", "image/jpeg"))],
+            data={
+                "session_id": "upload-test",
+                "upload_chunk_index": "1",
+                "upload_chunk_total": "2",
+                "upload_total_files": "2",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("第一批", response.json()["detail"])
 
     def test_batch_upload_stream_passes_face_cluster_params_into_session_processing(self):
         async def fake_batch_stream(images, **kwargs):

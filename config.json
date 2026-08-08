@@ -8,6 +8,8 @@
   "batch_upload_total_max_files": 200,
   "batch_upload_max_file_mb": 30,
   "batch_upload_max_total_mb": 4000,
+  "local_upload_request_max_files": 3,
+  "local_upload_request_max_total_mb": 4,
   "batch_upload_concurrency": 5,
   "batch_upload_concurrency_local_cap": 5,
   "batch_upload_concurrency_cloud_cap": 3,

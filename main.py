@@ -47,6 +47,8 @@ DEFAULT_BATCH_UPLOAD_BATCH_SIZE_CLOUD = DEFAULT_CLUSTER_BATCH_SIZE
 DEFAULT_BATCH_UPLOAD_TOTAL_MAX_FILES = 200
 DEFAULT_BATCH_UPLOAD_MAX_FILE_MB = 20
 DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 500
+DEFAULT_LOCAL_UPLOAD_REQUEST_MAX_FILES = 3
+DEFAULT_LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB = 4
 DEFAULT_BATCH_UPLOAD_CONCURRENCY = 5
 DEFAULT_BATCH_UPLOAD_CONCURRENCY_LOCAL_CAP = 5
 DEFAULT_BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP = 3
@@ -213,6 +215,8 @@ def load_config() -> dict[str, Any]:
         "batch_upload_total_max_files": DEFAULT_BATCH_UPLOAD_TOTAL_MAX_FILES,
         "batch_upload_max_file_mb": DEFAULT_BATCH_UPLOAD_MAX_FILE_MB,
         "batch_upload_max_total_mb": DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB,
+        "local_upload_request_max_files": DEFAULT_LOCAL_UPLOAD_REQUEST_MAX_FILES,
+        "local_upload_request_max_total_mb": DEFAULT_LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB,
         "batch_upload_concurrency": DEFAULT_BATCH_UPLOAD_CONCURRENCY,
         "batch_upload_concurrency_local_cap": DEFAULT_BATCH_UPLOAD_CONCURRENCY_LOCAL_CAP,
         "batch_upload_concurrency_cloud_cap": DEFAULT_BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP,
@@ -254,6 +258,8 @@ def load_config() -> dict[str, Any]:
         # 先不限制上限，避免本機 / .env / config.json 的批次容量參數被硬性擋掉。
         ("batch_upload_max_file_mb", "BATCH_UPLOAD_MAX_FILE_MB", None, None, DEFAULT_BATCH_UPLOAD_MAX_FILE_MB, 1, None),
         ("batch_upload_max_total_mb", "BATCH_UPLOAD_MAX_TOTAL_MB", None, None, DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB, 1, None),
+        ("local_upload_request_max_files", "LOCAL_UPLOAD_REQUEST_MAX_FILES", None, None, DEFAULT_LOCAL_UPLOAD_REQUEST_MAX_FILES, 1, None),
+        ("local_upload_request_max_total_mb", "LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB", None, None, DEFAULT_LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB, 1, None),
         ("batch_upload_concurrency", "BATCH_UPLOAD_CONCURRENCY", None, None, DEFAULT_BATCH_UPLOAD_CONCURRENCY, 1, CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP),
         ("batch_upload_concurrency_local_cap", "BATCH_UPLOAD_CONCURRENCY_LOCAL_CAP", None, None, DEFAULT_BATCH_UPLOAD_CONCURRENCY_LOCAL_CAP, 1, None),
         ("batch_upload_concurrency_cloud_cap", "BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP", None, None, DEFAULT_BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP, 1, None),
@@ -289,6 +295,8 @@ BATCH_UPLOAD_BATCH_SIZE_CLOUD = CONFIG["batch_upload_batch_size_cloud"]
 BATCH_UPLOAD_TOTAL_MAX_FILES = CONFIG["batch_upload_total_max_files"]
 BATCH_UPLOAD_MAX_FILE_MB = CONFIG["batch_upload_max_file_mb"]
 BATCH_UPLOAD_MAX_TOTAL_MB = CONFIG["batch_upload_max_total_mb"]
+LOCAL_UPLOAD_REQUEST_MAX_FILES = CONFIG["local_upload_request_max_files"]
+LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB = CONFIG["local_upload_request_max_total_mb"]
 BATCH_UPLOAD_CONCURRENCY = CONFIG["batch_upload_concurrency"]
 LOCAL_BATCH_CONCURRENCY_CAP = CONFIG["batch_upload_concurrency_local_cap"]
 CLOUD_API_CONCURRENCY_CAP = CONFIG["batch_upload_concurrency_cloud_cap"]
@@ -296,6 +304,7 @@ BATCH_DOWNLOAD_MAX_MB = CONFIG["batch_download_max_mb"]
 FACE_CLUSTERING_ENABLED = CONFIG["face_clustering_enabled"]
 BATCH_UPLOAD_MAX_FILE_BYTES = BATCH_UPLOAD_MAX_FILE_MB * 1024 * 1024
 BATCH_UPLOAD_MAX_TOTAL_BYTES = BATCH_UPLOAD_MAX_TOTAL_MB * 1024 * 1024
+LOCAL_UPLOAD_REQUEST_MAX_TOTAL_BYTES = LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB * 1024 * 1024
 
 
 # 1. 初始化 FastAPI 與靜態資源
@@ -731,12 +740,14 @@ async def get_frontend_config():
         "batch_upload_max_files_cloud": BATCH_UPLOAD_TOTAL_MAX_FILES,
         "batch_upload_max_file_mb": BATCH_UPLOAD_MAX_FILE_MB,
         "batch_upload_max_total_mb": BATCH_UPLOAD_MAX_TOTAL_MB,
+        "local_upload_request_max_files": LOCAL_UPLOAD_REQUEST_MAX_FILES,
+        "local_upload_request_max_total_mb": LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB,
         "batch_upload_concurrency": BATCH_UPLOAD_CONCURRENCY,
         "batch_upload_concurrency_local_cap": LOCAL_BATCH_CONCURRENCY_CAP,
         "batch_upload_concurrency_cloud_cap": CLOUD_API_CONCURRENCY_CAP,
         "batch_upload_concurrency_local_message": f"這台電腦一次最多先看 {LOCAL_BATCH_CONCURRENCY_CAP} 張，我會慢慢幫你整理好。",
         "batch_upload_concurrency_cloud_message": f"Google 雲端一次最多先看 {CLOUD_API_CONCURRENCY_CAP} 張，這樣整理起來會比較穩。",
-        "batch_upload_limits_local_message": f"這台電腦一次可先準備 {BATCH_UPLOAD_TOTAL_MAX_FILES} 張，會每 {BATCH_UPLOAD_BATCH_SIZE_LOCAL} 張分成一批整理；單檔 {BATCH_UPLOAD_MAX_FILE_MB}MB、合計 {BATCH_UPLOAD_MAX_TOTAL_MB}MB 以內。",
+        "batch_upload_limits_local_message": f"這台電腦一次可先準備 {BATCH_UPLOAD_TOTAL_MAX_FILES} 張；上傳會每次最多 {LOCAL_UPLOAD_REQUEST_MAX_FILES} 張、合計 {LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB}MB 分批送出。",
         "batch_upload_limits_cloud_message": f"Google 雲端會每 {BATCH_UPLOAD_BATCH_SIZE_CLOUD} 張分成一批送出，全部準備好後再整理人物。",
         "batch_download_max_mb": BATCH_DOWNLOAD_MAX_MB,
         "face_clustering_enabled": FACE_CLUSTERING_ENABLED,
@@ -940,10 +951,23 @@ async def batch_upload_stream(
     face_cluster_min_samples: int = Form(DEFAULT_CLUSTER_MIN_SAMPLES),
     run_public_classification: bool = Form(False),
     run_face_clustering: bool = Form(True),
+    upload_chunk_index: int = Form(0),
+    upload_chunk_total: int = Form(1),
+    upload_total_files: Optional[int] = Form(None),
 ):
     _validate_processing_scope(run_public_classification, run_face_clustering)
     _validate_local_api_concurrency(concurrency)
     _validate_batch_file_count(len(files), mode="local")
+    if upload_chunk_total < 1:
+        raise HTTPException(status_code=400, detail="上傳分批總數必須至少為 1")
+    if upload_chunk_index < 0 or upload_chunk_index >= upload_chunk_total:
+        raise HTTPException(status_code=400, detail="上傳分批序號超出範圍")
+    is_chunked_upload = upload_chunk_total > 1
+    is_final_upload_chunk = upload_chunk_index == upload_chunk_total - 1
+    expected_total_files = upload_total_files if is_chunked_upload and upload_total_files else len(files)
+    _validate_batch_file_count(expected_total_files, mode="local")
+    if expected_total_files > BATCH_UPLOAD_TOTAL_MAX_FILES:
+        raise HTTPException(status_code=413, detail=f"一次最多上傳 {BATCH_UPLOAD_TOTAL_MAX_FILES} 張圖片。請減少檔案，或改用 Google 雲端資料夾模式。")
 
     try:
         color_rules = json.loads(color_rules_json) if color_rules_json else None
@@ -961,42 +985,84 @@ async def batch_upload_stream(
         face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
 
     current_session_id = session_id or str(uuid.uuid4())
-    owner_id = _acquire_batch_slot(request, current_session_id)
+    existing_session = _batch_sessions.get(current_session_id)
+    is_new_session = existing_session is None
+    if is_new_session:
+        owner_id = _acquire_batch_slot(request, current_session_id)
+    elif is_chunked_upload:
+        owner_id = _get_client_id(request)
+        if existing_session.get("owner_id") != owner_id:
+            raise HTTPException(status_code=404, detail="找不到這場活動的辨識紀錄")
+        if existing_session.get("completed"):
+            raise HTTPException(status_code=409, detail="這場活動已經完成，請勿繼續送出分批上傳。")
+        existing_processing_info = existing_session.get("processing_info") if isinstance(existing_session.get("processing_info"), dict) else {}
+        if int(existing_processing_info.get("upload_next_chunk_index") or 0) != upload_chunk_index:
+            raise HTTPException(status_code=409, detail="上傳分批順序不一致，請重新送出。")
+        active_session_id = _active_batch_owners.get(owner_id)
+        if active_session_id and active_session_id != current_session_id:
+            raise HTTPException(status_code=409, detail="另一個頁籤正在處理照片，請等它完成後再試。")
+        _active_batch_owners[owner_id] = current_session_id
+    else:
+        owner_id = _acquire_batch_slot(request, current_session_id)
+    if is_new_session and is_chunked_upload and upload_chunk_index != 0:
+        _release_batch_slot(owner_id, current_session_id)
+        raise HTTPException(status_code=400, detail="上傳分批必須從第一批開始。")
+    previous_result_count = len(existing_session.get("results") or []) if existing_session else 0
     try:
         images = await read_upload_batch(
             files,
-            max_files=BATCH_UPLOAD_TOTAL_MAX_FILES,
+            max_files=LOCAL_UPLOAD_REQUEST_MAX_FILES if is_chunked_upload else BATCH_UPLOAD_TOTAL_MAX_FILES,
             max_file_bytes=BATCH_UPLOAD_MAX_FILE_BYTES,
-            max_total_bytes=BATCH_UPLOAD_MAX_TOTAL_BYTES,
+            max_total_bytes=LOCAL_UPLOAD_REQUEST_MAX_TOTAL_BYTES if is_chunked_upload else BATCH_UPLOAD_MAX_TOTAL_BYTES,
         )
     except Exception:
         _release_batch_slot(owner_id, current_session_id)
         raise
+    if previous_result_count + len(images) > expected_total_files:
+        _release_batch_slot(owner_id, current_session_id)
+        raise HTTPException(status_code=400, detail="上傳分批張數超過原本宣告的總張數")
     start_time = datetime.now()
-    _batch_sessions[current_session_id] = {
-        "session_id": current_session_id,
-        "owner_id": owner_id,
-        "batch_mode": "upload",
-        "user_account": _get_batch_user_account(request, "upload"),
-        "start_time": start_time.isoformat(),
-        "end_time": None,
-        "results": [],
-        "processing_info": {
-            "file_count": len(images),
-            "concurrency": concurrency,
-            "face_cluster_eps": face_cluster_eps,
-            "face_cluster_min_samples": face_cluster_min_samples,
-            "face_cluster_batch_size": BATCH_UPLOAD_BATCH_SIZE_LOCAL,
-            "run_public_classification": run_public_classification,
-            "run_face_clustering": run_face_clustering,
-        },
-        "completed": False,
-        "cancel_requested": False,
-        "cancelled_at": None,
-        "face_cluster_job_id": None,
-        "face_cluster_cancel_requested": False,
-    }
-    await _persist_session_created(_batch_sessions[current_session_id])
+    if is_new_session:
+        _batch_sessions[current_session_id] = {
+            "session_id": current_session_id,
+            "owner_id": owner_id,
+            "batch_mode": "upload",
+            "user_account": _get_batch_user_account(request, "upload"),
+            "status": "processing",
+            "stage": "photos",
+            "start_time": start_time.isoformat(),
+            "end_time": None,
+            "results": [],
+            "processing_info": {
+                "file_count": expected_total_files,
+                "concurrency": concurrency,
+                "face_cluster_eps": face_cluster_eps,
+                "face_cluster_min_samples": face_cluster_min_samples,
+                "face_cluster_batch_size": BATCH_UPLOAD_BATCH_SIZE_LOCAL,
+                "run_public_classification": run_public_classification,
+                "run_face_clustering": run_face_clustering,
+                "upload_chunk_total": upload_chunk_total,
+                "upload_next_chunk_index": upload_chunk_index + 1,
+            },
+            "completed": False,
+            "cancel_requested": False,
+            "cancelled_at": None,
+            "face_cluster_job_id": None,
+            "face_cluster_cancel_requested": False,
+        }
+        await _persist_session_created(_batch_sessions[current_session_id])
+    else:
+        processing_info = _batch_sessions[current_session_id].setdefault("processing_info", {})
+        processing_info["file_count"] = expected_total_files
+        processing_info["upload_next_chunk_index"] = upload_chunk_index + 1
+        await _persist_session_update(
+            current_session_id,
+            {
+                "status": "processing",
+                "stage": "photos",
+                "processing_info": processing_info,
+            },
+        )
 
     async def event_generator():
         try:
@@ -1007,10 +1073,29 @@ async def batch_upload_stream(
                 collaborative_memory=collaborative_memory,
                 evaluate_public=run_public_classification,
             ):
+                chunk_index = previous_result_count + int(chunk.get("index") or 0)
+                chunk = {
+                    **chunk,
+                    "index": chunk_index,
+                    "total": expected_total_files,
+                    "upload_chunk_index": upload_chunk_index,
+                    "upload_chunk_total": upload_chunk_total,
+                }
                 if chunk.get("status") == "ok":
                     _batch_sessions[current_session_id]["results"].append(chunk)
                     await _persist_photo_result(current_session_id, owner_id, chunk)
                 yield json.dumps({**chunk, "session_id": current_session_id}, ensure_ascii=False) + "\n"
+
+            if is_chunked_upload and not is_final_upload_chunk:
+                await _persist_session_update(
+                    current_session_id,
+                    {
+                        "status": "processing",
+                        "stage": "photos",
+                        "result_count": len(_batch_sessions[current_session_id]["results"]),
+                    },
+                )
+                return
 
             _batch_sessions[current_session_id]["end_time"] = datetime.now().isoformat()
             _batch_sessions[current_session_id]["completed"] = True
@@ -1058,7 +1143,7 @@ async def batch_upload_stream(
                 {
                     "status": "completed",
                     "session_id": current_session_id,
-                    "message": f"批次處理完成，共 {len(images)} 張圖片",
+                    "message": f"批次處理完成，共 {len(_batch_sessions[current_session_id]['results'])} 張圖片",
                     "face_clustering": face_clustering,
                     "face_clusters": _batch_sessions[current_session_id]["face_clusters"],
                 },
