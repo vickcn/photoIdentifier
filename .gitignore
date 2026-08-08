@@ -147,9 +147,7 @@ uploads/
 .cursor*/
 log*.txt
 log*/
-issues*/
-!issues/
-issues/*
+issues**
 !issues/cloudrun-vercel-batch-architecture.md
 output*/
 sds_studio*/
