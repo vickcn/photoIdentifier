@@ -38,6 +38,11 @@
             .slice(0, 80) || '未命名人物';
     }
 
+    function faceCountFolderName(faceCount) {
+        const count = Number.isFinite(faceCount) ? Math.max(0, Math.trunc(faceCount)) : 0;
+        return `${count}人`;
+    }
+
     function readPublicDecision(item) {
         const analysis = item.result || item;
         const explicit = item.user_decision || item.ai_decision || analysis.ai_decision;
@@ -81,15 +86,21 @@
         const foldersByName = new Map();
         photos.forEach(photo => {
             const people = photo.people || [];
-            const folderName = people.length === 0
-                ? '無人'
-                : people.length === 1
-                    ? normalizeFolderName(people[0].display_name, people[0].cluster_id)
-                    : '多人';
-            if (!foldersByName.has(folderName)) {
-                foldersByName.set(folderName, { name: folderName, photos: [] });
+            const countFolderName = faceCountFolderName(people.length);
+            const pathSegments = people.length === 1
+                ? [countFolderName, normalizeFolderName(people[0].display_name, people[0].cluster_id)]
+                : [countFolderName];
+            const folderKey = pathSegments.join('/');
+            const displayName = pathSegments[pathSegments.length - 1];
+            if (!foldersByName.has(folderKey)) {
+                foldersByName.set(folderKey, {
+                    name: displayName,
+                    face_count: people.length,
+                    path_segments: pathSegments,
+                    photos: [],
+                });
             }
-            foldersByName.get(folderName).photos.push({
+            foldersByName.get(folderKey).photos.push({
                 file_name: photo.file_name,
                 drive_id: photo.drive_id || null,
                 people: people.map(item => ({

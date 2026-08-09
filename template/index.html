@@ -12,7 +12,7 @@
         href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Inter:wght@400;500;600;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/lxgw-wenkai-tc@5.2.9/400.css">
-    <link rel="stylesheet" href="/static/css/app.css?v=20260808-upload-limits">
+    <link rel="stylesheet" href="/static/css/app.css?v=20260809-sticky-multi-toolbar">
     <!-- Google API & Identity Services for Picker -->
     <script src="https://apis.google.com/js/api.js" async defer></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -277,11 +277,13 @@
                             下載時包含人物照片資料夾
                         </label>
                         <div class="result-export-actions">
-                            <button class="secondary-btn" id="download-batch-results-btn" type="button">
-                                下載辨識結果
+                            <button class="secondary-btn result-export-btn" id="download-batch-results-btn" type="button">
+                                <span class="result-export-btn-spinner" aria-hidden="true"></span>
+                                <span class="result-export-btn-label">下載辨識結果</span>
                             </button>
-                            <button class="secondary-btn hidden" id="save-drive-results-btn" type="button">
-                                儲存辨識結果
+                            <button class="secondary-btn result-export-btn hidden" id="save-drive-results-btn" type="button">
+                                <span class="result-export-btn-spinner" aria-hidden="true"></span>
+                                <span class="result-export-btn-label">儲存辨識結果</span>
                             </button>
                         </div>
                         <!--
@@ -569,13 +571,35 @@
         </div>
     </div>
 
+    <div id="text-prompt-modal" class="modal hidden">
+        <div class="modal-overlay" data-text-prompt-action="cancel"></div>
+        <div class="modal-content drive-folder-modal-content" role="dialog" aria-modal="true" aria-labelledby="text-prompt-title">
+            <div class="modal-header">
+                <div>
+                    <h3 id="text-prompt-title">請輸入名稱</h3>
+                    <p id="text-prompt-hint" class="modal-hint"></p>
+                </div>
+                <button class="modal-close-btn" type="button" data-text-prompt-action="cancel" aria-label="關閉">✕</button>
+            </div>
+            <div class="modal-body">
+                <label for="text-prompt-input">內容</label>
+                <input id="text-prompt-input" type="text" maxlength="100" autocomplete="off">
+                <p id="text-prompt-error" class="form-error hidden" role="alert"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="secondary-btn" type="button" data-text-prompt-action="cancel">取消</button>
+                <button class="primary-btn" type="button" data-text-prompt-action="submit">確定</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Notification Toast -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/static/js/face_relationships.js?v=20260801-photo-people"></script>
+    <script src="/static/js/face_relationships.js?v=20260809-face-count-folders"></script>
     <script src="/static/js/upload_limits.js?v=20260808-upload-limits"></script>
-    <script src="/static/js/batch_image_sources.js?v=20260808-preview-fix"></script>
-    <script src="/static/js/app.js?v=20260808-upload-limits"></script>
+    <script src="/static/js/batch_image_sources.js?v=20260809-drive-preview-fix"></script>
+    <script src="/static/js/app.js?v=20260809-text-prompt-modal"></script>
 </body>
 
 </html>

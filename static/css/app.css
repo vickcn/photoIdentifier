@@ -549,6 +549,49 @@ button:disabled {
     background: rgba(201, 106, 63, 0.08);
 }
 
+.result-export-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    min-height: 3.5rem;
+}
+
+.result-export-btn-spinner {
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid rgba(201, 106, 63, 0.2);
+    border-top-color: currentColor;
+    border-radius: 999px;
+    opacity: 0;
+    transform: scale(0.9);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.result-export-btn.is-busy {
+    cursor: wait;
+}
+
+.result-export-btn.is-busy .result-export-btn-spinner {
+    opacity: 1;
+    transform: scale(1);
+    animation: result-export-spin 0.8s linear infinite;
+}
+
+.result-export-btn.is-busy .result-export-btn-label {
+    transform: translateX(0);
+}
+
+@keyframes result-export-spin {
+    from {
+        transform: rotate(0deg) scale(1);
+    }
+    to {
+        transform: rotate(360deg) scale(1);
+    }
+}
+
 /* Viewer Panel */
 .viewer-panel {
     position: relative;
@@ -1598,11 +1641,34 @@ body.app-busy {
     gap: 0.75rem;
     margin-bottom: 0.75rem;
     color: var(--text-primary);
+    width: 100%;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
 }
 
 .blocked-upload-header span {
     color: var(--text-secondary);
     font-size: 0.85rem;
+}
+
+.blocked-upload-toggle {
+    margin-left: auto;
+    transition: transform 0.2s ease;
+}
+
+.blocked-upload-panel[data-expanded="false"] .blocked-upload-toggle {
+    transform: rotate(-90deg);
+}
+
+.blocked-upload-body {
+    display: block;
+}
+
+.blocked-upload-panel[data-expanded="false"] .blocked-upload-body {
+    display: none;
 }
 
 .blocked-upload-grid {
@@ -1868,6 +1934,55 @@ body.app-busy {
     box-shadow: 0 8px 20px rgba(91, 65, 47, 0.08);
 }
 
+.face-person-card.selected-for-batch {
+    border-color: rgba(193, 92, 48, 0.62);
+    box-shadow: 0 0 0 2px rgba(193, 92, 48, 0.14);
+}
+
+.face-multi-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin: 0.35rem 0 0.65rem;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid rgba(193, 92, 48, 0.22);
+    border-radius: 0.65rem;
+    background: rgba(255, 250, 242, 0.96);
+    box-shadow: 0 10px 24px rgba(91, 65, 47, 0.1);
+    backdrop-filter: blur(10px);
+}
+
+.face-evidence-global-toolbar {
+    border-color: rgba(193, 92, 48, 0.36);
+    box-shadow: 0 12px 28px rgba(193, 92, 48, 0.16);
+}
+
+.face-multi-toolbar strong {
+    margin-right: auto;
+    color: var(--text-primary);
+}
+
+.face-multi-toolbar button {
+    border: 1px solid rgba(193, 92, 48, 0.3);
+    border-radius: 0.55rem;
+    padding: 0.42rem 0.62rem;
+    background: rgba(255, 255, 255, 0.86);
+    color: var(--accent-color);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.face-long-press-hint {
+    display: block;
+    margin: 0.45rem 0;
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+}
+
 .face-person-row {
     display: grid;
     grid-template-columns: minmax(220px, 1fr) minmax(260px, 0.75fr);
@@ -1895,20 +2010,24 @@ body.app-busy {
 }
 
 .face-person-name-editor {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, clamp(11rem, 18vw, 15rem)) auto auto;
     min-width: 0;
     gap: 0.4rem;
+    align-items: center;
 }
 
 .face-person-name-input {
     min-width: 0;
-    flex: 1;
     border: 1px solid var(--glass-border);
     border-radius: 0.6rem;
     padding: 0.55rem 0.65rem;
     background: rgba(255, 255, 255, 0.78);
     color: var(--text-primary);
     font: inherit;
+    width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
 }
 
 .face-person-name-editor button,
@@ -2059,6 +2178,13 @@ body.app-busy {
 .face-evidence-card small {
     margin-bottom: 0.55rem;
     color: var(--text-secondary);
+}
+
+.face-evidence-card .face-image-fallback-note {
+    margin-top: 0;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    white-space: normal;
 }
 
 .face-photo-decision,
@@ -2428,6 +2554,14 @@ body.app-busy {
         border-bottom: 1px solid var(--glass-border);
     }
 
+    .face-multi-toolbar {
+        align-items: stretch;
+    }
+
+    .face-multi-toolbar strong {
+        flex-basis: 100%;
+    }
+
     .face-person-toggle {
         grid-template-columns: 1rem 2.25rem minmax(0, 1fr);
     }
@@ -2443,11 +2577,11 @@ body.app-busy {
 
     .face-person-name-editor {
         padding: 0 0.75rem 0.75rem;
-        flex-wrap: wrap;
+        grid-template-columns: minmax(0, 1fr) auto auto;
     }
 
     .face-person-name-input {
-        flex-basis: 100%;
+        min-width: 0;
     }
 
     .photo-relation-toggle {

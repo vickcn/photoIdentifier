@@ -841,6 +841,25 @@ async def get_local_file(path: str):
     return FileResponse(path)
 
 
+@app.get("/drive_file/{file_id}")
+async def get_drive_file(file_id: str, request: Request):
+    creds = get_drive_credentials(request)
+    import httpx
+
+    url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+    headers = {"Authorization": f"Bearer {creds.token}"}
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        resp = await client.get(url, headers=headers)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail="Drive image download failed")
+    content_type = resp.headers.get("content-type") or "image/jpeg"
+    return Response(
+        content=resp.content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
 @app.post("/analyze/", response_model=PhotoAnalysisResult)
 async def analyze_photo(file: UploadFile = File(...), collaborative_memory: str = Form(None)):
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -2309,13 +2328,21 @@ def _copy_people_folders_to_drive(
     folders_created_or_reused = 0
 
     for folder in photo_angle_folders:
-        folder_name = str(folder.get("name") or "無人").strip()[:80] or "無人"
+        raw_segments = folder.get("path_segments")
+        if isinstance(raw_segments, list) and raw_segments:
+            folder_segments = [str(item or "").strip()[:80] for item in raw_segments]
+            folder_segments = [item for item in folder_segments if item]
+        else:
+            folder_segments = [str(folder.get("name") or "無人").strip()[:80] or "無人"]
+        folder_name = "/".join(folder_segments)
         photos = folder.get("photos") or []
         if not photos:
             continue
         try:
-            folder_id = get_or_create_subfolder(folder_name, target_folder_id)
-            folders_created_or_reused += 1
+            folder_id = target_folder_id
+            for segment in folder_segments:
+                folder_id = get_or_create_subfolder(segment, folder_id)
+                folders_created_or_reused += 1
         except Exception as exc:
             errors.append(f"{folder_name}: 無法建立資料夾：{exc}")
             continue

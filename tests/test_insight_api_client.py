@@ -3,7 +3,13 @@ from unittest.mock import patch
 
 import httpx
 
-from src.insight_api_client import InsightApiClient, cluster_batch_results
+from src.batch_state_store import strip_image_payload
+from src.insight_api_client import (
+    InsightApiClient,
+    build_clusters_from_response,
+    cluster_batch_results,
+    resolve_face_image_source,
+)
 
 
 class FakeResponse:
@@ -222,6 +228,98 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(progress_events[-1]["progress"]["completed"], 5)
         self.assertEqual(progress_events[-1]["progress"]["total"], 5)
         self.assertEqual(sum(cluster["face_count"] for cluster in clusters), 5)
+
+    def test_build_clusters_from_response_allows_missing_source_image(self):
+        response = {
+            "images": [
+                {
+                    "file_name": "DSC_2387.JPG",
+                    "faces": [
+                        {
+                            "face_index": 0,
+                            "bbox": [0, 0, 10, 10],
+                            "score": 0.9,
+                            "cluster": 0,
+                        }
+                    ],
+                }
+            ]
+        }
+
+        clusters = build_clusters_from_response(response, source_by_name={})
+
+        self.assertEqual(len(clusters), 1)
+        evidence = clusters[0]["evidence_photos"][0]
+        self.assertEqual(evidence["file_name"], "DSC_2387.JPG")
+        self.assertIsNone(evidence["image_b64"])
+
+    def test_face_clusters_persist_thumbnail_and_source_key(self):
+        cluster = {
+            "cluster_id": "cluster_001",
+            "evidence_photos": [
+                {
+                    "file_name": "DSC_2387.JPG",
+                    "image_b64": "full-data",
+                    "original_image_b64": "original-data",
+                    "thumbnail_b64": "thumb-data",
+                    "source_type": "drive",
+                    "source_key": "drive-file-id-123",
+                }
+            ],
+        }
+
+        safe = strip_image_payload(cluster)
+
+        evidence = safe["evidence_photos"][0]
+        self.assertNotIn("image_b64", evidence)
+        self.assertNotIn("original_image_b64", evidence)
+        self.assertEqual(evidence["thumbnail_b64"], "thumb-data")
+        self.assertEqual(evidence["source_type"], "drive")
+        self.assertEqual(evidence["source_key"], "drive-file-id-123")
+
+    def test_build_clusters_from_response_adds_thumbnail_and_drive_source_key(self):
+        response = {
+            "images": [
+                {
+                    "file_name": "DSC_2387.JPG",
+                    "faces": [
+                        {
+                            "face_index": 0,
+                            "bbox": [0, 0, 1, 1],
+                            "score": 0.9,
+                            "cluster": 0,
+                        }
+                    ],
+                }
+            ]
+        }
+        source_by_name = {
+            "DSC_2387.JPG": {
+                "file_name": "DSC_2387.JPG",
+                "original_image_b64": "aW1hZ2U=",
+                "drive_id": "drive-file-id-123",
+            }
+        }
+
+        clusters = build_clusters_from_response(response, source_by_name)
+
+        evidence = clusters[0]["evidence_photos"][0]
+        self.assertEqual(evidence["image_b64"], "aW1hZ2U=")
+        self.assertEqual(evidence["thumbnail_b64"], "aW1hZ2U=")
+        self.assertEqual(evidence["source_type"], "drive")
+        self.assertEqual(evidence["source_key"], "drive-file-id-123")
+
+    def test_drive_face_cluster_can_rebuild_full_image_from_drive_id(self):
+        face = {
+            "file_name": "DSC_2387.JPG",
+            "source_type": "drive",
+            "source_key": "drive-file-id-123",
+            "thumbnail_b64": "thumb-data",
+        }
+
+        source = resolve_face_image_source(face)
+
+        self.assertEqual(source, {"kind": "drive", "drive_id": "drive-file-id-123"})
 
 
 if __name__ == "__main__":

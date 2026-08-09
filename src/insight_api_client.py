@@ -512,6 +512,49 @@ def prepare_cluster_images(results: list[dict]) -> tuple[list[tuple[str, bytes, 
     return images, source_by_name
 
 
+def _thumbnail_b64_for_source(source: dict | None) -> str | None:
+    if not source:
+        return None
+    if source.get("thumbnail_b64"):
+        return source.get("thumbnail_b64")
+    image_b64 = source.get("original_image_b64")
+    if not image_b64:
+        return None
+    try:
+        image_bytes = base64.b64decode(image_b64, validate=True)
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image.thumbnail((320, 320))
+            output = io.BytesIO()
+            image.convert("RGB").save(output, format="JPEG", quality=72, optimize=True)
+        return base64.b64encode(output.getvalue()).decode("utf-8")
+    except Exception:
+        return image_b64
+
+
+def _source_ref_for_cluster_evidence(source: dict | None) -> tuple[str, str | None]:
+    if not source:
+        return "missing", None
+    if source.get("drive_id"):
+        return "drive", str(source.get("drive_id"))
+    if source.get("original_path"):
+        return "local_path", str(source.get("original_path"))
+    if source.get("original_image_b64"):
+        return "snapshot", None
+    return "missing", None
+
+
+def resolve_face_image_source(face: dict[str, Any]) -> dict[str, Any]:
+    if face.get("source_type") == "drive" and face.get("source_key"):
+        return {"kind": "drive", "drive_id": face["source_key"]}
+    if face.get("source_type") == "local_path" and face.get("source_key"):
+        return {"kind": "local_path", "path": face["source_key"]}
+    if face.get("image_b64"):
+        return {"kind": "snapshot", "image_b64": face.get("image_b64")}
+    if face.get("thumbnail_b64"):
+        return {"kind": "thumbnail", "image_b64": face.get("thumbnail_b64")}
+    return {"kind": "placeholder"}
+
+
 def build_clusters_from_response(response: dict, source_by_name: dict[str, dict]) -> list[dict]:
     grouped: dict[tuple[str, int], list[dict]] = {}
     noise_index = 0
@@ -528,6 +571,32 @@ def build_clusters_from_response(response: dict, source_by_name: dict[str, dict]
 
     clusters = []
     for display_index, faces in enumerate(grouped.values(), start=1):
+        evidence_photos = []
+        missing_source_names: set[str] = set()
+        for face in faces:
+            file_name = face["file_name"]
+            source = source_by_name.get(file_name)
+            if source is None:
+                missing_source_names.add(file_name)
+            source_type, source_key = _source_ref_for_cluster_evidence(source)
+            evidence_photos.append(
+                {
+                    "file_name": file_name,
+                    "face_index": face["face_index"],
+                    "bbox": face["bbox"],
+                    "score": face["score"],
+                    "image_b64": source.get("original_image_b64") if source else None,
+                    "thumbnail_b64": _thumbnail_b64_for_source(source),
+                    "source_type": source_type,
+                    "source_key": source_key,
+                }
+            )
+        if missing_source_names:
+            logger.warning(
+                "insight.cluster.missing_source_images cluster_id=%s missing_files=%s",
+                f"cluster_{display_index:03d}",
+                sorted(missing_source_names),
+            )
         clusters.append(
             {
                 "cluster_id": f"cluster_{display_index:03d}",
@@ -536,16 +605,7 @@ def build_clusters_from_response(response: dict, source_by_name: dict[str, dict]
                 "status": "unconfirmed",
                 "face_count": len(faces),
                 "photo_count": len({face["file_name"] for face in faces}),
-                "evidence_photos": [
-                    {
-                        "file_name": face["file_name"],
-                        "face_index": face["face_index"],
-                        "bbox": face["bbox"],
-                        "score": face["score"],
-                        "image_b64": source_by_name[face["file_name"]].get("original_image_b64"),
-                    }
-                    for face in faces
-                ],
+                "evidence_photos": evidence_photos,
                 "notes": "",
             }
         )

@@ -4,6 +4,18 @@ document.addEventListener('DOMContentLoaded', () => {
         || (item => item?.original_image_b64 ? `data:image/jpeg;base64,${item.original_image_b64}` : null);
     const getAnnotatedPreviewSrc = previewImageSources.annotatedImageSrc
         || (item => item?.drawn_image_b64 ? `data:image/jpeg;base64,${item.drawn_image_b64}` : null);
+    const getFaceImageSource = previewImageSources.faceImageSource
+        || ((face, matchedResult) => face?.image_b64
+            ? { kind: 'full', src: `data:image/jpeg;base64,${face.image_b64}` }
+            : matchedResult?.original_image_b64
+                ? { kind: 'result', src: `data:image/jpeg;base64,${matchedResult.original_image_b64}` }
+                : face?.thumbnail_b64
+                    ? { kind: 'thumbnail', src: `data:image/jpeg;base64,${face.thumbnail_b64}` }
+                    : { kind: 'placeholder', src: null });
+    const getFaceImageFallbackMessage = previewImageSources.faceImageFallbackMessage
+        || (source => source === 'drive'
+            ? '雲端模式可從 Google 來源重新載入完整圖。'
+            : '本機模式的完整圖只保證在目前 session 存活期內可用。');
     const DEFAULT_ORIGINAL_PLACEHOLDER = 'https://placehold.co/600x400?text=Processing+Drive+File';
     const DEFAULT_ANNOTATED_PLACEHOLDER = 'https://placehold.co/600x400?text=Preview+Unavailable';
 
@@ -270,6 +282,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const faceClusterUi = {
         expanded: new Set(),
         selectedEvidenceIndexes: new Map(),
+        selectedClusterIds: new Set(),
+        evidenceSelectionMode: false,
+        clusterSelectionMode: false,
     };
     let relationshipViewMode = 'people';
     let photoPeopleAssignments = {};
@@ -461,6 +476,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function setCurrentFaceClusters(clusters) {
         currentFaceClusters = Array.isArray(clusters) ? clusters : [];
         selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
+        clearFaceMultiSelection();
         initializePhotoPeopleAssignments();
     }
 
@@ -1581,6 +1597,7 @@ document.addEventListener('DOMContentLoaded', () => {
         batchFailureDetails = [];
         faceClusterUi.expanded.clear();
         faceClusterUi.selectedEvidenceIndexes.clear();
+        clearFaceMultiSelection();
         relationshipViewMode = 'people';
         photoPeopleAssignments = {};
         photoClusterUi.expanded.clear();
@@ -1958,6 +1975,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (batchMode !== 'upload' || batchBlockedUploadFiles.length === 0) return;
         const skipped = document.createElement('section');
         skipped.className = 'blocked-upload-panel';
+        skipped.dataset.expanded = 'true';
         const cards = batchBlockedUploadFiles.map(item => {
             const fileName = escapeHtml(item.file_name || '未命名檔案');
             const previewUrl = escapeHtml(item.preview_url || '');
@@ -1971,11 +1989,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             </article>`;
         }).join('');
-        skipped.innerHTML = `<div class="blocked-upload-header">
+        skipped.innerHTML = `<button type="button" class="blocked-upload-header" aria-expanded="true">
             <strong>未上傳照片</strong>
             <span>${batchBlockedUploadFiles.length} 張超過大小上限，這次先略過。</span>
-        </div>
-        <div class="blocked-upload-grid">${cards}</div>`;
+            <span class="blocked-upload-toggle">▾</span>
+        </button>
+        <div class="blocked-upload-body">
+            <div class="blocked-upload-grid">${cards}</div>
+        </div>`;
+        skipped.querySelector('.blocked-upload-header')?.addEventListener('click', () => {
+            const expanded = skipped.dataset.expanded !== 'false';
+            skipped.dataset.expanded = expanded ? 'false' : 'true';
+            skipped.querySelector('.blocked-upload-header')?.setAttribute('aria-expanded', String(!expanded));
+        });
         container.appendChild(skipped);
     }
 
@@ -1998,6 +2024,15 @@ document.addEventListener('DOMContentLoaded', () => {
             label: !wasRun && !item?.user_decision
                 ? '未判定'
                 : decision === 'safe' ? '可公開' : decision === 'unsafe' ? '不可公開' : '待確認',
+        };
+    }
+
+    function resolveFaceEvidenceImage(evidence) {
+        const decision = getFaceEvidenceDecision(evidence);
+        const matchedResult = decision.resultIndex >= 0 ? currentBatchResults[decision.resultIndex] : null;
+        return {
+            ...getFaceImageSource(evidence, matchedResult),
+            decision,
         };
     }
 
@@ -2024,6 +2059,12 @@ document.addEventListener('DOMContentLoaded', () => {
             </label>
             <button type="button" data-face-action="transfer-evidence" data-cluster-id="${escapeHtml(clusterId)}" data-evidence-index="${evidenceIndex}">移到此人物</button>
         </div>` : ''}`;
+    }
+
+    function faceImageAttrs(imageSource) {
+        return imageSource?.fallbackSrc
+            ? ` data-fallback-src="${escapeHtml(imageSource.fallbackSrc)}"`
+            : '';
     }
 
     function cropFaceEvidenceImages(container) {
@@ -2055,6 +2096,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 img.removeAttribute('data-face-bbox');
                 img.src = canvas.toDataURL('image/jpeg', 0.88);
             };
+            sourceImage.onerror = () => {
+                if (img.dataset.fallbackSrc && img.src !== img.dataset.fallbackSrc) {
+                    img.src = img.dataset.fallbackSrc;
+                    img.removeAttribute('data-face-bbox');
+                    return;
+                }
+                img.removeAttribute('data-face-bbox');
+            };
             sourceImage.src = source;
         });
     }
@@ -2064,16 +2113,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!leadEvidence) {
             return `<span class="face-cluster-avatar">${escapeHtml(String(cluster?.display_name || '人').trim().charAt(0) || '人')}</span>`;
         }
-        const decision = getFaceEvidenceDecision(leadEvidence);
-        const source = leadEvidence.image_b64
-            ? `data:image/jpeg;base64,${leadEvidence.image_b64}`
-            : (decision.resultIndex >= 0 ? getItemImgSrc(currentBatchResults[decision.resultIndex]) : '');
+        const imageSource = resolveFaceEvidenceImage(leadEvidence);
+        const source = imageSource.src || '';
         const bbox = Array.isArray(leadEvidence.bbox) ? leadEvidence.bbox.map(Number).join(',') : '';
         if (!source) {
             return `<span class="face-cluster-avatar">${escapeHtml(String(cluster?.display_name || '人').trim().charAt(0) || '人')}</span>`;
         }
         return `<span class="face-cluster-avatar face-cluster-avatar-photo">
-            <img src="${source}" data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(cluster.display_name || '人物')} 的代表截圖" loading="lazy">
+            <img src="${source}"${faceImageAttrs(imageSource)} data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(cluster.display_name || '人物')} 的代表截圖" loading="lazy">
         </span>`;
     }
 
@@ -2096,6 +2143,25 @@ document.addEventListener('DOMContentLoaded', () => {
             photoPeopleAssignments[fileName] = (photoPeopleAssignments[fileName] || [])
                 .filter(item => String(item) !== String(clusterId));
         });
+    }
+
+    function pruneEmptyFaceClusters() {
+        const removedClusterIds = currentFaceClusters
+            .filter(cluster => !Array.isArray(cluster.evidence_photos) || cluster.evidence_photos.length === 0)
+            .map(cluster => String(cluster.cluster_id));
+        if (!removedClusterIds.length) return 0;
+        const removedSet = new Set(removedClusterIds);
+        currentFaceClusters = currentFaceClusters.filter(cluster => !removedSet.has(String(cluster.cluster_id)));
+        removedClusterIds.forEach(clusterId => {
+            removeClusterFromPhotoAssignments(clusterId);
+            faceClusterUi.expanded.delete(clusterId);
+            faceClusterUi.selectedEvidenceIndexes.delete(clusterId);
+            faceClusterUi.selectedClusterIds.delete(clusterId);
+        });
+        if (removedSet.has(String(selectedFaceClusterId))) {
+            selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
+        }
+        return removedClusterIds.length;
     }
 
     function moveEvidenceToCluster(sourceClusterId, evidenceIndex, targetClusterId) {
@@ -2125,6 +2191,7 @@ document.addEventListener('DOMContentLoaded', () => {
         faceClusterUi.selectedEvidenceIndexes.delete(String(sourceClusterId));
         faceClusterUi.expanded.add(String(targetClusterId));
         selectedFaceClusterId = String(targetClusterId);
+        pruneEmptyFaceClusters();
         return true;
     }
 
@@ -2142,7 +2209,219 @@ document.addEventListener('DOMContentLoaded', () => {
         showToast(`已從本次結果移除「${cluster.display_name || cluster.cluster_id}」`);
     }
 
+    function clearFaceMultiSelection() {
+        faceClusterUi.selectedClusterIds.clear();
+        faceClusterUi.evidenceSelectionMode = false;
+        faceClusterUi.selectedEvidenceIndexes.clear();
+        faceClusterUi.clusterSelectionMode = false;
+    }
+
+    function openTextPromptModal({ title, hint = '', value = '', placeholder = '', submitLabel = '確定', maxLength = 100 }) {
+        const modal = document.getElementById('text-prompt-modal');
+        const titleEl = document.getElementById('text-prompt-title');
+        const hintEl = document.getElementById('text-prompt-hint');
+        const inputEl = document.getElementById('text-prompt-input');
+        const errorEl = document.getElementById('text-prompt-error');
+        const submitBtn = modal?.querySelector('[data-text-prompt-action="submit"]');
+        if (!modal || !titleEl || !hintEl || !inputEl || !errorEl || !submitBtn) {
+            return Promise.resolve(window.prompt(title, value) || null);
+        }
+
+        titleEl.textContent = title;
+        hintEl.textContent = hint;
+        inputEl.value = value;
+        inputEl.placeholder = placeholder;
+        inputEl.maxLength = maxLength;
+        errorEl.textContent = '';
+        errorEl.classList.add('hidden');
+        submitBtn.textContent = submitLabel;
+        modal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+
+        return new Promise(resolve => {
+            const cleanup = () => {
+                modal.classList.add('hidden');
+                document.body.style.overflow = '';
+                modal.removeEventListener('click', handleClick);
+                inputEl.removeEventListener('keydown', handleKeydown);
+            };
+            const cancel = () => {
+                cleanup();
+                resolve(null);
+            };
+            const submit = () => {
+                const nextValue = inputEl.value.trim();
+                if (!nextValue) {
+                    errorEl.textContent = '這裡不能留白。';
+                    errorEl.classList.remove('hidden');
+                    inputEl.focus();
+                    return;
+                }
+                cleanup();
+                resolve(nextValue);
+            };
+            const handleClick = event => {
+                const action = event.target.closest('[data-text-prompt-action]')?.dataset.textPromptAction;
+                if (action === 'cancel') cancel();
+                if (action === 'submit') submit();
+            };
+            const handleKeydown = event => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    cancel();
+                } else if (event.key === 'Enter') {
+                    event.preventDefault();
+                    submit();
+                }
+            };
+            modal.addEventListener('click', handleClick);
+            inputEl.addEventListener('keydown', handleKeydown);
+            inputEl.focus();
+            inputEl.select();
+        });
+    }
+
+    async function mergeSelectedFaceClusters() {
+        const selected = currentFaceClusters.filter(cluster => faceClusterUi.selectedClusterIds.has(String(cluster.cluster_id)));
+        if (selected.length < 2) return showToast('至少選擇兩個人物才能合併', 'error');
+        const displayName = await openTextPromptModal({
+            title: '合併後的人物名稱',
+            hint: `這次會把 ${selected.length} 位人物合成同一群。`,
+            value: selected[0].display_name || '人物',
+            placeholder: '例如：人物 001',
+            submitLabel: '合併並命名',
+        });
+        if (!displayName?.trim()) return;
+        const selectedIds = new Set(selected.map(cluster => String(cluster.cluster_id)));
+        const merged = {
+            ...selected[0],
+            cluster_id: `merged_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            display_name: displayName.trim(),
+            evidence_photos: selected.flatMap(cluster => cluster.evidence_photos || []),
+            status: 'pending',
+            notes: selected.map(cluster => cluster.notes).filter(Boolean).join('\n'),
+        };
+        recalculateFaceClusterCounts(merged);
+        currentFaceClusters = [merged, ...currentFaceClusters.filter(cluster => !selectedIds.has(String(cluster.cluster_id)))];
+        selectedFaceClusterId = merged.cluster_id;
+        clearFaceMultiSelection();
+        renderBatchOverview();
+        showToast(`已將 ${selected.length} 個人物合併為「${merged.display_name}」`);
+    }
+
+    function deleteSelectedFaceClusters() {
+        const selected = currentFaceClusters.filter(cluster => faceClusterUi.selectedClusterIds.has(String(cluster.cluster_id)));
+        if (!selected.length || !window.confirm(`確定要刪除選取的 ${selected.length} 個人物嗎？\n\n原始照片不會被刪除。`)) return;
+        const selectedIds = new Set(selected.map(cluster => String(cluster.cluster_id)));
+        currentFaceClusters = currentFaceClusters.filter(cluster => !selectedIds.has(String(cluster.cluster_id)));
+        selectedIds.forEach(removeClusterFromPhotoAssignments);
+        selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
+        clearFaceMultiSelection();
+        renderBatchOverview();
+        showToast(`已刪除 ${selected.length} 個人物`);
+    }
+
+    function getSelectedEvidenceEntries() {
+        const entries = [];
+        currentFaceClusters.forEach(cluster => {
+            const clusterId = String(cluster.cluster_id);
+            const storedIndexes = faceClusterUi.selectedEvidenceIndexes.get(clusterId);
+            const indexes = Array.from(storedIndexes instanceof Set ? storedIndexes : new Set())
+                .filter(index => Number.isInteger(index))
+                .sort((a, b) => b - a);
+            indexes.forEach(index => {
+                const evidence = cluster.evidence_photos?.[index];
+                if (evidence) entries.push({ cluster, clusterId, index, evidence });
+            });
+        });
+        return entries;
+    }
+
+    function getSelectedEvidenceCount() {
+        return getSelectedEvidenceEntries().length;
+    }
+
+    function deleteSelectedEvidence() {
+        const entries = getSelectedEvidenceEntries();
+        if (!entries.length || !window.confirm(`確定要刪除選取的 ${entries.length} 張人臉框嗎？`)) return;
+        const touched = new Set();
+        entries.forEach(({ cluster, clusterId, index }) => {
+            cluster.evidence_photos?.splice(index, 1);
+            touched.add(clusterId);
+        });
+        currentFaceClusters.forEach(cluster => {
+            if (touched.has(String(cluster.cluster_id))) recalculateFaceClusterCounts(cluster);
+        });
+        pruneEmptyFaceClusters();
+        initializePhotoPeopleAssignments();
+        faceClusterUi.selectedEvidenceIndexes.clear();
+        faceClusterUi.evidenceSelectionMode = false;
+        renderBatchOverview();
+        showToast(`已刪除 ${entries.length} 張人臉框`);
+    }
+
+    function moveSelectedEvidence(targetClusterId) {
+        const entries = getSelectedEvidenceEntries();
+        const target = currentFaceClusters.find(item => String(item.cluster_id) === String(targetClusterId));
+        const evidence = entries
+            .filter(entry => String(entry.clusterId) !== String(targetClusterId))
+            .map(entry => entry.evidence);
+        if (!target || !evidence.length) return;
+        const touched = new Set([String(targetClusterId)]);
+        entries.forEach(({ cluster, clusterId, index }) => {
+            if (String(clusterId) === String(targetClusterId)) return;
+            cluster.evidence_photos?.splice(index, 1);
+            touched.add(clusterId);
+        });
+        target.evidence_photos = [...(target.evidence_photos || []), ...evidence];
+        currentFaceClusters.forEach(cluster => {
+            if (touched.has(String(cluster.cluster_id))) recalculateFaceClusterCounts(cluster);
+        });
+        pruneEmptyFaceClusters();
+        initializePhotoPeopleAssignments();
+        faceClusterUi.selectedEvidenceIndexes.clear();
+        faceClusterUi.evidenceSelectionMode = false;
+        faceClusterUi.expanded.add(String(targetClusterId));
+        renderBatchOverview();
+        showToast(`已將 ${evidence.length} 張人臉框移到「${target.display_name || target.cluster_id}」`);
+    }
+
+    async function moveSelectedEvidenceToNewCluster() {
+        const entries = getSelectedEvidenceEntries();
+        const evidence = entries.map(entry => entry.evidence);
+        if (!evidence.length) return;
+        const displayName = await openTextPromptModal({
+            title: '新人物名稱',
+            hint: `這次會把 ${evidence.length} 張人臉框整理成一位新人物。`,
+            value: '新人物',
+            placeholder: '例如：人物 099',
+            submitLabel: '建立人物',
+        });
+        if (!displayName?.trim()) return;
+        const touched = new Set();
+        entries.forEach(({ cluster, clusterId, index }) => {
+            cluster.evidence_photos?.splice(index, 1);
+            touched.add(clusterId);
+        });
+        currentFaceClusters.forEach(cluster => {
+            if (touched.has(String(cluster.cluster_id))) recalculateFaceClusterCounts(cluster);
+        });
+        const seedCluster = entries[0].cluster;
+        const newCluster = { ...seedCluster, cluster_id: `manual_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, display_name: displayName.trim(), evidence_photos: evidence, status: 'pending' };
+        recalculateFaceClusterCounts(newCluster);
+        currentFaceClusters.push(newCluster);
+        pruneEmptyFaceClusters();
+        initializePhotoPeopleAssignments();
+        faceClusterUi.selectedEvidenceIndexes.clear();
+        faceClusterUi.evidenceSelectionMode = false;
+        faceClusterUi.expanded.add(String(newCluster.cluster_id));
+        renderBatchOverview();
+        showToast(`已建立人物「${newCluster.display_name}」`);
+    }
+
     function renderPeoplePerspective(container) {
+        const selectedClusterCount = faceClusterUi.selectedClusterIds.size;
+        const selectedEvidenceCount = getSelectedEvidenceCount();
         const clusterItems = currentFaceClusters.map(cluster => {
             const clusterId = String(cluster.cluster_id);
             const isExpanded = faceClusterUi.expanded.has(clusterId);
@@ -2150,23 +2429,28 @@ document.addEventListener('DOMContentLoaded', () => {
             const selectedEvidence = Number.isInteger(selectedEvidenceIndex)
                 ? (cluster.evidence_photos || [])[selectedEvidenceIndex]
                 : null;
+            const storedEvidenceIndexes = faceClusterUi.selectedEvidenceIndexes.get(clusterId);
+            const selectedEvidenceIndexes = storedEvidenceIndexes instanceof Set ? storedEvidenceIndexes : new Set();
             const evidence = (cluster.evidence_photos || []).map((item, evidenceIndex) => {
-                const decision = getFaceEvidenceDecision(item);
-                const source = item.image_b64
-                    ? `data:image/jpeg;base64,${item.image_b64}`
-                    : (decision.resultIndex >= 0 ? getItemImgSrc(currentBatchResults[decision.resultIndex]) : '');
+                const imageSource = resolveFaceEvidenceImage(item);
+                const source = imageSource.src || '';
                 const bbox = Array.isArray(item.bbox) ? item.bbox.map(Number).join(',') : '';
-                const selectedClass = evidenceIndex === selectedEvidenceIndex ? ' selected' : '';
+                const selectedClass = evidenceIndex === selectedEvidenceIndex || selectedEvidenceIndexes.has(evidenceIndex) ? ' selected' : '';
+                const fallbackHint = source && imageSource.kind !== 'full' && imageSource.kind !== 'result'
+                    ? `<small class="face-image-fallback-note">${escapeHtml(getFaceImageFallbackMessage(imageSource.kind))}</small>`
+                    : '';
                 return `<button class="face-evidence-card${selectedClass}" type="button"
                         data-face-action="select-evidence" data-cluster-id="${escapeHtml(clusterId)}"
                         data-evidence-index="${evidenceIndex}">
                     <span class="face-crop-frame">
-                        ${source ? `<img src="${source}" data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(item.file_name)} 的人臉" loading="lazy">` : '<span class="face-evidence-missing">無預覽</span>'}
+                        ${source ? `<img src="${source}"${faceImageAttrs(imageSource)} data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(item.file_name)} 的人臉" loading="lazy">` : '<span class="face-evidence-missing">無預覽</span>'}
                     </span>
                     <span>${escapeHtml(item.file_name)}</span>
+                    ${fallbackHint}
                 </button>`;
             }).join('');
-            return `<article class="face-person-card${isExpanded ? ' expanded' : ''}">
+            const selectedPersonClass = faceClusterUi.selectedClusterIds.has(clusterId) ? ' selected-for-batch' : '';
+            return `<article class="face-person-card${isExpanded ? ' expanded' : ''}${selectedPersonClass}">
                 <div class="face-person-row">
                     <button class="face-person-toggle" type="button" data-face-action="toggle-cluster"
                             data-cluster-id="${escapeHtml(clusterId)}" aria-expanded="${isExpanded}" aria-label="${isExpanded ? '收合' : '展開'} ${escapeHtml(cluster.display_name)}">
@@ -2186,6 +2470,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ${isExpanded ? `<div class="face-person-body">
                     <section class="face-evidence-panel">
                         <div class="face-panel-heading"><span>辨識為這個人的人臉框</span><small>依最長邊等比例適配</small></div>
+                        ${faceClusterUi.evidenceSelectionMode ? `<small class="face-long-press-hint">點選不同人物底下的人臉框可加入同一批</small>` : `<small class="face-long-press-hint">長按人臉框可多選</small>`}
                         <div class="face-evidence-grid">${evidence || '<p class="face-empty-copy">沒有可顯示的人臉框</p>'}</div>
                         <div class="face-photo-decision-slot">${renderFacePhotoDecision(selectedEvidence, clusterId, selectedEvidenceIndex)}</div>
                     </section>
@@ -2204,7 +2489,9 @@ document.addEventListener('DOMContentLoaded', () => {
             </article>`;
         }).join('');
 
-        container.innerHTML = `<div class="face-cluster-list">${clusterItems}</div>`;
+        const clusterToolbar = faceClusterUi.clusterSelectionMode ? `<div class="face-multi-toolbar face-cluster-toolbar" role="toolbar" aria-label="人物批次操作"><strong>已選 ${selectedClusterCount} 位人物</strong><button type="button" data-face-action="merge-selected-clusters">合併並命名</button><button type="button" data-face-action="delete-selected-clusters">一起刪除</button><button type="button" data-face-action="clear-cluster-selection">取消</button></div>` : `<p class="face-long-press-hint">長按人物列可多選</p>`;
+        const evidenceToolbar = faceClusterUi.evidenceSelectionMode ? `<div class="face-multi-toolbar face-evidence-global-toolbar" role="toolbar" aria-label="跨人物人臉框批次操作"><strong>已選 ${selectedEvidenceCount} 張人臉框</strong><button type="button" data-face-action="delete-selected-evidence">刪除</button><button type="button" data-face-action="move-selected-evidence">移到現存人物</button><button type="button" data-face-action="new-cluster-from-evidence">新增人物</button><button type="button" data-face-action="clear-evidence-selection">取消</button></div>` : '';
+        container.innerHTML = `<div class="face-cluster-list">${clusterToolbar}${evidenceToolbar}${clusterItems}</div>`;
 
         cropFaceEvidenceImages(container);
     }
@@ -2243,7 +2530,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <small>${assignedPeople.length} 位人物</small>
                 </button>
                 ${isExpanded ? `<div class="photo-relation-body">
-                    <img src="${getItemImgSrc(item)}" alt="${escapeHtml(fileName)}" loading="lazy">
+                    <img src="${getItemImgSrc(item) || DEFAULT_ORIGINAL_PLACEHOLDER}" alt="${escapeHtml(fileName)}" loading="lazy">
                     <div class="photo-relation-details">
                         <div class="face-panel-heading"><span>照片判定</span><strong class="status-${escapeHtml(decision.value)}">${decision.label}</strong></div>
                         <div class="photo-people-summary">${peopleChips || '<span class="photo-people-empty">尚未登記人物</span>'}</div>
@@ -2260,9 +2547,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderFaceWorkspace(container) {
+        const fallbackMessage = batchMode === 'drive'
+            ? getFaceImageFallbackMessage('drive')
+            : getFaceImageFallbackMessage('local');
         container.innerHTML = `<section class="face-workspace" aria-label="人物與照片關聯結果">
             <div class="face-workspace-toolbar">
-                <div class="face-workspace-toolbar-copy"><strong>${relationshipViewMode === 'people' ? '偵測到的人物' : '辨識過的照片'}</strong><span>列表預設收合</span></div>
+                <div class="face-workspace-toolbar-copy"><strong>${relationshipViewMode === 'people' ? '偵測到的人物' : '辨識過的照片'}</strong><span>${escapeHtml(fallbackMessage)}</span></div>
                 <div class="relationship-view-switch" role="group" aria-label="結果檢視角度">
                     <button type="button" data-relationship-view="people" class="${relationshipViewMode === 'people' ? 'active' : ''}">人物角度</button>
                     <button type="button" data-relationship-view="photos" class="${relationshipViewMode === 'photos' ? 'active' : ''}">照片角度</button>
@@ -2274,7 +2564,42 @@ document.addEventListener('DOMContentLoaded', () => {
         if (relationshipViewMode === 'people') renderPeoplePerspective(content);
         else renderPhotoPerspective(content);
 
-        container.onclick = event => {
+        if (!container.dataset.faceLongPressBound) {
+            let longPressTimer = null;
+            let longPressTarget = null;
+            container.addEventListener('pointerdown', event => {
+                const target = event.target.closest('[data-face-action="toggle-cluster"], [data-face-action="select-evidence"]');
+                if (!target) return;
+                longPressTarget = target;
+                longPressTimer = window.setTimeout(() => {
+                    const clusterId = target.dataset.clusterId;
+                    if (target.dataset.faceAction === 'toggle-cluster') {
+                        faceClusterUi.clusterSelectionMode = true;
+                        faceClusterUi.selectedClusterIds.add(String(clusterId));
+                        renderFaceWorkspace(container);
+                    } else {
+                        faceClusterUi.evidenceSelectionMode = true;
+                        const storedIndexes = faceClusterUi.selectedEvidenceIndexes.get(String(clusterId));
+                        const indexes = storedIndexes instanceof Set ? storedIndexes : new Set();
+                        indexes.add(Number(target.dataset.evidenceIndex));
+                        faceClusterUi.selectedEvidenceIndexes.set(String(clusterId), indexes);
+                        renderFaceWorkspace(container);
+                    }
+                    longPressTarget = null;
+                }, 550);
+            });
+            const cancelLongPress = () => {
+                if (longPressTimer) window.clearTimeout(longPressTimer);
+                longPressTimer = null;
+                longPressTarget = null;
+            };
+            container.addEventListener('pointerup', cancelLongPress);
+            container.addEventListener('pointercancel', cancelLongPress);
+            container.addEventListener('pointerleave', cancelLongPress);
+            container.dataset.faceLongPressBound = 'true';
+        }
+
+        container.onclick = async event => {
             const viewTarget = event.target.closest('[data-relationship-view]');
             if (viewTarget) {
                 relationshipViewMode = viewTarget.dataset.relationshipView;
@@ -2285,11 +2610,26 @@ document.addEventListener('DOMContentLoaded', () => {
             if (actionTarget && container.contains(actionTarget)) {
                 const clusterId = actionTarget.dataset.clusterId;
                 if (actionTarget.dataset.faceAction === 'toggle-cluster') {
+                    if (faceClusterUi.clusterSelectionMode) {
+                        faceClusterUi.selectedClusterIds.has(String(clusterId))
+                            ? faceClusterUi.selectedClusterIds.delete(String(clusterId))
+                            : faceClusterUi.selectedClusterIds.add(String(clusterId));
+                        renderFaceWorkspace(container);
+                        return;
+                    }
                     if (faceClusterUi.expanded.has(clusterId)) faceClusterUi.expanded.delete(clusterId);
                     else faceClusterUi.expanded.add(clusterId);
                     renderFaceWorkspace(container);
                 } else if (actionTarget.dataset.faceAction === 'select-evidence') {
                     const evidenceIndex = Number(actionTarget.dataset.evidenceIndex);
+                    if (faceClusterUi.evidenceSelectionMode) {
+                        const storedIndexes = faceClusterUi.selectedEvidenceIndexes.get(String(clusterId));
+                        const indexes = storedIndexes instanceof Set ? storedIndexes : new Set();
+                        indexes.has(evidenceIndex) ? indexes.delete(evidenceIndex) : indexes.add(evidenceIndex);
+                        faceClusterUi.selectedEvidenceIndexes.set(String(clusterId), indexes);
+                        renderFaceWorkspace(container);
+                        return;
+                    }
                     faceClusterUi.selectedEvidenceIndexes.set(clusterId, evidenceIndex);
                     const personCard = actionTarget.closest('.face-person-card');
                     personCard.querySelectorAll('.face-evidence-card.selected').forEach(card => card.classList.remove('selected'));
@@ -2310,6 +2650,33 @@ document.addEventListener('DOMContentLoaded', () => {
                     saveSelectedFaceCluster(clusterId, actionTarget.closest('[data-cluster-editor]'));
                 } else if (actionTarget.dataset.faceAction === 'delete-cluster') {
                     deleteFaceCluster(clusterId);
+                } else if (actionTarget.dataset.faceAction === 'merge-selected-clusters') {
+                    await mergeSelectedFaceClusters();
+                } else if (actionTarget.dataset.faceAction === 'delete-selected-clusters') {
+                    deleteSelectedFaceClusters();
+                } else if (actionTarget.dataset.faceAction === 'clear-cluster-selection') {
+                    clearFaceMultiSelection();
+                    renderFaceWorkspace(container);
+                } else if (actionTarget.dataset.faceAction === 'delete-selected-evidence') {
+                    deleteSelectedEvidence();
+                } else if (actionTarget.dataset.faceAction === 'clear-evidence-selection') {
+                    faceClusterUi.selectedEvidenceIndexes.clear();
+                    faceClusterUi.evidenceSelectionMode = false;
+                    renderFaceWorkspace(container);
+                } else if (actionTarget.dataset.faceAction === 'move-selected-evidence') {
+                    const targets = currentFaceClusters;
+                    const targetName = await openTextPromptModal({
+                        title: '移到哪一位人物',
+                        hint: `可輸入：${targets.map(item => item.display_name || item.cluster_id).join('、')}`,
+                        value: '',
+                        placeholder: '請輸入完整人物名稱',
+                        submitLabel: '移動',
+                    });
+                    const target = targets.find(item => (item.display_name || item.cluster_id) === targetName?.trim());
+                    if (target) moveSelectedEvidence(target.cluster_id);
+                    else if (targetName?.trim()) showToast('找不到這位現存人物，請輸入完整名稱', 'error');
+                } else if (actionTarget.dataset.faceAction === 'new-cluster-from-evidence') {
+                    await moveSelectedEvidenceToNewCluster();
                 } else if (actionTarget.dataset.faceAction === 'transfer-evidence') {
                     const transferPanel = actionTarget.closest('.face-evidence-transfer');
                     const targetClusterId = transferPanel?.querySelector('.face-transfer-target')?.value;
@@ -2459,10 +2826,54 @@ document.addEventListener('DOMContentLoaded', () => {
         return name.replace(/[\\/:*?"<>|]/g, '_') || fallback;
     }
 
+    function setActionButtonBusy(button, isBusy, busyLabel, idleLabel) {
+        if (!button) return;
+        button.classList.toggle('is-busy', Boolean(isBusy));
+        button.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+        const label = button.querySelector('.result-export-btn-label');
+        if (label) label.textContent = isBusy ? busyLabel : idleLabel;
+    }
+
+    function formatBytesToMb(bytes) {
+        return `${(Math.max(0, Number(bytes) || 0) / 1024 / 1024).toFixed(2)}MB`;
+    }
+
+    function getExportFolderPathSegments(folder, fallback) {
+        const segments = Array.isArray(folder?.path_segments)
+            ? folder.path_segments
+            : [folder?.name || fallback];
+        return segments
+            .map((segment, index) => safeZipPathSegment(segment, index === 0 ? fallback : `group_${index}`))
+            .filter(Boolean);
+    }
+
     function findSelectedBatchFile(fileName) {
         const targetName = String(fileName || '');
         return batchSelectedFiles.find(file => file.name === targetName)
             || batchSelectedFiles.find(file => safeDownloadName(file.name, file.name) === safeDownloadName(targetName, targetName));
+    }
+
+    async function resolveExportPhotoSource(photo) {
+        if (batchMode === 'upload') {
+            const sourceFile = findSelectedBatchFile(photo.file_name);
+            if (!sourceFile) return null;
+            return {
+                blob: sourceFile,
+                size: sourceFile.size,
+                defaultName: sourceFile.name,
+            };
+        }
+        if (batchMode === 'drive' && photo.drive_id) {
+            const response = await fetch(`/drive_file/${encodeURIComponent(photo.drive_id)}`);
+            if (!response.ok) throw new Error(`${photo.file_name || photo.drive_id}: Google 雲端原圖下載失敗`);
+            const blob = await response.blob();
+            return {
+                blob,
+                size: blob.size,
+                defaultName: photo.file_name || `${photo.drive_id}.jpg`,
+            };
+        }
+        return null;
     }
 
     function buildBatchResultExport() {
@@ -2540,6 +2951,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         saveDriveResultsBtn.disabled = true;
+        setActionButtonBusy(saveDriveResultsBtn, true, '正在儲存…', '儲存辨識結果');
         showLoading(true);
         document.getElementById('loading-text').textContent = '正在儲存辨識結果…';
         try {
@@ -2554,6 +2966,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showLoading(false);
             document.getElementById('loading-text').textContent = '正在一張一張看過去…';
             saveDriveResultsBtn.disabled = false;
+            setActionButtonBusy(saveDriveResultsBtn, false, '正在儲存…', '儲存辨識結果');
         }
     }
 
@@ -2566,35 +2979,50 @@ document.addEventListener('DOMContentLoaded', () => {
         const exportData = buildBatchResultExport();
         const wantsPhotoFolders = Boolean(includeAnnotatedDownload?.checked);
         const folderPhotoEntries = [];
-        (exportData.photo_angle_folders || []).forEach(folder => {
-            (folder.photos || []).forEach(photo => {
-                const sourceFile = findSelectedBatchFile(photo.file_name);
-                if (!sourceFile) return;
-                const folderName = safeZipPathSegment(folder.name, `group_${folderPhotoEntries.length + 1}`);
-                const photoName = safeZipPathSegment(photo.file_name, sourceFile.name || `image_${folderPhotoEntries.length + 1}.jpg`);
-                folderPhotoEntries.push({
-                    folderName,
-                    photoName,
-                    archiveRelativePath: `${folderName}/${photoName}`,
-                    photo,
-                    sourceFile,
-                });
-            });
-        });
+        downloadBatchResultsBtn.disabled = true;
+        setActionButtonBusy(downloadBatchResultsBtn, true, '正在下載…', '下載辨識結果');
+        showLoading(true);
+        document.getElementById('loading-text').textContent = '正在整理下載內容…';
+        try {
+            if (wantsPhotoFolders && typeof JSZip !== 'undefined') {
+                for (const folder of exportData.photo_angle_folders || []) {
+                    for (const photo of folder.photos || []) {
+                        const source = await resolveExportPhotoSource(photo);
+                        if (!source) continue;
+                        const nextIndex = folderPhotoEntries.length + 1;
+                        const folderPathSegments = getExportFolderPathSegments(folder, `group_${nextIndex}`);
+                        const photoName = safeZipPathSegment(photo.file_name, source.defaultName || `image_${nextIndex}.jpg`);
+                        folderPhotoEntries.push({
+                            folderPathSegments,
+                            photoName,
+                            archiveRelativePath: `${folderPathSegments.join('/')}/${photoName}`,
+                            photo,
+                            source,
+                        });
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Batch result photo source failed:', error);
+            downloadBatchResultsBtn.disabled = false;
+            setActionButtonBusy(downloadBatchResultsBtn, false, '正在下載…', '下載辨識結果');
+            showLoading(false);
+            document.getElementById('loading-text').textContent = '正在一張一張看過去…';
+            showToast(`照片來源下載失敗：${error.message}`, 'error');
+            return;
+        }
         const exportDocument = wantsPhotoFolders && folderPhotoEntries.length > 0
             ? addArchiveRelativePaths(exportData, folderPhotoEntries)
             : exportData;
         const json = JSON.stringify(exportDocument, null, 2);
         const jsonBlob = new Blob([json], { type: 'application/json;charset=utf-8' });
-        const imageBytes = folderPhotoEntries.reduce((total, item) => total + item.sourceFile.size, 0);
+        const imageBytes = folderPhotoEntries.reduce((total, item) => total + item.source.size, 0);
         // 本機原圖已由瀏覽器持有，沿用上傳總量限制即可；雲端模式仍保留
         // 下載大小保護，避免一次把大量 Drive 檔案組成瀏覽器 ZIP。
         const maxBytes = batchMode === 'upload'
             ? Infinity
             : (config?.batch_download_max_mb || 8) * 1024 * 1024;
-        downloadBatchResultsBtn.disabled = true;
-        showLoading(true);
-        document.getElementById('loading-text').textContent = '正在整理下載內容…';
+        const sizeLimitLabel = `${config?.batch_download_max_mb || 8}MB`;
         let localMessage = '已下載 JSON 辨識結果';
         let localMessageType = 'success';
         try {
@@ -2608,8 +3036,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     const reason = typeof JSZip === 'undefined'
                         ? '壓縮元件未載入'
                         : folderPhotoEntries.length === 0
-                            ? '找不到可放入照片分類資料夾的本機原圖'
-                            : `照片資料夾超過 ${config?.batch_download_max_mb || 8}MB 上限`;
+                            ? (batchMode === 'drive' ? '找不到可放入照片分類資料夾的 Google 雲端原圖' : '找不到可放入照片分類資料夾的本機原圖')
+                            : `照片分類 ZIP 預估會超過下載上限（照片 ${formatBytesToMb(imageBytes)} + JSON ${formatBytesToMb(jsonBlob.size)} > ${sizeLimitLabel}）`;
                     localMessage = `${reason}，已自動改下載 JSON`;
                     localMessageType = 'error';
                 }
@@ -2617,13 +3045,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 const zip = new JSZip();
                 zip.file('result.json', json);
                 folderPhotoEntries.forEach(entry => {
-                    const folder = zip.folder(entry.folderName);
-                    folder.file(entry.photoName, entry.sourceFile);
+                    const folder = zip.folder(entry.folderPathSegments.join('/'));
+                    folder.file(entry.photoName, entry.source.blob);
                 });
                 const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 4 } });
                 if (Number.isFinite(maxBytes) && zipBlob.size > maxBytes) {
                     downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
-                    localMessage = `照片資料夾超過 ${config?.batch_download_max_mb || 8}MB 上限，已自動改下載 JSON`;
+                    localMessage = `照片分類 ZIP 壓縮後仍超過下載上限（ZIP ${formatBytesToMb(zipBlob.size)} > ${sizeLimitLabel}），已自動改下載 JSON`;
                     localMessageType = 'error';
                 } else {
                     downloadBlob(zipBlob, `photo_people_${Date.now()}.zip`);
@@ -2640,6 +3068,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showLoading(false);
             document.getElementById('loading-text').textContent = '正在一張一張看過去…';
             downloadBatchResultsBtn.disabled = false;
+            setActionButtonBusy(downloadBatchResultsBtn, false, '正在下載…', '下載辨識結果');
         }
     }
 
