@@ -500,6 +500,14 @@ async def _classify_session_faces(
         processing_info = session.get("processing_info", {})
         eps = float(processing_info.get("face_cluster_eps", DEFAULT_CLUSTER_EPS))
         min_samples = int(processing_info.get("face_cluster_min_samples", DEFAULT_CLUSTER_MIN_SAMPLES))
+        logger.info(
+            "face.cluster.submit session=%s result_count=%s batch_size=%s eps=%s min_samples=%s",
+            session_id,
+            len(session.get("results") or []),
+            processing_info.get("face_cluster_batch_size") or BATCH_UPLOAD_BATCH_SIZE,
+            eps,
+            min_samples,
+        )
         clusters = await cluster_batch_results(
             session.get("results", []),
             eps=eps,

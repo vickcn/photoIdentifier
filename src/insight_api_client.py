@@ -16,6 +16,7 @@ from PIL import Image
 DEFAULT_CLUSTER_EPS = 0.9
 DEFAULT_CLUSTER_MIN_SAMPLES = 2
 DEFAULT_CLUSTER_BATCH_SIZE = 20
+DEFAULT_CLUSTER_TRANSFER_MAX_MB = 4.0
 DEFAULT_CLUSTER_JOB_POLL_INTERVAL_SEC = 1.0
 DEFAULT_CLUSTER_JOB_TIMEOUT_SEC = 900.0
 DEFAULT_INSIGHT_API_CONNECT_TIMEOUT_SEC = 20.0
@@ -57,10 +58,85 @@ class InsightApiClient:
         *,
         eps: float = DEFAULT_CLUSTER_EPS,
         min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
+        transfer_batch_size: int = DEFAULT_CLUSTER_BATCH_SIZE,
         progress_callback: ProgressCallback | None = None,
     ) -> dict:
         submit_started_at = time.perf_counter()
-        logger.info("insight.cluster.submit image_count=%s eps=%s min_samples=%s", len(images), eps, min_samples)
+        total_bytes = sum(len(data) for _, data, _ in images)
+        max_image_bytes = max((len(data) for _, data, _ in images), default=0)
+        logger.info(
+            "insight.cluster.submit image_count=%s total_bytes=%s max_image_bytes=%s eps=%s min_samples=%s",
+            len(images),
+            total_bytes,
+            max_image_bytes,
+            eps,
+            min_samples,
+        )
+        transfer_max_bytes = int(
+            _read_float_env(
+                "INSIGHT_CLUSTER_TRANSFER_MAX_MB",
+                DEFAULT_CLUSTER_TRANSFER_MAX_MB,
+                minimum=0.1,
+            )
+            * 1024
+            * 1024
+        )
+        chunks = chunk_cluster_images(images, max_files=transfer_batch_size, max_bytes=transfer_max_bytes)
+        if len(chunks) > 1:
+            job = await self.create_staged_cluster_job(
+                expected_total=len(images),
+                chunk_total=len(chunks),
+                eps=eps,
+                min_samples=min_samples,
+            )
+            job_id = job.get("job_id")
+            if not job_id:
+                raise RuntimeError("Insight API 未回傳 job_id")
+            logger.info(
+                "insight.cluster.staged_created job_id=%s image_count=%s chunk_total=%s transfer_batch_size=%s transfer_max_bytes=%s",
+                job_id,
+                len(images),
+                len(chunks),
+                transfer_batch_size,
+                transfer_max_bytes,
+            )
+            await self._emit_progress(progress_callback, job)
+            for chunk_index, chunk in enumerate(chunks):
+                logger.info(
+                    "insight.cluster.chunk_upload job_id=%s chunk_index=%s/%s file_count=%s chunk_bytes=%s",
+                    job_id,
+                    chunk_index + 1,
+                    len(chunks),
+                    len(chunk),
+                    sum(len(data) for _, data, _ in chunk),
+                )
+                await self.upload_cluster_job_chunk(
+                    str(job_id),
+                    chunk_index=chunk_index,
+                    chunk_total=len(chunks),
+                    images=chunk,
+                )
+                await self._emit_progress(
+                    progress_callback,
+                    {
+                        "job_id": job_id,
+                        "status": "staging",
+                        "stage": "uploading",
+                        "progress": {
+                            "completed": min(sum(len(item) for item in chunks[: chunk_index + 1]), len(images)),
+                            "total": len(images),
+                            "percent": round(min(sum(len(item) for item in chunks[: chunk_index + 1]), len(images)) / len(images) * 100, 1),
+                        },
+                    },
+                )
+            job = await self.finalize_cluster_job(str(job_id))
+            submit_elapsed = time.perf_counter() - submit_started_at
+            logger.info("insight.cluster.job_created job_id=%s status=%s submit_elapsed_sec=%.3f", job_id, job.get("status"), submit_elapsed)
+            await self._emit_progress(progress_callback, job)
+            result = await self._wait_for_cluster_job(str(job_id), progress_callback=progress_callback)
+            logger.info("insight.cluster.done job_id=%s total_elapsed_sec=%.3f", job_id, time.perf_counter() - submit_started_at)
+            return result
+
         files = [("files", (name, data, content_type)) for name, data, content_type in images]
         job = await self._post(
             "/v1/faces/cluster/jobs",
@@ -78,13 +154,95 @@ class InsightApiClient:
         logger.info("insight.cluster.done job_id=%s total_elapsed_sec=%.3f", job_id, time.perf_counter() - submit_started_at)
         return result
 
+    async def create_staged_cluster_job(
+        self,
+        *,
+        expected_total: int,
+        chunk_total: int,
+        eps: float = DEFAULT_CLUSTER_EPS,
+        min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
+    ) -> dict:
+        return await self._post(
+            "/v1/faces/cluster/jobs",
+            params={
+                "eps": eps,
+                "min_samples": min_samples,
+                "expected_total": expected_total,
+                "chunk_total": chunk_total,
+            },
+        )
+
+    async def upload_cluster_job_chunk(
+        self,
+        job_id: str,
+        *,
+        chunk_index: int,
+        chunk_total: int,
+        images: Sequence[tuple[str, bytes, str]],
+    ) -> dict:
+        files = [("files", (name, data, content_type)) for name, data, content_type in images]
+        return await self._post(
+            f"/v1/faces/cluster/jobs/{job_id}/chunks",
+            files=files,
+            params={"chunk_index": chunk_index, "chunk_total": chunk_total},
+        )
+
+    async def finalize_cluster_job(self, job_id: str) -> dict:
+        return await self._post(f"/v1/faces/cluster/jobs/{job_id}/finalize")
+
     async def create_cluster_job(
         self,
         images: Sequence[tuple[str, bytes, str]],
         *,
         eps: float = DEFAULT_CLUSTER_EPS,
         min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
+        transfer_batch_size: int = DEFAULT_CLUSTER_BATCH_SIZE,
     ) -> dict:
+        transfer_max_bytes = int(
+            _read_float_env(
+                "INSIGHT_CLUSTER_TRANSFER_MAX_MB",
+                DEFAULT_CLUSTER_TRANSFER_MAX_MB,
+                minimum=0.1,
+            )
+            * 1024
+            * 1024
+        )
+        chunks = chunk_cluster_images(images, max_files=transfer_batch_size, max_bytes=transfer_max_bytes)
+        if len(chunks) > 1:
+            job = await self.create_staged_cluster_job(
+                expected_total=len(images),
+                chunk_total=len(chunks),
+                eps=eps,
+                min_samples=min_samples,
+            )
+            job_id = job.get("job_id")
+            if not job_id:
+                raise RuntimeError("Insight API 未回傳 job_id")
+            logger.info(
+                "insight.cluster.staged_created job_id=%s image_count=%s chunk_total=%s transfer_batch_size=%s transfer_max_bytes=%s",
+                job_id,
+                len(images),
+                len(chunks),
+                transfer_batch_size,
+                transfer_max_bytes,
+            )
+            for chunk_index, chunk in enumerate(chunks):
+                logger.info(
+                    "insight.cluster.chunk_upload job_id=%s chunk_index=%s/%s file_count=%s chunk_bytes=%s",
+                    job_id,
+                    chunk_index + 1,
+                    len(chunks),
+                    len(chunk),
+                    sum(len(data) for _, data, _ in chunk),
+                )
+                await self.upload_cluster_job_chunk(
+                    str(job_id),
+                    chunk_index=chunk_index,
+                    chunk_total=len(chunks),
+                    images=chunk,
+                )
+            return await self.finalize_cluster_job(str(job_id))
+
         files = [("files", (name, data, content_type)) for name, data, content_type in images]
         return await self._post(
             "/v1/faces/cluster/jobs",
@@ -223,10 +381,12 @@ class InsightApiClient:
             except httpx.HTTPStatusError as exc:
                 body = response.text[:500]
                 logger.warning(
-                    "Insight API failed method=%s path=%s status=%s body=%s",
+                    "Insight API failed method=%s path=%s status=%s request_size=%s response_size=%s body=%s",
                     method,
                     path,
                     response.status_code,
+                    response.request.headers.get("content-length") or response.request.headers.get("Content-Length") or "unknown",
+                    response.headers.get("content-length") or response.headers.get("Content-Length") or "unknown",
                     body,
                 )
                 raise RuntimeError(f"Insight API HTTP {response.status_code}: {body}") from exc
@@ -264,7 +424,14 @@ async def cluster_batch_results(
     if not images:
         return []
     started_at = time.perf_counter()
-    logger.info("insight.cluster_batch_results.start image_count=%s eps=%s min_samples=%s", len(images), eps, min_samples)
+    total_bytes = sum(len(data) for _, data, _ in images)
+    logger.info(
+        "insight.cluster_batch_results.start image_count=%s total_bytes=%s eps=%s min_samples=%s",
+        len(images),
+        total_bytes,
+        eps,
+        min_samples,
+    )
     async def on_global_progress(snapshot: dict[str, Any]) -> None:
         progress = snapshot.get("progress") if isinstance(snapshot.get("progress"), dict) else {}
         completed = min(int(progress.get("completed") or snapshot.get("completed") or 0), len(images))
@@ -287,6 +454,7 @@ async def cluster_batch_results(
         images,
         eps=eps,
         min_samples=min_samples,
+        transfer_batch_size=batch_size,
         progress_callback=on_global_progress,
     )
     logger.info(
@@ -297,6 +465,32 @@ async def cluster_batch_results(
         time.perf_counter() - started_at,
     )
     return build_clusters_from_response(response, source_by_name)
+
+
+def chunk_cluster_images(
+    images: Sequence[tuple[str, bytes, str]],
+    *,
+    max_files: int,
+    max_bytes: int,
+) -> list[list[tuple[str, bytes, str]]]:
+    chunks: list[list[tuple[str, bytes, str]]] = []
+    current: list[tuple[str, bytes, str]] = []
+    current_bytes = 0
+    max_files = max(1, int(max_files or 1))
+    max_bytes = max(1, int(max_bytes or 1))
+    for image in images:
+        image_bytes = len(image[1])
+        would_exceed_files = len(current) >= max_files
+        would_exceed_bytes = bool(current) and current_bytes + image_bytes > max_bytes
+        if would_exceed_files or would_exceed_bytes:
+            chunks.append(current)
+            current = []
+            current_bytes = 0
+        current.append(image)
+        current_bytes += image_bytes
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def prepare_cluster_images(results: list[dict]) -> tuple[list[tuple[str, bytes, str]], dict[str, dict]]:
@@ -375,7 +569,12 @@ async def create_cluster_job_from_results(
         return {"job_id": None, "status": "success", "result": {"images": []}}
     # One classifier job owns the complete dataset. The classifier itself
     # detects images in bounded internal batches, then fits globally.
-    job = await InsightApiClient().create_cluster_job(images, eps=eps, min_samples=min_samples)
+    job = await InsightApiClient().create_cluster_job(
+        images,
+        eps=eps,
+        min_samples=min_samples,
+        transfer_batch_size=batch_size,
+    )
     return {**job, "batch_start_index": 0, "batch_size": len(images), "total": len(images)}
 
 

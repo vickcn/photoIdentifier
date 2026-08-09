@@ -1583,6 +1583,81 @@ body.app-busy {
     accent-color: var(--accent-color);
 }
 
+.blocked-upload-panel {
+    border: 1px solid rgba(210, 122, 74, 0.28);
+    border-radius: 0.75rem;
+    background: rgba(255, 247, 240, 0.86);
+    padding: 0.9rem;
+    margin-top: 1rem;
+}
+
+.blocked-upload-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+    color: var(--text-primary);
+}
+
+.blocked-upload-header span {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.blocked-upload-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 0.65rem;
+}
+
+.blocked-upload-item {
+    min-width: 0;
+    overflow: hidden;
+    border-radius: 0.55rem;
+    border: 1px solid rgba(120, 84, 54, 0.14);
+    background: rgba(255, 255, 255, 0.82);
+}
+
+.blocked-upload-item img,
+.blocked-upload-placeholder {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    display: block;
+    object-fit: cover;
+    background: rgba(120, 84, 54, 0.08);
+}
+
+.blocked-upload-placeholder {
+    display: grid;
+    place-items: center;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+}
+
+.blocked-upload-meta {
+    display: grid;
+    gap: 0.2rem;
+    padding: 0.55rem;
+}
+
+.blocked-upload-meta strong,
+.blocked-upload-meta span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.blocked-upload-meta strong {
+    color: var(--text-primary);
+    font-size: 0.82rem;
+}
+
+.blocked-upload-meta span {
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+}
+
 .result-export-actions {
     display: flex;
     flex-direction: row;

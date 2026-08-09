@@ -1,4 +1,12 @@
 document.addEventListener('DOMContentLoaded', () => {
+    const previewImageSources = window.BatchImageSources || {};
+    const getOriginalPreviewSrc = previewImageSources.originalImageSrc
+        || (item => item?.original_image_b64 ? `data:image/jpeg;base64,${item.original_image_b64}` : null);
+    const getAnnotatedPreviewSrc = previewImageSources.annotatedImageSrc
+        || (item => item?.drawn_image_b64 ? `data:image/jpeg;base64,${item.drawn_image_b64}` : null);
+    const DEFAULT_ORIGINAL_PLACEHOLDER = 'https://placehold.co/600x400?text=Processing+Drive+File';
+    const DEFAULT_ANNOTATED_PLACEHOLDER = 'https://placehold.co/600x400?text=Preview+Unavailable';
+
     // === DOM Elements ===
     const tabBtns = document.querySelectorAll('.tab-btn');
     const modeContents = document.querySelectorAll('.mode-content');
@@ -268,6 +276,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const photoClusterUi = { expanded: new Set() };
 
     let batchSelectedFiles = [];
+    let batchBlockedUploadFiles = [];
     let batchFailureDetails = [];
 
     const downloadBatchResultsBtn = document.getElementById('download-batch-results-btn');
@@ -468,18 +477,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             return `這次先幫我挑 1 到 ${limits.totalMaxFiles} 張照片就好，我會分批慢慢整理。`;
         }
-        const oversized = files.find(file => file.size > limits.maxFileBytes);
-        if (oversized) {
-            logBatchValidationFailure({
-                scope: source === 'drive' ? 'cloud_batch' : 'local_batch',
-                field: 'file_size_bytes',
-                input: oversized.size,
-                maximum: limits.maxFileBytes,
-                reason: 'file_too_large',
-                fileName: oversized.name,
-            });
-            return `${oversized.name} 有點太大了，先幫我換成 ${Math.round(limits.maxFileBytes / 1024 / 1024)}MB 以內的版本。`;
-        }
         const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
         if (totalBytes > limits.maxTotalBytes) {
             logBatchValidationFailure({
@@ -492,6 +489,25 @@ document.addEventListener('DOMContentLoaded', () => {
             return '這批照片有點太大了，先少放一點，整理起來會比較順。';
         }
         return null;
+    }
+
+    function formatFileSize(bytes) {
+        return `${(Number(bytes || 0) / 1024 / 1024).toFixed(2)} MB`;
+    }
+
+    function resetBatchBlockedUploadFiles() {
+        batchBlockedUploadFiles.forEach(item => {
+            if (item.preview_url) URL.revokeObjectURL(item.preview_url);
+        });
+        batchBlockedUploadFiles = [];
+    }
+
+    function createBlockedUploadPreview(item) {
+        const file = item.file;
+        return {
+            ...item,
+            preview_url: file ? URL.createObjectURL(file) : '',
+        };
     }
 
     function getFailureReason(item) {
@@ -519,18 +535,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function selectBatchFiles(files) {
         const images = Array.from(files).filter(file => file.type.startsWith('image/'));
-        const error = validateBatchFiles(images, 'local');
-        batchCloudGuidance.classList.toggle('hidden', !error);
+        resetBatchBlockedUploadFiles();
+        const split = window.UploadLimits.splitLocalFilesByUploadLimit(images, getBatchUploadLimits('local'));
+        batchBlockedUploadFiles = split.rejected.map(createBlockedUploadPreview);
+        batchBlockedUploadFiles.forEach(item => {
+            logBatchValidationFailure({
+                scope: 'local_batch',
+                field: 'file_size_bytes',
+                input: item.size,
+                maximum: item.limit,
+                reason: item.reason,
+                fileName: item.file_name,
+            });
+        });
+
+        const error = validateBatchFiles(split.accepted, 'local');
+        batchCloudGuidance.classList.toggle('hidden', !(error || batchBlockedUploadFiles.length > 0));
         if (error) {
             batchSelectedFiles = [];
             batchFileSummary.classList.add('hidden');
             showToast(`${error}，請減少檔案或改用 Google 雲端`, 'error');
             return;
         }
-        batchSelectedFiles = images;
-        const totalMb = images.reduce((sum, file) => sum + file.size, 0) / 1024 / 1024;
-        batchFileSummary.innerHTML = `<strong>已選 ${images.length} 張</strong>，合計 ${totalMb.toFixed(2)} MB`;
+        batchSelectedFiles = split.accepted;
+        const totalMb = batchSelectedFiles.reduce((sum, file) => sum + file.size, 0) / 1024 / 1024;
+        const blockedText = batchBlockedUploadFiles.length
+            ? `，另有 ${batchBlockedUploadFiles.length} 張超過 ${formatFileSize(getBatchUploadLimits('local').maxFileBytes)}，這次先略過`
+            : '';
+        batchFileSummary.innerHTML = `<strong>已選 ${batchSelectedFiles.length} 張</strong>，合計 ${totalMb.toFixed(2)} MB${blockedText}`;
         batchFileSummary.classList.toggle('hidden', images.length === 0);
+        if (batchBlockedUploadFiles.length > 0) {
+            showToast(`已略過 ${batchBlockedUploadFiles.length} 張太大的照片，其餘照片會繼續整理。`, 'error');
+        }
     }
 
     batchDropZone.addEventListener('click', () => batchFileInput.click());
@@ -1821,16 +1857,14 @@ document.addEventListener('DOMContentLoaded', () => {
         renderDecisionButtons();
 
         // 判斷是否為雲端模式或本地模式的串流數據
-        const isStream = !!currentData.drawn_image_b64;
+        const isStream = !!(currentData.drawn_image_b64 || currentData.original_image_b64 || currentData.output_b64);
+        const originalPreviewSrc = getOriginalPreviewSrc(currentData);
+        const annotatedPreviewSrc = getAnnotatedPreviewSrc(currentData);
 
         if (isStream) {
             // Streaming / Drive Mode
-            if (currentData.original_image_b64) {
-                originalImg.src = 'data:image/jpeg;base64,' + currentData.original_image_b64;
-            } else {
-                originalImg.src = 'https://placehold.co/600x400?text=Processing+Drive+File';
-            }
-            annotatedImg.src = 'data:image/jpeg;base64,' + currentData.drawn_image_b64;
+            originalImg.src = originalPreviewSrc || DEFAULT_ORIGINAL_PLACEHOLDER;
+            annotatedImg.src = annotatedPreviewSrc || DEFAULT_ANNOTATED_PLACEHOLDER;
             renderFaceFocusOverlay();
 
             // 輔助 UI: 更新統計數據
@@ -1838,8 +1872,8 @@ document.addEventListener('DOMContentLoaded', () => {
             updateStatsUI(currentData.file_name, analysis);
         } else {
             // Local File Mode (Non-Stream)
-            originalImg.src = `/local_file/?path=${encodeURIComponent(currentData.original_path)}`;
-            annotatedImg.src = `/local_file/?path=${encodeURIComponent(currentData.output)}`;
+            originalImg.src = originalPreviewSrc || DEFAULT_ORIGINAL_PLACEHOLDER;
+            annotatedImg.src = annotatedPreviewSrc || DEFAULT_ANNOTATED_PLACEHOLDER;
             renderFaceFocusOverlay();
 
             const fakeAnalysis = {
@@ -1917,6 +1951,32 @@ document.addEventListener('DOMContentLoaded', () => {
             viewToggle?.classList.remove('hidden');
             renderOverviewList(content);
         }
+        renderBlockedUploadFiles(content);
+    }
+
+    function renderBlockedUploadFiles(container) {
+        if (batchMode !== 'upload' || batchBlockedUploadFiles.length === 0) return;
+        const skipped = document.createElement('section');
+        skipped.className = 'blocked-upload-panel';
+        const cards = batchBlockedUploadFiles.map(item => {
+            const fileName = escapeHtml(item.file_name || '未命名檔案');
+            const previewUrl = escapeHtml(item.preview_url || '');
+            const sizeText = escapeHtml(formatFileSize(item.size));
+            const limitText = escapeHtml(formatFileSize(item.limit));
+            return `<article class="blocked-upload-item" title="${fileName}">
+                ${previewUrl ? `<img src="${previewUrl}" alt="${fileName}" loading="lazy">` : '<div class="blocked-upload-placeholder">無預覽</div>'}
+                <div class="blocked-upload-meta">
+                    <strong>${fileName}</strong>
+                    <span>${sizeText}，超過 ${limitText}</span>
+                </div>
+            </article>`;
+        }).join('');
+        skipped.innerHTML = `<div class="blocked-upload-header">
+            <strong>未上傳照片</strong>
+            <span>${batchBlockedUploadFiles.length} 張超過大小上限，這次先略過。</span>
+        </div>
+        <div class="blocked-upload-grid">${cards}</div>`;
+        container.appendChild(skipped);
     }
 
     function statusLabel(status) {
@@ -2363,10 +2423,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function getItemImgSrc(item) {
-        if (item.original_image_b64) {
-            return 'data:image/jpeg;base64,' + item.original_image_b64;
-        }
-        return `/local_file/?path=${encodeURIComponent(item.original_path)}`;
+        return getOriginalPreviewSrc(item);
     }
 
     function escapeHtml(value) {

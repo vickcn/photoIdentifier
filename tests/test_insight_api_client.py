@@ -140,8 +140,9 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("connection_wait", [event.get("stage") for event in progress_events])
 
-    async def test_cluster_batch_results_sends_one_job_for_global_clustering(self):
-        post_batches = []
+    async def test_cluster_batch_results_uploads_chunks_then_finalizes_one_global_job(self):
+        calls = []
+        uploaded_chunks = []
         progress_events = []
 
         class FakeAsyncClient:
@@ -155,26 +156,30 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
             async def post(self, path, **kwargs):
-                files = kwargs.get("files") or []
-                file_names = [item[1][0] for item in files]
-                post_batches.append(file_names)
-                return FakeResponse(
-                    202,
-                    {
-                        "job_id": f"job_{len(post_batches)}",
-                        "status": "queued",
-                        "progress": {"completed": 0, "total": len(files), "percent": 0},
-                    },
-                )
+                calls.append(("POST", path, kwargs))
+                if path == "/v1/faces/cluster/jobs":
+                    return FakeResponse(202, {"job_id": "job_chunked", "status": "staging"})
+                if path == "/v1/faces/cluster/jobs/job_chunked/chunks":
+                    files = kwargs.get("files") or []
+                    uploaded_chunks.append([item[1][0] for item in files])
+                    return FakeResponse(200, {"job_id": "job_chunked", "status": "staging"})
+                if path == "/v1/faces/cluster/jobs/job_chunked/finalize":
+                    return FakeResponse(
+                        202,
+                        {
+                            "job_id": "job_chunked",
+                            "status": "queued",
+                            "progress": {"completed": 0, "total": 5, "percent": 0},
+                        },
+                    )
+                raise AssertionError(f"unexpected POST {path}")
 
             async def get(self, path, **kwargs):
-                job_number = int(path.rsplit("_", 1)[-1])
-                file_names = post_batches[job_number - 1]
                 return FakeResponse(
                     200,
                     {
                         "status": "success",
-                        "progress": {"completed": len(file_names), "total": len(file_names), "percent": 100},
+                        "progress": {"completed": 5, "total": 5, "percent": 100},
                         "result": {
                             "images": [
                                 {
@@ -188,7 +193,7 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
                                         }
                                     ],
                                 }
-                                for file_name in file_names
+                                for file_name in ["0.jpg", "1.jpg", "2.jpg", "3.jpg", "4.jpg"]
                             ]
                         },
                     },
@@ -211,7 +216,9 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
                 progress_callback=on_progress,
             )
 
-        self.assertEqual(post_batches, [["0.jpg", "1.jpg", "2.jpg", "3.jpg", "4.jpg"]])
+        self.assertEqual(uploaded_chunks, [["0.jpg", "1.jpg"], ["2.jpg", "3.jpg"], ["4.jpg"]])
+        self.assertEqual(calls[0][0:2], ("POST", "/v1/faces/cluster/jobs"))
+        self.assertEqual(calls[4][0:2], ("POST", "/v1/faces/cluster/jobs/job_chunked/finalize"))
         self.assertEqual(progress_events[-1]["progress"]["completed"], 5)
         self.assertEqual(progress_events[-1]["progress"]["total"], 5)
         self.assertEqual(sum(cluster["face_count"] for cluster in clusters), 5)

@@ -224,14 +224,14 @@ report_20250902*
 
 !template
 
-# Versioned regression tests and implementation plan for upload batches
-!tests/
-!tests/test_upload_batch.py
-!tests/test_batch_upload_api.py
-!tests/test_photo_processing_threadpool.py
-!tests/test_face_workspace.py
-!tests/test_face_workspace_api.py
-!tests/face_relationships.test.js
+# # Versioned regression tests and implementation plan for upload batches
+# !tests/
+# !tests/test_upload_batch.py
+# !tests/test_batch_upload_api.py
+# !tests/test_photo_processing_threadpool.py
+# !tests/test_face_workspace.py
+# !tests/test_face_workspace_api.py
+# !tests/face_relationships.test.js
 !config.json
 !requirements.txt
 # Next.js & Node
