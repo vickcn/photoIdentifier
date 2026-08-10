@@ -2188,6 +2188,7 @@ body.app-busy {
 }
 
 .face-photo-decision,
+.face-photo-action-panel,
 .face-photo-decision-hint {
     margin-top: 0.85rem;
     padding: 0.7rem 0.8rem;
@@ -2195,10 +2196,15 @@ body.app-busy {
     background: var(--surface-muted);
 }
 
-.face-photo-decision {
+.face-photo-decision,
+.face-photo-action-panel {
     display: flex;
     align-items: center;
     gap: 0.65rem;
+}
+
+.face-photo-action-panel {
+    justify-content: flex-end;
 }
 
 .face-photo-decision strong {
@@ -2213,7 +2219,8 @@ body.app-busy {
     color: #995741;
 }
 
-.face-photo-decision button {
+.face-photo-decision button,
+.face-photo-action-panel button {
     border: 1px solid rgba(193, 92, 48, 0.3);
     border-radius: 999px;
     padding: 0.35rem 0.65rem;
@@ -2600,7 +2607,8 @@ body.app-busy {
         font-size: 0.68rem;
     }
 
-    .face-photo-decision {
+    .face-photo-decision,
+    .face-photo-action-panel {
         align-items: flex-start;
         flex-wrap: wrap;
     }

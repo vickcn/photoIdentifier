@@ -304,6 +304,18 @@ document.addEventListener('DOMContentLoaded', () => {
         return analysis.public_classification_performed !== false;
     }
 
+    function batchPublicClassificationWasRun() {
+        return currentBatchResults.some(publicClassificationWasRun);
+    }
+
+    function setViewerPublicDecisionVisible(visible) {
+        safetyBadge?.classList.toggle('hidden', !visible);
+        moderationReason?.classList.toggle('hidden', !visible);
+        if (!visible) {
+            decisionButtons.style.display = 'none';
+        }
+    }
+
     function isBusy() {
         return localOperationBusy || loadingControlStates !== null;
     }
@@ -511,19 +523,36 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${(Number(bytes || 0) / 1024 / 1024).toFixed(2)} MB`;
     }
 
+    function normalizeBlockedUploadItem(item) {
+        return {
+            file_name: item?.file_name || item?.name || '未命名檔案',
+            size: Number(item?.size || 0),
+            limit: Number(item?.limit || getBatchUploadLimits(getSelectedBatchSource()).maxFileBytes),
+            preview_url: item?.preview_url || '',
+            preview_revocable: Boolean(item?.preview_revocable),
+            reason: item?.reason || 'file_size_too_large',
+        };
+    }
+
     function resetBatchBlockedUploadFiles() {
         batchBlockedUploadFiles.forEach(item => {
-            if (item.preview_url) URL.revokeObjectURL(item.preview_url);
+            if (item.preview_revocable && item.preview_url) URL.revokeObjectURL(item.preview_url);
         });
         batchBlockedUploadFiles = [];
     }
 
     function createBlockedUploadPreview(item) {
         const file = item.file;
-        return {
+        return normalizeBlockedUploadItem({
             ...item,
             preview_url: file ? URL.createObjectURL(file) : '',
-        };
+            preview_revocable: Boolean(file),
+        });
+    }
+
+    function setBatchBlockedUploadFiles(items) {
+        resetBatchBlockedUploadFiles();
+        batchBlockedUploadFiles = (Array.isArray(items) ? items : []).map(normalizeBlockedUploadItem);
     }
 
     function getFailureReason(item) {
@@ -551,9 +580,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function selectBatchFiles(files) {
         const images = Array.from(files).filter(file => file.type.startsWith('image/'));
-        resetBatchBlockedUploadFiles();
         const split = window.UploadLimits.splitLocalFilesByUploadLimit(images, getBatchUploadLimits('local'));
-        batchBlockedUploadFiles = split.rejected.map(createBlockedUploadPreview);
+        setBatchBlockedUploadFiles(split.rejected.map(createBlockedUploadPreview));
         batchBlockedUploadFiles.forEach(item => {
             logBatchValidationFailure({
                 scope: 'local_batch',
@@ -990,7 +1018,7 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.classList.add('active');
             document.getElementById(`${btn.dataset.target}-mode`).classList.add('active');
 
-            if (btn.dataset.target === 'batch' && currentBatchResults.length > 0) {
+            if (btn.dataset.target === 'batch' && hasBatchOverviewContent()) {
                 // 切回批量頁時，恢復之前的批量總覽
                 showBatchOverview();
             } else {
@@ -1072,6 +1100,24 @@ document.addEventListener('DOMContentLoaded', () => {
         return overlay;
     }
 
+    function getContainedImageContentRect(img) {
+        const rect = img.getBoundingClientRect();
+        const naturalWidth = img.naturalWidth || 0;
+        const naturalHeight = img.naturalHeight || 0;
+        if (!naturalWidth || !naturalHeight || !rect.width || !rect.height) {
+            return rect;
+        }
+        const scale = Math.min(rect.width / naturalWidth, rect.height / naturalHeight);
+        const width = naturalWidth * scale;
+        const height = naturalHeight * scale;
+        return {
+            left: rect.left + (rect.width - width) / 2,
+            top: rect.top + (rect.height - height) / 2,
+            width,
+            height,
+        };
+    }
+
     function renderFaceFocusOverlay() {
         const overlay = getFaceFocusOverlay();
         const bbox = Array.isArray(focusedFaceEvidence?.bbox) ? focusedFaceEvidence.bbox.map(Number) : null;
@@ -1081,7 +1127,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const [x1, y1, x2, y2] = bbox;
-        const imageRect = annotatedImg.getBoundingClientRect();
+        const imageRect = getContainedImageContentRect(annotatedImg);
         const parentRect = annotatedImg.closest('.image-box').getBoundingClientRect();
         const left = imageRect.left - parentRect.left + (x1 / annotatedImg.naturalWidth) * imageRect.width;
         const top = imageRect.top - parentRect.top + (y1 / annotatedImg.naturalHeight) * imageRect.height;
@@ -1322,9 +1368,14 @@ document.addEventListener('DOMContentLoaded', () => {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    function hasBatchOverviewContent() {
+        return currentBatchResults.length > 0 || batchBlockedUploadFiles.length > 0;
+    }
+
     function applyDriveStatusPayload(data) {
         lastBatchStatusPayload = data;
         if (data.session_id) window._currentSessionId = data.session_id;
+        setBatchBlockedUploadFiles(data.blocked_files || []);
         const results = Array.isArray(data.results) ? data.results : [];
         currentBatchResults = [];
         batchFailureDetails = [];
@@ -1379,6 +1430,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentFaceClusters,
                 faceClusteringInfo,
                 photoPeopleAssignments,
+                batchBlockedUploadFiles,
                 lastBatchStatusPayload,
                 savedAt: Date.now(),
             };
@@ -1403,6 +1455,7 @@ document.addEventListener('DOMContentLoaded', () => {
             currentFaceClusters = Array.isArray(snapshot.currentFaceClusters) ? snapshot.currentFaceClusters : [];
             faceClusteringInfo = snapshot.faceClusteringInfo || null;
             photoPeopleAssignments = snapshot.photoPeopleAssignments || {};
+            setBatchBlockedUploadFiles(snapshot.batchBlockedUploadFiles || []);
             lastBatchStatusPayload = snapshot.lastBatchStatusPayload || null;
             if (lastBatchStatusPayload) {
                 updateProgressUI(
@@ -1415,7 +1468,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     updateFaceClusterProgressUI(lastBatchStatusPayload.face_cluster_progress);
                 }
             }
-            if (currentBatchResults.length > 0) {
+            if (hasBatchOverviewContent()) {
                 emptyState.classList.add('hidden');
                 showBatchOverview();
             }
@@ -1439,7 +1492,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(data.detail || '讀取整理進度失敗');
                 applyDriveStatusPayload(data);
-                if (data.status === 'completed' && currentBatchResults.length > 0) showBatchOverview();
+                if (data.status === 'completed' && hasBatchOverviewContent()) showBatchOverview();
             } catch (error) {
                 console.info('batch view refresh deferred', error?.message || 'status_unavailable');
             } finally {
@@ -1592,6 +1645,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateProgressUI(0, 0, 0, 0);
         currentBatchResults = [];
         currentFaceClusters = [];
+        resetBatchBlockedUploadFiles();
         selectedFaceClusterId = null;
         faceClusteringInfo = null;
         batchFailureDetails = [];
@@ -1645,7 +1699,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast(`看完了。${Number(finalData.success || 0)} 張看過${Number(finalData.failed || 0) ? `，${Number(finalData.failed || 0)} 張沒看成` : ''}`);
                 flushBatchFailureSummary();
                 organizeArea.classList.add('hidden');
-                if (currentBatchResults.length > 0) {
+                if (hasBatchOverviewContent()) {
                     showBatchOverview();
                 }
                 return;
@@ -1816,7 +1870,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 organizeArea.classList.add('hidden');
             }
 
-            if (currentBatchResults.length > 0) {
+            if (hasBatchOverviewContent()) {
                 showBatchOverview();
                 // metrics 等用戶確認後再顯示
             }
@@ -1864,6 +1918,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentBatchResults.length === 0) return;
 
         const currentData = currentBatchResults[currentIndex];
+        const showPublicDecision = publicClassificationWasRun(currentData);
 
         emptyState.classList.add('hidden');
         splitViewer.classList.remove('hidden');
@@ -1871,7 +1926,9 @@ document.addEventListener('DOMContentLoaded', () => {
         pageIndicator.textContent = `${currentIndex + 1} / ${currentBatchResults.length}`;
 
         // 更新裁決按鈕狀態
-        renderDecisionButtons();
+        if (showPublicDecision) {
+            renderDecisionButtons();
+        }
 
         // 判斷是否為雲端模式或本地模式的串流數據
         const isStream = !!(currentData.drawn_image_b64 || currentData.original_image_b64 || currentData.output_b64);
@@ -1904,17 +1961,20 @@ document.addEventListener('DOMContentLoaded', () => {
             updateStatsUI(currentData.file, fakeAnalysis);
         }
 
-        // 用 user_decision 覆寫 status badge（確保顯示的是用戶目前有效決定）
-        const ud = currentData.user_decision;
-        if (ud === 'safe') {
-            safetyBadge.textContent = '可以分享';
-            safetyBadge.className = 'status-badge status-safe';
-        } else if (ud === 'pending') {
-            safetyBadge.textContent = '之後再看';
-            safetyBadge.className = 'status-badge status-pending';
-        } else if (ud === 'unsafe') {
-            safetyBadge.textContent = '先留著';
-            safetyBadge.className = 'status-badge status-unsafe';
+        setViewerPublicDecisionVisible(showPublicDecision);
+        if (showPublicDecision) {
+            // 用 user_decision 覆寫 status badge（確保顯示的是用戶目前有效決定）
+            const ud = currentData.user_decision;
+            if (ud === 'safe') {
+                safetyBadge.textContent = '可以分享';
+                safetyBadge.className = 'status-badge status-safe';
+            } else if (ud === 'pending') {
+                safetyBadge.textContent = '之後再看';
+                safetyBadge.className = 'status-badge status-pending';
+            } else if (ud === 'unsafe') {
+                safetyBadge.textContent = '先留著';
+                safetyBadge.className = 'status-badge status-unsafe';
+            }
         }
 
         updateOverrideIndicator(currentData);
@@ -1934,6 +1994,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderBatchOverview() {
+        const showPublicClassification = batchPublicClassificationWasRun();
         let safeC = 0, unsafeC = 0, pendingC = 0;
         currentBatchResults.forEach(r => {
             if (r.user_decision === 'safe') safeC++;
@@ -1944,6 +2005,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('ov-safe').textContent = safeC;
         document.getElementById('ov-unsafe').textContent = unsafeC;
         document.getElementById('ov-pending').textContent = pendingC;
+        document.querySelectorAll('.overview-stats .ov-badge').forEach(item => {
+            item.classList.toggle('hidden', !showPublicClassification);
+        });
         saveDriveResultsBtn?.classList.toggle('hidden', batchMode !== 'drive');
 
         const content = document.getElementById('overview-content');
@@ -1972,7 +2036,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderBlockedUploadFiles(container) {
-        if (batchMode !== 'upload' || batchBlockedUploadFiles.length === 0) return;
+        if (batchBlockedUploadFiles.length === 0) return;
         const skipped = document.createElement('section');
         skipped.className = 'blocked-upload-panel';
         skipped.dataset.expanded = 'true';
@@ -1989,9 +2053,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             </article>`;
         }).join('');
+        const sourceLabel = batchMode === 'drive' ? '雲端照片' : '照片';
         skipped.innerHTML = `<button type="button" class="blocked-upload-header" aria-expanded="true">
-            <strong>未上傳照片</strong>
-            <span>${batchBlockedUploadFiles.length} 張超過大小上限，這次先略過。</span>
+            <strong>這次先略過的照片</strong>
+            <span>${batchBlockedUploadFiles.length} 張${sourceLabel}超過大小上限，這次先略過。</span>
             <span class="blocked-upload-toggle">▾</span>
         </button>
         <div class="blocked-upload-body">
@@ -2037,19 +2102,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderFacePhotoDecision(evidence, clusterId = '', evidenceIndex = -1) {
+        const showPublicClassification = batchPublicClassificationWasRun();
         if (!evidence) {
-            return '<p class="face-photo-decision-hint">點選任一人臉框，查看該張照片的可公開判定。</p>';
+            return showPublicClassification
+                ? '<p class="face-photo-decision-hint">點選任一人臉框，查看該張照片的可公開判定。</p>'
+                : '<p class="face-photo-decision-hint">點選任一人臉框，可查看完整照片或調整所屬人物。</p>';
         }
         const decision = getFaceEvidenceDecision(evidence);
         const personOptions = currentFaceClusters
             .filter(cluster => String(cluster.cluster_id) !== String(clusterId))
             .map(cluster => `<option value="${escapeHtml(cluster.cluster_id)}">${escapeHtml(cluster.display_name || cluster.cluster_id)}</option>`)
             .join('');
-        return `<div class="face-photo-decision status-${escapeHtml(decision.decision)}" role="status">
+        const decisionPanel = showPublicClassification ? `<div class="face-photo-decision status-${escapeHtml(decision.decision)}" role="status">
             <span>這張照片的判定</span>
             <strong>${decision.label}</strong>
             <button type="button" data-face-action="open-photo" data-cluster-id="${escapeHtml(clusterId)}" data-result-index="${decision.resultIndex}" data-evidence-index="${evidenceIndex}">查看完整照片</button>
-        </div>
+        </div>` : `<div class="face-photo-action-panel">
+            <button type="button" data-face-action="open-photo" data-cluster-id="${escapeHtml(clusterId)}" data-result-index="${decision.resultIndex}" data-evidence-index="${evidenceIndex}">查看完整照片</button>
+        </div>`;
+        return `${decisionPanel}
         ${personOptions ? `<div class="face-evidence-transfer" data-face-transfer-source="${escapeHtml(clusterId)}" data-evidence-index="${evidenceIndex}">
             <label>更換所屬人物
                 <select class="face-transfer-target">
@@ -2511,6 +2582,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderPhotoPerspective(container) {
+        const showPublicClassification = batchPublicClassificationWasRun();
         const peopleById = new Map(currentFaceClusters.map(cluster => [String(cluster.cluster_id), cluster]));
         const photoItems = currentBatchResults.map((item, resultIndex) => {
             const fileName = String(item.file_name || item.file || `圖片 ${resultIndex + 1}`);
@@ -2532,7 +2604,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ${isExpanded ? `<div class="photo-relation-body">
                     <img src="${getItemImgSrc(item) || DEFAULT_ORIGINAL_PLACEHOLDER}" alt="${escapeHtml(fileName)}" loading="lazy">
                     <div class="photo-relation-details">
-                        <div class="face-panel-heading"><span>照片判定</span><strong class="status-${escapeHtml(decision.value)}">${decision.label}</strong></div>
+                        ${showPublicClassification ? `<div class="face-panel-heading"><span>照片判定</span><strong class="status-${escapeHtml(decision.value)}">${decision.label}</strong></div>` : ''}
                         <div class="photo-people-summary">${peopleChips || '<span class="photo-people-empty">尚未登記人物</span>'}</div>
                         <div class="photo-relation-actions">
                             <button type="button" data-photo-action="edit-people" data-result-index="${resultIndex}">編輯人物</button>
@@ -2888,6 +2960,7 @@ document.addEventListener('DOMContentLoaded', () => {
             })),
             assignments: photoPeopleAssignments,
             exportedAt: new Date().toISOString(),
+            includePublicDecision: batchPublicClassificationWasRun(),
         });
     }
 
@@ -3076,11 +3149,12 @@ document.addEventListener('DOMContentLoaded', () => {
     saveDriveResultsBtn?.addEventListener('click', saveBatchResultsToDrive);
 
     function renderThumbnailGrid(container) {
+        const showPublicClassification = batchPublicClassificationWasRun();
         let html = '<div class="thumbnail-grid">';
         currentBatchResults.forEach((item, idx) => {
             const decisionInfo = getResultDecision(item);
             const decision = decisionInfo.value;
-            const isOverride = Boolean(item.user_decision && item.ai_decision && item.user_decision !== item.ai_decision);
+            const isOverride = showPublicClassification && Boolean(item.user_decision && item.ai_decision && item.user_decision !== item.ai_decision);
             const fileName = escapeHtml(item.file_name || item.file || `圖片 ${idx + 1}`);
             const src = getItemImgSrc(item);
             const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
@@ -3089,9 +3163,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 : decision === 'safe' ? '可以分享' : decision === 'pending' ? '之後再看' : '先留著';
             html += `<div class="thumbnail-item" data-idx="${idx}" title="${fileName}">
                 <img src="${src}" alt="${fileName}" loading="lazy">
-                <div class="thumbnail-overlay">
+                ${showPublicClassification ? `<div class="thumbnail-overlay">
                     <span class="thumb-badge ${badgeClass}">${badgeText}</span>
-                </div>
+                </div>` : ''}
                 ${isOverride ? '<span class="thumb-override">🔄</span>' : ''}
                 <div class="thumbnail-name">${fileName}</div>
             </div>`;
@@ -3104,11 +3178,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderOverviewList(container) {
+        const showPublicClassification = batchPublicClassificationWasRun();
         let html = '<div class="overview-list">';
         currentBatchResults.forEach((item, idx) => {
             const decisionInfo = getResultDecision(item);
             const decision = decisionInfo.value;
-            const isOverride = Boolean(item.user_decision && item.ai_decision && item.user_decision !== item.ai_decision);
+            const isOverride = showPublicClassification && Boolean(item.user_decision && item.ai_decision && item.user_decision !== item.ai_decision);
             const fileName = escapeHtml(item.file_name || item.file || `圖片 ${idx + 1}`);
             const src = getItemImgSrc(item);
             const badgeClass = decision === 'safe' ? 'safe' : decision === 'pending' ? 'pending' : 'unsafe';
@@ -3120,7 +3195,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <img class="list-row-thumb" src="${src}" alt="${fileName}" loading="lazy">
                 <span class="list-row-name" title="${fileName}">${fileName}</span>
                 ${isOverride ? '<span class="list-row-override">🔄</span>' : ''}
-                <span class="list-row-badge ${badgeClass}">${badgeText}</span>
+                ${showPublicClassification ? `<span class="list-row-badge ${badgeClass}">${badgeText}</span>` : ''}
             </div>`;
         });
         html += '</div>';
@@ -3138,7 +3213,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('batch-metrics-summary').classList.add('hidden');
         emptyState.classList.add('hidden');
         splitViewer.classList.remove('hidden');
-        decisionButtons.style.display = 'flex';
+        decisionButtons.style.display = publicClassificationWasRun(currentBatchResults[index]) ? 'flex' : 'none';
         document.getElementById('back-to-overview-btn').classList.remove('hidden');
         renderBatchViewer();
         splitViewer.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -3242,6 +3317,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderReviewSummary() {
         if (currentBatchResults.length === 0) return;
+        const showPublicClassification = batchPublicClassificationWasRun();
 
         let safeC = 0, unsafeC = 0, pendingC = 0;
         let html = '';
@@ -3249,7 +3325,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentBatchResults.forEach((item, idx) => {
             const decisionInfo = getResultDecision(item);
             const decision = decisionInfo.value;
-            const isOverride = Boolean(item.user_decision && item.ai_decision && item.user_decision !== item.ai_decision);
+            const isOverride = showPublicClassification && Boolean(item.user_decision && item.ai_decision && item.user_decision !== item.ai_decision);
             if (decision === 'safe') safeC++;
             else if (decision === 'pending' || !publicClassificationWasRun(item)) pendingC++;
             else unsafeC++;
@@ -3265,14 +3341,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span class="review-item-index">#${idx + 1}</span>
                 <span class="review-item-name" title="${fileName}">${fileName}</span>
                 ${isOverride ? '<span class="review-item-override">🔄</span>' : ''}
-                <span class="review-item-badge ${badgeClass}">${badgeText}</span>
+                ${showPublicClassification ? `<span class="review-item-badge ${badgeClass}">${badgeText}</span>` : ''}
             </div>`;
         });
 
         reviewList.innerHTML = html;
-        reviewSafeCount.textContent = `可以分享 ${safeC}`;
-        reviewPendingCount.textContent = `之後再看 ${pendingC}`;
-        reviewUnsafeCount.textContent = `先留著 ${unsafeC}`;
+        reviewSafeCount.classList.toggle('hidden', !showPublicClassification);
+        reviewPendingCount.classList.toggle('hidden', !showPublicClassification);
+        reviewUnsafeCount.classList.toggle('hidden', !showPublicClassification);
+        if (showPublicClassification) {
+            reviewSafeCount.textContent = `可以分享 ${safeC}`;
+            reviewPendingCount.textContent = `之後再看 ${pendingC}`;
+            reviewUnsafeCount.textContent = `先留著 ${unsafeC}`;
+        }
 
         // 點擊跳轉
         reviewList.querySelectorAll('.review-item').forEach(el => {

@@ -52,7 +52,7 @@
         return 'unsafe';
     }
 
-    function buildExport({ sessionId, batchMode, clusters, results, assignments, exportedAt }) {
+    function buildExport({ sessionId, batchMode, clusters, results, assignments, exportedAt, includePublicDecision = true }) {
         const cleanClusters = stripImages(clusters || []);
         const peopleById = new Map(
             cleanClusters.map(cluster => [String(cluster.cluster_id), cluster]),
@@ -76,9 +76,9 @@
                 }));
             const photo = {
                 file_name: fileName,
-                public_decision: readPublicDecision(item),
                 people: assignedPeople,
             };
+            if (includePublicDecision) photo.public_decision = readPublicDecision(item);
             const driveId = item.drive_id || analysis.drive_id;
             if (driveId) photo.drive_id = driveId;
             return photo;

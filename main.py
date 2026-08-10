@@ -1368,9 +1368,34 @@ def _batch_status_payload(session: dict[str, Any]) -> dict[str, Any]:
         "face_cluster_progress": session.get("face_cluster_progress"),
         "face_clustering": session.get("face_clustering"),
         "face_clusters": session.get("face_clusters", []),
+        "blocked_files": session.get("blocked_files", []),
         "error_message": session.get("error_message"),
     }
     return payload
+
+
+def _split_drive_files_by_upload_limit(drive_files: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    accepted: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    for item in drive_files:
+        raw_size = item.get("size")
+        try:
+            size = int(raw_size) if raw_size not in (None, "") else 0
+        except (TypeError, ValueError):
+            size = 0
+        if size > BATCH_UPLOAD_MAX_FILE_BYTES:
+            blocked.append(
+                {
+                    "file_name": item.get("name") or "未命名檔案",
+                    "size": size,
+                    "limit": BATCH_UPLOAD_MAX_FILE_BYTES,
+                    "preview_url": item.get("thumbnailLink") or "",
+                    "reason": "file_size_too_large",
+                }
+            )
+            continue
+        accepted.append(item)
+    return accepted, blocked
 
 
 async def _advance_drive_session(session: dict[str, Any], request: Request) -> None:
@@ -1609,7 +1634,8 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
     else:
         face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
     drive_files = await list_drive_image_files(req.folder_id, creds)
-    _validate_batch_file_count(len(drive_files), mode="cloud")
+    accepted_drive_files, blocked_drive_files = _split_drive_files_by_upload_limit(drive_files)
+    _validate_batch_file_count(len(accepted_drive_files), mode="cloud")
     session_id = req.session_id or str(uuid.uuid4())
     owner_id = _acquire_batch_slot(request, session_id)
     start_time = datetime.now()
@@ -1628,8 +1654,8 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
         "processing_info": {
             "folder_id": req.folder_id,
             "target_folder_id": req.target_folder_id,
-            "file_count": len(drive_files),
-            "drive_files": drive_files,
+            "file_count": len(accepted_drive_files),
+            "drive_files": accepted_drive_files,
             "drive_next_index": 0,
             "concurrency": req.concurrency,
             "color_rules": req.color_rules,
@@ -1641,6 +1667,7 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
             "run_face_clustering": req.run_face_clustering,
         },
         "completed": False,
+        "blocked_files": blocked_drive_files,
         "cancel_requested": False,
         "cancelled_at": None,
         "face_cluster_job_id": None,
@@ -1688,7 +1715,8 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
     try:
         creds = get_drive_credentials(request)
         drive_files = await list_drive_image_files(req.folder_id, creds)
-        _validate_batch_file_count(len(drive_files), mode="cloud")
+        accepted_drive_files, blocked_drive_files = _split_drive_files_by_upload_limit(drive_files)
+        _validate_batch_file_count(len(accepted_drive_files), mode="cloud")
         if req.run_face_clustering:
             face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
                 req.face_cluster_eps,
@@ -1703,6 +1731,7 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
             target_folder_id=req.target_folder_id,
             concurrency=req.concurrency,
             evaluate_public=req.run_public_classification,
+            drive_files=accepted_drive_files,
         )
         
         success_count = sum(1 for r in results if r.get("status") == "ok")
@@ -1727,6 +1756,7 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
             "results": results,
             "success": success_count,
             "failed": failed_count,
+            "blocked_files": blocked_drive_files,
             "face_clustering": face_clustering,
             "face_clusters": face_clusters,
         }
@@ -1748,7 +1778,8 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
     try:
         creds = get_drive_credentials(request)
         drive_files = await list_drive_image_files(req.folder_id, creds)
-        _validate_batch_file_count(len(drive_files), mode="cloud")
+        accepted_drive_files, blocked_drive_files = _split_drive_files_by_upload_limit(drive_files)
+        _validate_batch_file_count(len(accepted_drive_files), mode="cloud")
         if req.run_face_clustering:
             face_cluster_eps, face_cluster_min_samples = _read_face_cluster_params(
                 req.face_cluster_eps,
@@ -1808,6 +1839,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                 "run_face_clustering": req.run_face_clustering,
             },
             "completed": False,
+            "blocked_files": blocked_drive_files,
             "cancel_requested": False,
             "cancelled_at": None,
             "face_cluster_job_id": None,
@@ -1826,6 +1858,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                     color_rules=req.color_rules,
                     collaborative_memory=collaborative_memory,
                     evaluate_public=req.run_public_classification,
+                    drive_files=accepted_drive_files,
                 ):
                     # 儲存結果到 session
                     if chunk.get("status") == "ok":

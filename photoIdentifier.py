@@ -203,6 +203,7 @@ async def batch_process_drive(
     concurrency: int = 3,
     collaborative_memory: str | None = None,
     evaluate_public: bool = True,
+    drive_files: Optional[List[dict]] = None,
 ) -> List[dict]:
     """
     從 Google Drive 批量取得圖片、辨識並回傳結果。
@@ -238,19 +239,7 @@ async def batch_process_drive(
         unsafe_target_id = await asyncio.to_thread(get_or_create_subfolder, "Unsafe_Results", target_folder_id)
 
     # 2. 列出來源資料夾內圖片
-    q = f"'{folder_id}' in parents and trashed = false"
-    # First get ALL files to see what is really there
-    test_response = drive_service.files().list(
-        q=q, fields="files(id, name, mimeType)", pageSize=100
-    ).execute()
-    all_files = test_response.get("files", [])
-    print(f"[DEBUG] Found {len(all_files)} total items in folder {folder_id} (ignoring mimeType filter).")
-    for f in all_files:
-        print(f"   -> {f['name']} ({f['mimeType']})")
-
-    # Now filter to just images manually or via query
-    files = [f for f in all_files if 'image/' in f['mimeType']]
-    print(f"[DEBUG] After filtering for images, {len(files)} items remain.")
+    files = drive_files if drive_files is not None else await list_drive_image_files(folder_id, credentials)
     
     if not files:
         return []
@@ -354,7 +343,11 @@ async def list_drive_image_files(folder_id: str, credentials) -> list[dict]:
 
     drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
     q = f"'{folder_id}' in parents and trashed = false"
-    res = drive_service.files().list(q=q, fields="files(id, name, mimeType)", pageSize=1000).execute()
+    res = drive_service.files().list(
+        q=q,
+        fields="files(id, name, mimeType, size, thumbnailLink)",
+        pageSize=1000,
+    ).execute()
     all_files = res.get("files", [])
     return [f for f in all_files if "image/" in f.get("mimeType", "")]
 
@@ -442,6 +435,7 @@ async def batch_process_drive_stream(
     color_rules: list | None = None,
     collaborative_memory: str | None = None,
     evaluate_public: bool = True,
+    drive_files: Optional[List[dict]] = None,
 ):
     """
     與 batch_process_drive 類似，但這是一個 Async Generator，會逐一 yield 每張圖的結果。
@@ -472,7 +466,7 @@ async def batch_process_drive_stream(
         unsafe_target_id = await asyncio.to_thread(get_or_create_subfolder, "Unsafe_Results", target_folder_id)
 
     # 2. 列出圖片
-    files = await list_drive_image_files(folder_id, credentials)
+    files = drive_files if drive_files is not None else await list_drive_image_files(folder_id, credentials)
     
     total = len(files)
     if total == 0:
