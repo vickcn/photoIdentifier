@@ -1,7 +1,10 @@
 import unittest
+import base64
+import io
 from unittest.mock import patch
 
 import httpx
+from PIL import Image
 
 from src.batch_state_store import strip_image_payload
 from src.insight_api_client import (
@@ -278,6 +281,9 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["source_key"], "drive-file-id-123")
 
     def test_build_clusters_from_response_adds_thumbnail_and_drive_source_key(self):
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (12, 8), color=(255, 0, 0)).save(image_buffer, format="JPEG")
+        image_b64 = base64.b64encode(image_buffer.getvalue()).decode("utf-8")
         response = {
             "images": [
                 {
@@ -296,7 +302,7 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
         source_by_name = {
             "DSC_2387.JPG": {
                 "file_name": "DSC_2387.JPG",
-                "original_image_b64": "aW1hZ2U=",
+                "original_image_b64": image_b64,
                 "drive_id": "drive-file-id-123",
             }
         }
@@ -304,8 +310,10 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
         clusters = build_clusters_from_response(response, source_by_name)
 
         evidence = clusters[0]["evidence_photos"][0]
-        self.assertEqual(evidence["image_b64"], "aW1hZ2U=")
-        self.assertEqual(evidence["thumbnail_b64"], "aW1hZ2U=")
+        self.assertEqual(evidence["image_b64"], image_b64)
+        self.assertTrue(evidence["thumbnail_b64"])
+        self.assertEqual(evidence["image_width"], 12)
+        self.assertEqual(evidence["image_height"], 8)
         self.assertEqual(evidence["source_type"], "drive")
         self.assertEqual(evidence["source_key"], "drive-file-id-123")
 

@@ -320,6 +320,10 @@ document.addEventListener('DOMContentLoaded', () => {
         return localOperationBusy || loadingControlStates !== null;
     }
 
+    function hasLocalUnloadRisk() {
+        return localOperationBusy || Boolean(currentBatchAbortController && !currentBatchCancelRequested);
+    }
+
     function getFaceClusterDefaults() {
         return {
             eps: Number(config?.face_cluster_default_eps ?? 0.9),
@@ -1254,6 +1258,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const BATCH_VIEW_SNAPSHOT_KEY = 'photoIdentifier.batchViewSnapshot';
     let lastBatchStatusPayload = null;
 
+    window.addEventListener('beforeunload', event => {
+        if (!hasLocalUnloadRisk()) return;
+        saveBatchViewSnapshot({ active: true });
+        event.preventDefault();
+        event.returnValue = '';
+    });
+
     const FACE_CLUSTER_STAGE_LABELS = {
         starting: '正在準備整理照片中的人物…',
         uploading: '正在把照片送去人臉分類服務…',
@@ -2132,10 +2143,30 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>` : ''}`;
     }
 
-    function faceImageAttrs(imageSource) {
-        return imageSource?.fallbackSrc
-            ? ` data-fallback-src="${escapeHtml(imageSource.fallbackSrc)}"`
-            : '';
+    function faceImageAttrs(imageSource, evidence = {}) {
+        const attrs = [];
+        if (imageSource?.fallbackSrc) attrs.push(`data-fallback-src="${escapeHtml(imageSource.fallbackSrc)}"`);
+        if (imageSource?.kind) attrs.push(`data-face-source-kind="${escapeHtml(imageSource.kind)}"`);
+        if (Number(evidence.image_width) > 0) attrs.push(`data-face-source-width="${Number(evidence.image_width)}"`);
+        if (Number(evidence.image_height) > 0) attrs.push(`data-face-source-height="${Number(evidence.image_height)}"`);
+        return attrs.length ? ` ${attrs.join(' ')}` : '';
+    }
+
+    function scaleFaceBboxForLoadedImage(bbox, sourceImage, img) {
+        const sourceKind = img.dataset.faceSourceKind || '';
+        const sourceWidth = Number(img.dataset.faceSourceWidth || 0);
+        const sourceHeight = Number(img.dataset.faceSourceHeight || 0);
+        if (sourceKind === 'thumbnail' && (!sourceWidth || !sourceHeight)) {
+            return null;
+        }
+        const scaleX = sourceWidth ? sourceImage.naturalWidth / sourceWidth : 1;
+        const scaleY = sourceHeight ? sourceImage.naturalHeight / sourceHeight : 1;
+        return [
+            bbox[0] * scaleX,
+            bbox[1] * scaleY,
+            bbox[2] * scaleX,
+            bbox[3] * scaleY,
+        ];
     }
 
     function cropFaceEvidenceImages(container) {
@@ -2145,7 +2176,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const source = img.currentSrc || img.src;
             const sourceImage = new Image();
             sourceImage.onload = () => {
-                const [x1, y1, x2, y2] = bbox;
+                const scaledBbox = scaleFaceBboxForLoadedImage(bbox, sourceImage, img);
+                if (!scaledBbox) {
+                    img.removeAttribute('data-face-bbox');
+                    return;
+                }
+                const [x1, y1, x2, y2] = scaledBbox;
                 const left = Math.max(0, Math.min(sourceImage.naturalWidth, Math.floor(x1)));
                 const top = Math.max(0, Math.min(sourceImage.naturalHeight, Math.floor(y1)));
                 const right = Math.max(left + 1, Math.min(sourceImage.naturalWidth, Math.ceil(x2)));
@@ -2191,7 +2227,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return `<span class="face-cluster-avatar">${escapeHtml(String(cluster?.display_name || '人').trim().charAt(0) || '人')}</span>`;
         }
         return `<span class="face-cluster-avatar face-cluster-avatar-photo">
-            <img src="${source}"${faceImageAttrs(imageSource)} data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(cluster.display_name || '人物')} 的代表截圖" loading="lazy">
+            <img src="${source}"${faceImageAttrs(imageSource, leadEvidence)} data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(cluster.display_name || '人物')} 的代表截圖" loading="lazy">
         </span>`;
     }
 
@@ -2514,7 +2550,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         data-face-action="select-evidence" data-cluster-id="${escapeHtml(clusterId)}"
                         data-evidence-index="${evidenceIndex}">
                     <span class="face-crop-frame">
-                        ${source ? `<img src="${source}"${faceImageAttrs(imageSource)} data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(item.file_name)} 的人臉" loading="lazy">` : '<span class="face-evidence-missing">無預覽</span>'}
+                        ${source ? `<img src="${source}"${faceImageAttrs(imageSource, item)} data-face-bbox="${escapeHtml(bbox)}" alt="${escapeHtml(item.file_name)} 的人臉" loading="lazy">` : '<span class="face-evidence-missing">無預覽</span>'}
                     </span>
                     <span>${escapeHtml(item.file_name)}</span>
                     ${fallbackHint}

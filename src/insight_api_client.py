@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from PIL import Image
+from PIL import Image, ImageOps
 
 DEFAULT_CLUSTER_EPS = 0.9
 DEFAULT_CLUSTER_MIN_SAMPLES = 2
@@ -22,6 +22,11 @@ DEFAULT_CLUSTER_JOB_TIMEOUT_SEC = 900.0
 DEFAULT_INSIGHT_API_CONNECT_TIMEOUT_SEC = 20.0
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
+
+
+def _open_oriented_rgb_image(image_bytes: bytes) -> Image.Image:
+    image = Image.open(io.BytesIO(image_bytes))
+    return ImageOps.exif_transpose(image).convert("RGB")
 
 
 def _read_float_env(name: str, default: float, *, minimum: float) -> float:
@@ -399,7 +404,7 @@ async def detect_normalized_bboxes(
     content_type: str = "image/jpeg",
 ) -> list[list[int]]:
     result = await InsightApiClient().detect(image_bytes, file_name, content_type)
-    with Image.open(io.BytesIO(image_bytes)) as image:
+    with _open_oriented_rgb_image(image_bytes) as image:
         width, height = image.size
     return [
         [
@@ -522,13 +527,25 @@ def _thumbnail_b64_for_source(source: dict | None) -> str | None:
         return None
     try:
         image_bytes = base64.b64decode(image_b64, validate=True)
-        with Image.open(io.BytesIO(image_bytes)) as image:
+        with _open_oriented_rgb_image(image_bytes) as image:
             image.thumbnail((320, 320))
             output = io.BytesIO()
             image.convert("RGB").save(output, format="JPEG", quality=72, optimize=True)
         return base64.b64encode(output.getvalue()).decode("utf-8")
     except Exception:
         return image_b64
+
+
+def _image_dimensions_for_source(source: dict | None) -> tuple[int | None, int | None]:
+    image_b64 = source.get("original_image_b64") if source else None
+    if not image_b64:
+        return None, None
+    try:
+        image_bytes = base64.b64decode(image_b64, validate=True)
+        with _open_oriented_rgb_image(image_bytes) as image:
+            return image.size
+    except Exception:
+        return None, None
 
 
 def _source_ref_for_cluster_evidence(source: dict | None) -> tuple[str, str | None]:
@@ -579,6 +596,7 @@ def build_clusters_from_response(response: dict, source_by_name: dict[str, dict]
             if source is None:
                 missing_source_names.add(file_name)
             source_type, source_key = _source_ref_for_cluster_evidence(source)
+            image_width, image_height = _image_dimensions_for_source(source)
             evidence_photos.append(
                 {
                     "file_name": file_name,
@@ -587,6 +605,8 @@ def build_clusters_from_response(response: dict, source_by_name: dict[str, dict]
                     "score": face["score"],
                     "image_b64": source.get("original_image_b64") if source else None,
                     "thumbnail_b64": _thumbnail_b64_for_source(source),
+                    "image_width": image_width,
+                    "image_height": image_height,
                     "source_type": source_type,
                     "source_key": source_key,
                 }
