@@ -909,6 +909,14 @@ body.app-busy {
     margin-bottom: 1rem;
 }
 
+.global-auth-status {
+    margin-top: 1rem;
+}
+
+.global-auth-status .status-msg {
+    margin-bottom: 0;
+}
+
 /* Mini User Profile */
 .user-profile-mini {
     display: flex;
@@ -933,17 +941,24 @@ body.app-busy {
     display: flex;
     flex-direction: column;
     flex: 1;
+    min-width: 0;
 }
 
 .user-name {
     font-weight: 600;
     font-size: 0.95rem;
     color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .user-email {
     font-size: 0.75rem;
     color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .logout-btn {
@@ -962,6 +977,7 @@ body.app-busy {
     font-size: 0.82rem;
     font-weight: 600;
     letter-spacing: 0.04em;
+    flex-shrink: 0;
     box-shadow: 0 6px 16px rgba(190, 164, 137, 0.10);
     transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
 }
