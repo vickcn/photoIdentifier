@@ -4,8 +4,12 @@ document.addEventListener('DOMContentLoaded', () => {
         || (previewImageSources.originalImageSrc
             ? previewImageSources.originalImageSrc(item)
             : item?.original_image_b64 ? `data:image/jpeg;base64,${item.original_image_b64}` : null);
-    const getAnnotatedPreviewSrc = previewImageSources.annotatedImageSrc
-        || (item => item?.drawn_image_b64 ? `data:image/jpeg;base64,${item.drawn_image_b64}` : null);
+    const getAnnotatedPreviewSrc = item => {
+        const annotated = previewImageSources.annotatedImageSrc
+            ? previewImageSources.annotatedImageSrc(item)
+            : item?.drawn_image_b64 ? `data:image/jpeg;base64,${item.drawn_image_b64}` : null;
+        return annotated || getOriginalPreviewSrc(item);
+    };
     const getFaceImageSource = (face, matchedResult) => {
         if (face?.imported_image_url) return { kind: 'imported', src: face.imported_image_url };
         return previewImageSources.faceImageSource
@@ -3158,22 +3162,100 @@ document.addEventListener('DOMContentLoaded', () => {
                 source_kind: batchMode,
                 image_count: currentBatchResults.length,
             },
+            archive_index: buildWorkspaceArchiveIndex(exportDocument),
             editable_state: {
                 batch_mode: batchMode,
-                results: cloneExportData(currentBatchResults),
-                face_clusters: cloneExportData(currentFaceClusters),
-                face_clustering: cloneExportData(faceClusteringInfo || null),
-                photo_people_assignments: cloneExportData(photoPeopleAssignments || {}),
-                blocked_files: cloneExportData(batchBlockedUploadFiles || []),
+                results: sanitizeWorkspaceResults(currentBatchResults),
+                face_clusters: sanitizeWorkspaceFaceClusters(currentFaceClusters),
+                face_clustering: sanitizeWorkspaceData(faceClusteringInfo || null),
+                photo_people_assignments: sanitizeWorkspaceData(photoPeopleAssignments || {}),
+                blocked_files: sanitizeWorkspaceData(batchBlockedUploadFiles || []),
                 relationship_view_mode: relationshipViewMode,
             },
-            result_summary: cloneExportData(exportDocument),
         };
     }
 
     function cloneExportData(exportData) {
         if (typeof structuredClone === 'function') return structuredClone(exportData);
         return JSON.parse(JSON.stringify(exportData));
+    }
+
+    function sanitizeWorkspaceData(value) {
+        const dropKeys = new Set([
+            'original_image_b64',
+            'drawn_image_b64',
+            'output_b64',
+            'image_b64',
+            'thumbnail_b64',
+            'imported_image_url',
+        ]);
+        if (Array.isArray(value)) return value.map(item => sanitizeWorkspaceData(item));
+        if (!value || typeof value !== 'object') return value;
+        const next = {};
+        Object.entries(value).forEach(([key, entryValue]) => {
+            if (dropKeys.has(key)) return;
+            next[key] = sanitizeWorkspaceData(entryValue);
+        });
+        return next;
+    }
+
+    function buildWorkspaceArchiveIndex(exportDocument) {
+        return {
+            photos: (exportDocument?.photos || []).map(photo => ({
+                file_name: photo.file_name,
+                drive_id: photo.drive_id || null,
+                archive_relative_path: photo.archive_relative_path || null,
+            })),
+        };
+    }
+
+    function sanitizeWorkspaceResults(results) {
+        return (results || []).map(item => {
+            const analysis = item?.result || item || {};
+            const fileName = item?.file_name || item?.file || analysis?.file_name || analysis?.file || '';
+            return {
+                file_name: fileName,
+                file: fileName,
+                drive_id: item?.drive_id || analysis?.drive_id || null,
+                archive_relative_path: item?.archive_relative_path || null,
+                user_decision: item?.user_decision || null,
+                ai_decision: item?.ai_decision || analysis?.ai_decision || null,
+                public_classification_performed: analysis?.public_classification_performed !== false,
+                moderation_status: analysis?.moderation_status || null,
+                is_safe_for_public: typeof analysis?.is_safe_for_public === 'boolean' ? analysis.is_safe_for_public : null,
+                moderation_reason: analysis?.moderation_reason || null,
+                face_count: Number.isFinite(Number(analysis?.face_count))
+                    ? Number(analysis.face_count)
+                    : Array.isArray(analysis?.face_bboxes) ? analysis.face_bboxes.length : 0,
+                has_brand_strap: typeof analysis?.has_brand_strap === 'boolean'
+                    ? analysis.has_brand_strap
+                    : Array.isArray(analysis?.strap_bboxes) ? analysis.strap_bboxes.length > 0 : false,
+                strap_color: analysis?.strap_color || null,
+            };
+        });
+    }
+
+    function sanitizeWorkspaceFaceEvidence(evidence) {
+        return {
+            file_name: evidence?.file_name || '',
+            face_id: evidence?.face_id || null,
+            drive_id: evidence?.drive_id || null,
+            bbox: Array.isArray(evidence?.bbox) ? evidence.bbox.map(Number) : null,
+            image_width: Number(evidence?.image_width) || 0,
+            image_height: Number(evidence?.image_height) || 0,
+        };
+    }
+
+    function sanitizeWorkspaceFaceClusters(clusters) {
+        return (clusters || []).map(cluster => ({
+            cluster_id: cluster?.cluster_id || '',
+            display_name: cluster?.display_name || cluster?.cluster_id || '',
+            status: cluster?.status || 'unconfirmed',
+            notes: cluster?.notes || '',
+            face_count: Number(cluster?.face_count) || 0,
+            photo_count: Number(cluster?.photo_count) || 0,
+            evidence_photos: (cluster?.evidence_photos || []).map(sanitizeWorkspaceFaceEvidence),
+        }));
     }
 
     function addArchiveRelativePaths(exportData, folderPhotoEntries) {
@@ -3211,9 +3293,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function attachImportedImageSources(workspace, zipImageSources) {
         const imageSources = collectArchiveImageSources(zipImageSources);
         const state = workspace?.editable_state || {};
-        const resultSummary = workspace?.result_summary || {};
+        const archiveIndex = workspace?.archive_index || workspace?.result_summary || {};
         const archiveByFileName = new Map();
-        (resultSummary.photos || []).forEach(photo => {
+        (archiveIndex.photos || []).forEach(photo => {
             if (photo.file_name && photo.archive_relative_path) {
                 archiveByFileName.set(photo.file_name, photo.archive_relative_path);
             }
