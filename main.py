@@ -3,13 +3,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import asyncio
+import email.message
 import inspect
+import io
 import json
 import logging
+import re
 import time
+import zipfile
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Optional
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -24,7 +28,7 @@ from starlette.responses import RedirectResponse
 from pydantic import BaseModel, ValidationError
 import os
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from src.insight_api_client import (
     DEFAULT_CLUSTER_EPS,
@@ -38,7 +42,7 @@ from src.insight_api_client import (
     get_cluster_job_snapshot,
     prepare_cluster_images,
 )
-from src.batch_state_store import create_batch_state_store
+from src.batch_state_store import create_batch_state_store, get_backend_service_account_json
 from src.user_store import (
     PUBLIC_CLASSIFICATION_DENIED_DETAIL,
     create_user_store,
@@ -62,6 +66,7 @@ DEFAULT_BATCH_UPLOAD_CONCURRENCY_LOCAL_CAP = 5
 DEFAULT_BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP = 3
 DEFAULT_BATCH_DOWNLOAD_MAX_MB = 4000
 DEFAULT_FACE_CLUSTERING_ENABLED = True
+DEFAULT_EXPORT_SIGNED_URL_TTL_MINUTES = 60
 FACE_CLUSTER_EPS_MIN = 0.05
 FACE_CLUSTER_EPS_MAX = 1.5
 IS_VERCEL = os.getenv("VERCEL") == "1"
@@ -69,6 +74,7 @@ CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP = None
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 FaceClusterProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
+LOGIN_REQUIRED_DETAIL = "請先登入 Google 帳號再使用這個功能"
 
 
 def _setup_logging() -> None:
@@ -310,6 +316,16 @@ LOCAL_BATCH_CONCURRENCY_CAP = CONFIG["batch_upload_concurrency_local_cap"]
 CLOUD_API_CONCURRENCY_CAP = CONFIG["batch_upload_concurrency_cloud_cap"]
 BATCH_DOWNLOAD_MAX_MB = CONFIG["batch_download_max_mb"]
 FACE_CLUSTERING_ENABLED = CONFIG["face_clustering_enabled"]
+EXPORT_SIGNED_URL_TTL_MINUTES = _read_positive_int(
+    os.getenv("EXPORT_SIGNED_URL_TTL_MINUTES", DEFAULT_EXPORT_SIGNED_URL_TTL_MINUTES),
+    key_name="EXPORT_SIGNED_URL_TTL_MINUTES",
+    default=DEFAULT_EXPORT_SIGNED_URL_TTL_MINUTES,
+    minimum=1,
+    maximum=24 * 60,
+)
+PHOTOIDENTIFIER_EXPORTS_BUCKET = str(
+    os.getenv("PHOTOIDENTIFIER_EXPORTS_BUCKET") or "vision-493709-photoidentifier-exports"
+).strip().removeprefix("gs://")
 BATCH_UPLOAD_MAX_FILE_BYTES = BATCH_UPLOAD_MAX_FILE_MB * 1024 * 1024
 BATCH_UPLOAD_MAX_TOTAL_BYTES = BATCH_UPLOAD_MAX_TOTAL_MB * 1024 * 1024
 LOCAL_UPLOAD_REQUEST_MAX_TOTAL_BYTES = LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB * 1024 * 1024
@@ -796,6 +812,28 @@ async def get_current_user(request: Request):
     }
 
 
+class UserPreferencesUpdateRequest(BaseModel):
+    auto_email_results: bool
+
+
+@app.patch("/api/user/preferences")
+async def update_current_user_preferences(request: Request, req: UserPreferencesUpdateRequest):
+    userinfo = _get_google_userinfo(request)
+    if not isinstance(userinfo, dict):
+        raise HTTPException(status_code=401, detail=LOGIN_REQUIRED_DETAIL)
+    google_user_id = normalize_google_user_id(userinfo)
+    if not google_user_id:
+        raise HTTPException(status_code=400, detail="Google user id 不可留白")
+    user_record = await user_store.update_preferences(
+        google_user_id,
+        {"auto_email_results": req.auto_email_results},
+    )
+    return {
+        "success": True,
+        "preferences": public_user_payload(user_record).get("preferences", {}),
+    }
+
+
 def _cache_google_userinfo(request: Request, userinfo: dict[str, Any]) -> dict[str, Any]:
     cached = {
         "id": str(userinfo.get("id") or userinfo.get("sub") or userinfo.get("google_user_id") or ""),
@@ -847,9 +885,20 @@ async def _require_feature(
 ) -> dict[str, Any]:
     userinfo = _get_google_userinfo(request)
     if not isinstance(userinfo, dict):
-        raise HTTPException(status_code=403, detail=detail or PUBLIC_CLASSIFICATION_DENIED_DETAIL)
+        logger.info(
+            "Feature gate rejected session=%s feature=%s reason=not_authenticated",
+            request.session.get("session_id"),
+            feature,
+        )
+        raise HTTPException(status_code=403, detail=LOGIN_REQUIRED_DETAIL)
     user = await _get_or_create_current_user_record(request, userinfo)
     if not feature_enabled(user, feature):
+        logger.info(
+            "Feature gate rejected session=%s feature=%s reason=feature_disabled google_user_id=%s",
+            request.session.get("session_id"),
+            feature,
+            user.get("google_user_id"),
+        )
         raise HTTPException(status_code=403, detail=detail or PUBLIC_CLASSIFICATION_DENIED_DETAIL)
     return user
 
@@ -913,6 +962,18 @@ def _validate_oauth_request_host(request: Request) -> None:
                 f"目前你是從 {request_host} 開啟，請改用 {redirect_uri.rsplit('/auth/callback', 1)[0]}"
             ),
         )
+
+
+def _normalize_post_auth_redirect(target: str | None) -> str:
+    value = str(target or "").strip()
+    if not value:
+        return "/?auth=success"
+    parsed = urlparse(value)
+    if parsed.scheme or parsed.netloc:
+        return "/?auth=success"
+    if not value.startswith("/"):
+        return "/?auth=success"
+    return value
 
 @app.get("/auth/logout")
 async def google_logout(request: Request):
@@ -1145,6 +1206,7 @@ async def batch_upload_stream(
     except Exception:
         _release_batch_slot(owner_id, current_session_id)
         raise
+    uploaded_originals = {image.filename: image.content for image in images}
     if previous_result_count + len(images) > expected_total_files:
         _release_batch_slot(owner_id, current_session_id)
         raise HTTPException(status_code=400, detail="上傳分批張數超過原本宣告的總張數")
@@ -1161,6 +1223,7 @@ async def batch_upload_stream(
             "start_time": start_time.isoformat(),
             "end_time": None,
             "results": [],
+            "original_images": dict(uploaded_originals),
             "processing_info": {
                 "file_count": expected_total_files,
                 "concurrency": concurrency,
@@ -1181,6 +1244,7 @@ async def batch_upload_stream(
         }
         await _persist_session_created(_batch_sessions[current_session_id])
     else:
+        _batch_sessions[current_session_id].setdefault("original_images", {}).update(uploaded_originals)
         processing_info = _batch_sessions[current_session_id].setdefault("processing_info", {})
         processing_info["file_count"] = expected_total_files
         processing_info["upload_next_chunk_index"] = upload_chunk_index + 1
@@ -1268,6 +1332,7 @@ async def batch_upload_stream(
                     "face_clustering": face_clustering,
                 },
             )
+            completion_notification = await _notify_completed_batch_session(current_session_id, request)
             yield json.dumps(
                 {
                     "status": "completed",
@@ -1275,6 +1340,7 @@ async def batch_upload_stream(
                     "message": f"批次處理完成，共 {len(_batch_sessions[current_session_id]['results'])} 張圖片",
                     "face_clustering": face_clustering,
                     "face_clusters": _batch_sessions[current_session_id]["face_clusters"],
+                    "completion_notification": completion_notification,
                 },
                 ensure_ascii=False,
             ) + "\n"
@@ -1379,6 +1445,7 @@ async def batch_visualize(req: BatchRequest, request: Request):
                 "face_clustering": face_clustering,
             },
         )
+        completion_notification = await _notify_completed_batch_session(session_id, request)
 
         return {
             "session_id": session_id,
@@ -1389,6 +1456,7 @@ async def batch_visualize(req: BatchRequest, request: Request):
             "results": results,
             "face_clustering": face_clustering,
             "face_clusters": _batch_sessions[session_id]["face_clusters"],
+            "completion_notification": completion_notification,
         }
     except Exception as e:
         logger.exception("Batch processing error: %s", e)
@@ -1507,6 +1575,7 @@ def _batch_status_payload(session: dict[str, Any]) -> dict[str, Any]:
         "face_clusters": session.get("face_clusters", []),
         "blocked_files": session.get("blocked_files", []),
         "error_message": session.get("error_message"),
+        "completion_notification": session.get("completion_notification"),
     }
     return payload
 
@@ -1612,6 +1681,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
                 "face_clustering": face_clustering,
             },
         )
+        await _notify_completed_batch_session(session_id, request)
         _release_batch_slot(owner_id, session_id)
         return
 
@@ -1631,6 +1701,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
                 "face_clustering": face_clustering,
             },
         )
+        await _notify_completed_batch_session(session_id, request)
         _release_batch_slot(owner_id, session_id)
         return
 
@@ -1652,6 +1723,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
                     "face_clustering": session["face_clustering"],
                 },
             )
+            await _notify_completed_batch_session(session_id, request)
             _release_batch_slot(owner_id, session_id)
             return
         session["stage"] = "face_uploading"
@@ -1732,6 +1804,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
                 "face_cluster_progress": session["face_cluster_progress"],
             },
         )
+        await _notify_completed_batch_session(session_id, request)
         _release_batch_slot(owner_id, session_id)
         return
     if status == "cancelled":
@@ -2066,12 +2139,14 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                         "face_clustering": face_clustering,
                     },
                 )
+                completion_notification = await _notify_completed_batch_session(session_id, request)
                 yield json.dumps({
                     "status": "completed",
                     "session_id": session_id,
                     "message": f"批次處理完成，共 {len(_batch_sessions[session_id]['results'])} 個結果",
                     "face_clustering": face_clustering,
                     "face_clusters": _batch_sessions[session_id]["face_clusters"],
+                    "completion_notification": completion_notification,
                 }, ensure_ascii=False) + "\n"
 
             except Exception as inner_e:
@@ -2183,7 +2258,7 @@ async def save_collaborative_memory(request: Request, folder_id: str = Form(...)
 
 
 @app.get("/auth/google")
-def google_auth(request: Request):
+def google_auth(request: Request, next: str | None = None):
     try:
         _validate_oauth_request_host(request)
         user_key = request.session.get("user_key")
@@ -2194,6 +2269,7 @@ def google_auth(request: Request):
         auth_url, state, code_verifier = get_auth_url()
         request.session["oauth_state"] = state
         request.session["oauth_user_key"] = user_key
+        request.session["oauth_next"] = _normalize_post_auth_redirect(next)
         if code_verifier:
             request.session["oauth_code_verifier"] = code_verifier
         
@@ -2230,9 +2306,10 @@ def google_auth_callback(request: Request, code: str, state: str):
 
         request.session.pop("oauth_state", None)
         request.session.pop("oauth_code_verifier", None)
+        redirect_target = _normalize_post_auth_redirect(request.session.pop("oauth_next", None))
 
-        # 授權成功後，導向回前端並帶上成功標記
-        return RedirectResponse(url="/?auth=success")
+        # 授權成功後，導向回原本頁面或首頁
+        return RedirectResponse(url=redirect_target)
     except HTTPException:
         raise
     except Exception as e:
@@ -2371,6 +2448,11 @@ class DriveBatchExportRequest(BaseModel):
     document: dict[str, Any]
 
 
+class StorageBatchExportRequest(BaseModel):
+    session_id: str
+    document: dict[str, Any]
+
+
 class DriveOutputFolderRequest(BaseModel):
     name: str
     parent_folder_id: Optional[str] = None
@@ -2479,6 +2561,511 @@ def _save_json_export_to_drive(
         media_body=media,
         fields="id,name",
     ).execute()
+
+
+def _require_exports_bucket_name() -> str:
+    bucket_name = PHOTOIDENTIFIER_EXPORTS_BUCKET.strip().removeprefix("gs://")
+    if not bucket_name:
+        raise HTTPException(status_code=503, detail="尚未設定暫存匯出 bucket")
+    return bucket_name
+
+
+def _create_storage_client():
+    from google.cloud import storage
+
+    service_account_json = get_backend_service_account_json()
+    if service_account_json:
+        from google.oauth2 import service_account
+
+        credentials = service_account.Credentials.from_service_account_info(
+            json.loads(service_account_json)
+        )
+        return storage.Client(project=credentials.project_id, credentials=credentials)
+    project_id = os.getenv("FIRESTORE_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
+    return storage.Client(project=project_id or None)
+
+
+def _safe_zip_path_segment(value: str, fallback: str) -> str:
+    segment = str(value or fallback or "").strip()
+    segment = re.sub(r'[\\/:*?"<>|]+', "_", segment)
+    segment = re.sub(r"\s+", " ", segment).strip(". ")
+    return segment[:80] or fallback
+
+
+def _storage_export_folder_segments(folder: dict[str, Any], fallback: str) -> list[str]:
+    raw_segments = folder.get("path_segments")
+    segments = raw_segments if isinstance(raw_segments, list) and raw_segments else [folder.get("name") or fallback]
+    return [
+        _safe_zip_path_segment(str(segment or ""), fallback if index == 0 else f"group_{index}")
+        for index, segment in enumerate(segments)
+        if str(segment or "").strip()
+    ] or [fallback]
+
+
+def _storage_export_file_name(value: str, fallback: str) -> str:
+    name = _safe_zip_path_segment(value, fallback)
+    return name or fallback
+
+
+def _storage_export_image_bytes_from_result(result: dict[str, Any] | None) -> bytes | None:
+    if not isinstance(result, dict):
+        return None
+    image_b64 = str(result.get("original_image_b64") or "").strip()
+    if not image_b64:
+        return None
+    try:
+        return base64.b64decode(image_b64, validate=True)
+    except Exception:
+        return None
+
+
+def _download_drive_file_bytes(credentials, file_id: str) -> bytes | None:
+    if credentials is None or not file_id:
+        return None
+    from googleapiclient.discovery import build
+
+    service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    content = service.files().get_media(fileId=file_id).execute()
+    return bytes(content) if content else None
+
+
+def _build_storage_export_images(
+    document: dict[str, Any],
+    session: dict[str, Any],
+    credentials=None,
+) -> tuple[dict[str, Any], list[tuple[str, bytes]]]:
+    results = session.get("results") if isinstance(session.get("results"), list) else []
+    original_images = session.get("original_images") if isinstance(session.get("original_images"), dict) else {}
+    result_by_name: dict[str, dict[str, Any]] = {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        analysis = result.get("result") if isinstance(result.get("result"), dict) else result
+        file_name = str(result.get("file_name") or result.get("file") or analysis.get("file_name") or analysis.get("file") or "")
+        if file_name:
+            result_by_name[file_name] = result
+
+    next_document = json.loads(json.dumps(document, ensure_ascii=False))
+    image_entries: list[tuple[str, bytes]] = []
+    archive_by_file_name: dict[str, str] = {}
+    used_paths: set[str] = set()
+    folders = next_document.get("photo_angle_folders")
+    folders = folders if isinstance(folders, list) else []
+
+    for folder_index, folder in enumerate(folders, start=1):
+        if not isinstance(folder, dict):
+            continue
+        folder_segments = _storage_export_folder_segments(folder, f"group_{folder_index}")
+        photos = folder.get("photos") if isinstance(folder.get("photos"), list) else []
+        for photo_index, photo in enumerate(photos, start=1):
+            if not isinstance(photo, dict):
+                continue
+            file_name = str(photo.get("file_name") or f"image_{photo_index}.jpg")
+            result = result_by_name.get(file_name)
+            original_bytes = original_images.get(file_name)
+            image_bytes = bytes(original_bytes) if isinstance(original_bytes, (bytes, bytearray)) else None
+            if image_bytes is None:
+                image_bytes = _storage_export_image_bytes_from_result(result)
+            if image_bytes is None:
+                drive_id = str(photo.get("drive_id") or (result or {}).get("drive_id") or "").strip()
+                try:
+                    image_bytes = _download_drive_file_bytes(credentials, drive_id)
+                except Exception as exc:
+                    logger.warning(
+                        "Storage export image fetch failed session=%s file=%s drive_id=%s error=%s",
+                        session.get("session_id"),
+                        file_name,
+                        drive_id,
+                        exc,
+                    )
+                    image_bytes = None
+            if not image_bytes:
+                continue
+
+            photo_name = _storage_export_file_name(file_name, f"image_{photo_index}.jpg")
+            relative_path = f"{'/'.join(folder_segments)}/{photo_name}"
+            if relative_path in used_paths:
+                stem, dot, suffix = photo_name.rpartition(".")
+                dedupe_name = f"{stem or photo_name}_{len(used_paths) + 1}{dot}{suffix}" if dot else f"{photo_name}_{len(used_paths) + 1}"
+                relative_path = f"{'/'.join(folder_segments)}/{dedupe_name}"
+            used_paths.add(relative_path)
+            image_entries.append((relative_path, image_bytes))
+            archive_by_file_name[file_name] = relative_path
+            photo["archive_relative_path"] = relative_path
+
+    for photo in (next_document.get("photos") if isinstance(next_document.get("photos"), list) else []):
+        if isinstance(photo, dict) and photo.get("file_name") in archive_by_file_name:
+            photo["archive_relative_path"] = archive_by_file_name[photo["file_name"]]
+    for result in (next_document.get("results") if isinstance(next_document.get("results"), list) else []):
+        if not isinstance(result, dict):
+            continue
+        file_name = result.get("file_name") or result.get("file")
+        if file_name in archive_by_file_name:
+            result["archive_relative_path"] = archive_by_file_name[file_name]
+
+    return next_document, image_entries
+
+
+def _build_storage_export_zip(
+    document: dict[str, Any],
+    session_id: str,
+    image_entries: list[tuple[str, bytes]] | None = None,
+) -> tuple[str, bytes]:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    json_file_name = f"photo_people_{timestamp}.json"
+    payload = json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8")
+    if len(payload) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="JSON 文件超過 10 MB 上限")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("result.json", payload)
+        archive.writestr("workspace.json", payload)
+        archive.writestr(json_file_name, payload)
+        for relative_path, image_bytes in image_entries or []:
+            archive.writestr(relative_path, image_bytes)
+    return f"results_{session_id}_{timestamp}.zip", buffer.getvalue()
+
+
+def _upload_storage_export(bucket_name: str, object_name: str, content: bytes) -> None:
+    client = _create_storage_client()
+    blob = client.bucket(bucket_name).blob(object_name)
+    blob.upload_from_string(content, content_type="application/zip")
+
+
+def _generate_storage_signed_url(bucket_name: str, object_name: str, expires_minutes: int) -> tuple[str, str]:
+    client = _create_storage_client()
+    blob = client.bucket(bucket_name).blob(object_name)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=expires_at,
+        method="GET",
+        response_disposition=f'attachment; filename="{Path(object_name).name}"',
+    )
+    return str(url), expires_at.isoformat()
+
+
+def _send_gmail_notification(credentials, recipient: str, subject: str, body: str) -> dict[str, Any]:
+    from googleapiclient.discovery import build
+
+    message = email.message.EmailMessage()
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(body)
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+    service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
+    return service.users().messages().send(userId="me", body={"raw": raw}).execute()
+
+
+def _storage_export_notification_body(download_entry_url: str, expires_minutes: int) -> str:
+    return (
+        "PhotoIdentifier 的辨識結果已整理完成。\n\n"
+        f"請用原本的 Google 帳號開啟下載入口：\n{download_entry_url}\n\n"
+        f"系統會在登入驗證後產生短效下載連結，連結約 {expires_minutes} 分鐘後失效。\n"
+        "暫存檔會依 Cloud Storage lifecycle 約 1 天後自動刪除。"
+    )
+
+
+def _credential_scope_list(credentials) -> list[str]:
+    scopes = getattr(credentials, "scopes", None)
+    if not scopes:
+        return []
+    if isinstance(scopes, (list, tuple, set)):
+        return [str(scope) for scope in scopes if scope]
+    return [str(scopes)]
+
+
+def _gmail_notification_error_code(exc: Exception) -> str | None:
+    message = str(exc)
+    if "accessNotConfigured" in message or "Gmail API has not been used in project" in message:
+        return "gmail_api_not_enabled"
+    if "insufficient authentication scopes" in message or "insufficientPermissions" in message:
+        return "gmail_scope_missing"
+    return None
+
+
+def _storage_export_public_decision(item: dict[str, Any]) -> str | None:
+    analysis = item.get("result") if isinstance(item.get("result"), dict) else item
+    return (
+        item.get("user_decision")
+        or item.get("ai_decision")
+        or analysis.get("ai_decision")
+        or analysis.get("moderation_status")
+    )
+
+
+def _export_face_count_folder_name(face_count: int) -> str:
+    return f"{max(0, int(face_count or 0))}人"
+
+
+def _export_person_folder_name(value: str, fallback: str) -> str:
+    return _safe_zip_path_segment(value, fallback or "未命名人物")
+
+
+def _build_session_export_document(session: dict[str, Any]) -> dict[str, Any]:
+    results = session.get("results") if isinstance(session.get("results"), list) else []
+    clusters = session.get("face_clusters") if isinstance(session.get("face_clusters"), list) else []
+    cluster_by_id = {
+        str(cluster.get("cluster_id") or ""): cluster
+        for cluster in clusters
+        if isinstance(cluster, dict) and cluster.get("cluster_id")
+    }
+    assignments: dict[str, list[str]] = {}
+    for cluster in clusters:
+        if not isinstance(cluster, dict):
+            continue
+        cluster_id = str(cluster.get("cluster_id") or "")
+        if not cluster_id:
+            continue
+        for evidence in cluster.get("evidence_photos") or []:
+            if not isinstance(evidence, dict):
+                continue
+            file_name = str(evidence.get("file_name") or "")
+            if not file_name:
+                continue
+            assignments.setdefault(file_name, [])
+            if cluster_id not in assignments[file_name]:
+                assignments[file_name].append(cluster_id)
+    people = [
+        {
+            "cluster_id": str(cluster.get("cluster_id") or ""),
+            "display_name": str(cluster.get("display_name") or cluster.get("cluster_id") or ""),
+            "status": str(cluster.get("status") or "unconfirmed"),
+            "notes": str(cluster.get("notes") or ""),
+        }
+        for cluster in clusters
+        if isinstance(cluster, dict)
+    ]
+    photos = []
+    for index, item in enumerate(results, start=1):
+        if not isinstance(item, dict):
+            continue
+        analysis = item.get("result") if isinstance(item.get("result"), dict) else item
+        file_name = str(item.get("file_name") or item.get("file") or analysis.get("file_name") or f"photo_{index}")
+        assigned_people = []
+        for cluster_id in assignments.get(file_name, []):
+            cluster = cluster_by_id.get(cluster_id)
+            if not cluster:
+                continue
+            assigned_people.append(
+                {
+                    "cluster_id": cluster_id,
+                    "display_name": str(cluster.get("display_name") or cluster_id),
+                }
+            )
+        photos.append(
+            {
+                "file_name": file_name,
+                "drive_id": item.get("drive_id") or analysis.get("drive_id"),
+                "public_decision": _storage_export_public_decision(item),
+                "people": assigned_people,
+            }
+        )
+    folders_by_key: dict[str, dict[str, Any]] = {}
+    for photo in photos:
+        assigned_people = photo.get("people") if isinstance(photo.get("people"), list) else []
+        count_folder_name = _export_face_count_folder_name(len(assigned_people))
+        if len(assigned_people) == 1:
+            person = assigned_people[0]
+            path_segments = [
+                count_folder_name,
+                _export_person_folder_name(
+                    str(person.get("display_name") or ""),
+                    str(person.get("cluster_id") or "未命名人物"),
+                ),
+            ]
+        else:
+            path_segments = [count_folder_name]
+        folder_key = "/".join(path_segments)
+        if folder_key not in folders_by_key:
+            folders_by_key[folder_key] = {
+                "name": path_segments[-1],
+                "face_count": len(assigned_people),
+                "path_segments": path_segments,
+                "photos": [],
+            }
+        folders_by_key[folder_key]["photos"].append(
+            {
+                "file_name": photo.get("file_name"),
+                "drive_id": photo.get("drive_id"),
+                "people": [
+                    {
+                        "cluster_id": person.get("cluster_id"),
+                        "display_name": person.get("display_name"),
+                    }
+                    for person in assigned_people
+                ],
+            }
+        )
+    return {
+        "schema_version": "photoidentifier.export.v1",
+        "session_id": session.get("session_id"),
+        "batch_mode": session.get("batch_mode"),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "people": people,
+        "photo_angle_folders": list(folders_by_key.values()),
+        "photos": photos,
+        "results": [
+            {
+                key: value
+                for key, value in item.items()
+                if key not in {"image_b64", "original_image_b64", "drawn_image_b64", "output_b64"}
+            }
+            for item in results
+            if isinstance(item, dict)
+        ],
+        "face_clusters": clusters,
+        "face_clustering": session.get("face_clustering"),
+        "blocked_files": session.get("blocked_files", []),
+    }
+
+
+async def _notify_completed_batch_session(session_id: str, request: Request) -> dict[str, Any] | None:
+    session = _batch_sessions.get(session_id)
+    if not isinstance(session, dict):
+        return None
+    existing = session.get("completion_notification")
+    if isinstance(existing, dict) and existing.get("status") in {"sent", "skipped"}:
+        return existing
+
+    notify_email = str(session.get("user_account") or "").strip()
+    if not notify_email:
+        result = {"status": "skipped", "reason": "no_recipient"}
+        session["completion_notification"] = result
+        logger.info("Batch completion notify skipped session=%s reason=no_recipient", session_id)
+        await _persist_session_update(session_id, {"completion_notification": result})
+        return result
+
+    google_user_id = str(session.get("google_user_id") or "").strip()
+    if google_user_id:
+        try:
+            user_record = await user_store.get_user(google_user_id)
+        except Exception:
+            logger.exception("Failed to read notification preference google_user_id=%s", google_user_id)
+            user_record = None
+        preferences = public_user_payload(user_record).get("preferences", {}) if isinstance(user_record, dict) else {}
+        if preferences.get("auto_email_results") is False:
+            result = {"status": "skipped", "reason": "auto_email_disabled", "recipient": notify_email}
+            session["completion_notification"] = result
+            logger.info("Batch completion notify skipped session=%s recipient=%s reason=auto_email_disabled", session_id, notify_email)
+            await _persist_session_update(session_id, {"completion_notification": result})
+            return result
+
+    if not batch_state_store.enabled:
+        result = {"status": "skipped", "reason": "state_store_disabled", "recipient": notify_email}
+        session["completion_notification"] = result
+        logger.info("Batch completion notify skipped session=%s recipient=%s reason=state_store_disabled", session_id, notify_email)
+        await _persist_session_update(session_id, {"completion_notification": result})
+        return result
+
+    result: dict[str, Any] = {"status": "pending", "recipient": notify_email}
+    session["completion_notification"] = result
+    try:
+        credentials = get_drive_credentials(request)
+        document = _build_session_export_document(session)
+        document, image_entries = await run_in_threadpool(
+            _build_storage_export_images,
+            document,
+            session,
+            credentials,
+        )
+        file_name, content = _build_storage_export_zip(document, session_id, image_entries)
+        bucket_name = _require_exports_bucket_name()
+        object_name = f"exports/{session['owner_id']}/{session_id}/{file_name}"
+        logger.info(
+            "Batch completion notify export build session=%s recipient=%s bucket=%s object=%s image_count=%s",
+            session_id,
+            notify_email,
+            bucket_name,
+            object_name,
+            len(image_entries),
+        )
+        await run_in_threadpool(_upload_storage_export, bucket_name, object_name, content)
+        _download_url, download_url_expires_at = await run_in_threadpool(
+            _generate_storage_signed_url,
+            bucket_name,
+            object_name,
+            EXPORT_SIGNED_URL_TTL_MINUTES,
+        )
+        await batch_state_store.save_photo_assignments(
+            session_id,
+            session["owner_id"],
+            document,
+            str(session.get("user_account") or ""),
+            str(session.get("google_user_id") or ""),
+        )
+        metadata = {
+            "bucket_name": bucket_name,
+            "object_name": object_name,
+            "content_type": "application/zip",
+            "download_url_expires_at": download_url_expires_at,
+            "notify_email": notify_email,
+            "notification_status": "pending",
+            "trigger": "batch_completed",
+        }
+        export_id = await batch_state_store.create_export_record(
+            session_id,
+            session["owner_id"],
+            "storage",
+            file_name,
+            "created",
+            metadata,
+            str(session.get("user_account") or ""),
+            str(session.get("google_user_id") or ""),
+        )
+        download_entry_url = str(
+            request.url_for("download_storage_batch_export", export_id=export_id)
+        )
+        logger.info(
+            "Batch completion notify start export_id=%s session=%s recipient=%s",
+            export_id,
+            session_id,
+            notify_email,
+        )
+        await run_in_threadpool(
+            _send_gmail_notification,
+            credentials,
+            notify_email,
+            "PhotoIdentifier 辨識結果已可下載",
+            _storage_export_notification_body(
+                download_entry_url,
+                EXPORT_SIGNED_URL_TTL_MINUTES,
+            ),
+        )
+        metadata["notification_status"] = "sent"
+        await batch_state_store.update_export_record_metadata(export_id, metadata)
+        result = {"status": "sent", "recipient": notify_email, "export_id": export_id}
+        logger.info(
+            "Batch completion notify sent export_id=%s session=%s recipient=%s",
+            export_id,
+            session_id,
+            notify_email,
+        )
+    except Exception as exc:
+        credentials = locals().get("credentials")
+        scope_list = _credential_scope_list(credentials) if credentials is not None else []
+        error_code = _gmail_notification_error_code(exc)
+        result = {
+            "status": "failed",
+            "recipient": notify_email,
+            "error": str(exc),
+            "error_code": error_code,
+            "gmail_send_scope": "https://www.googleapis.com/auth/gmail.send" in scope_list,
+        }
+        logger.warning(
+            "Batch completion notify failed session=%s recipient=%s gmail_send_scope=%s error_code=%s error=%s",
+            session_id,
+            notify_email,
+            result["gmail_send_scope"],
+            error_code,
+            exc,
+        )
+        logger.exception("Batch completion notification failed session=%s", session_id)
+
+    session["completion_notification"] = result
+    await _persist_session_update(session_id, {"completion_notification": result})
+    return result
 
 
 def _drive_query_literal(value: str) -> str:
@@ -2647,6 +3234,273 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
         "file_name": saved.get("name") or file_name,
         "people_copy": people_copy,
     }
+
+
+@app.post("/batch_exports/storage")
+async def create_storage_batch_export(req: StorageBatchExportRequest, request: Request):
+    await _require_feature(request, "export_results", "此帳號尚未開放匯出辨識結果功能")
+    session_id = req.session_id.strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id 不可留白")
+
+    session = await _owned_batch_session_async(request, session_id)
+    if req.document.get("session_id") != session_id:
+        raise HTTPException(status_code=400, detail="JSON 文件的 session_id 與批次不一致")
+
+    credentials = None
+    file_name = f"results_{session_id}_failed.zip"
+    bucket_name = _require_exports_bucket_name()
+    object_name = f"exports/{session['owner_id']}/{session_id}/{file_name}"
+    try:
+        try:
+            credentials = get_drive_credentials(request)
+        except Exception:
+            credentials = None
+        export_document, image_entries = await run_in_threadpool(
+            _build_storage_export_images,
+            req.document,
+            session,
+            credentials,
+        )
+        file_name, content = _build_storage_export_zip(export_document, session_id, image_entries)
+        object_name = f"exports/{session['owner_id']}/{session_id}/{file_name}"
+        logger.info(
+            "Storage export build session=%s owner=%s bucket=%s object=%s image_count=%s",
+            session_id,
+            session["owner_id"],
+            bucket_name,
+            object_name,
+            len(image_entries),
+        )
+        await run_in_threadpool(_upload_storage_export, bucket_name, object_name, content)
+        download_url, download_url_expires_at = await run_in_threadpool(
+            _generate_storage_signed_url,
+            bucket_name,
+            object_name,
+            EXPORT_SIGNED_URL_TTL_MINUTES,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Storage export failed session=%s", session_id)
+        if batch_state_store.enabled:
+            try:
+                await batch_state_store.create_export_record(
+                    session_id,
+                    session["owner_id"],
+                    "storage",
+                    file_name,
+                    "failed",
+                    {"bucket_name": bucket_name, "object_name": object_name, "error": str(exc)},
+                    str(session.get("user_account") or ""),
+                    str(session.get("google_user_id") or ""),
+                )
+            except Exception:
+                logger.exception("Failed to persist failed storage export metadata session=%s", session_id)
+        raise HTTPException(status_code=500, detail=f"無法建立暫存匯出檔：{exc}") from exc
+
+    export_id = ""
+    notification_status = "skipped"
+    notification_error = ""
+    if batch_state_store.enabled:
+        try:
+            await batch_state_store.save_photo_assignments(
+                session_id,
+                session["owner_id"],
+                export_document,
+                str(session.get("user_account") or ""),
+                str(session.get("google_user_id") or ""),
+            )
+            metadata = {
+                "bucket_name": bucket_name,
+                "object_name": object_name,
+                "content_type": "application/zip",
+                "download_url_expires_at": download_url_expires_at,
+                "notify_email": str(session.get("user_account") or ""),
+                "notification_status": "pending",
+            }
+            export_id = await batch_state_store.create_export_record(
+                session_id,
+                session["owner_id"],
+                "storage",
+                file_name,
+                "created",
+                metadata,
+                str(session.get("user_account") or ""),
+                str(session.get("google_user_id") or ""),
+            )
+            notify_email = str(session.get("user_account") or "").strip()
+            if not notify_email:
+                logger.info(
+                    "Storage export notify skipped export_id=%s session=%s reason=no_recipient",
+                    export_id,
+                    session_id,
+                )
+            if notify_email and export_id:
+                download_entry_url = str(
+                    request.url_for("download_storage_batch_export", export_id=export_id)
+                )
+                try:
+                    logger.info(
+                        "Storage export notify start export_id=%s session=%s recipient=%s",
+                        export_id,
+                        session_id,
+                        notify_email,
+                    )
+                    if credentials is None:
+                        credentials = get_drive_credentials(request)
+                    await run_in_threadpool(
+                        _send_gmail_notification,
+                        credentials,
+                        notify_email,
+                        "PhotoIdentifier 辨識結果已可下載",
+                        _storage_export_notification_body(
+                            download_entry_url,
+                            EXPORT_SIGNED_URL_TTL_MINUTES,
+                        ),
+                    )
+                    notification_status = "sent"
+                    logger.info(
+                        "Storage export notify sent export_id=%s session=%s recipient=%s",
+                        export_id,
+                        session_id,
+                        notify_email,
+                    )
+                except Exception as exc:
+                    notification_status = "failed"
+                    notification_error = str(exc)
+                    error_code = _gmail_notification_error_code(exc)
+                    scope_list = _credential_scope_list(credentials)
+                    logger.warning(
+                        "Storage export notify failed export_id=%s session=%s recipient=%s gmail_send_scope=%s recipient_present=%s error_code=%s error=%s",
+                        export_id,
+                        session_id,
+                        notify_email,
+                        "https://www.googleapis.com/auth/gmail.send" in scope_list,
+                        bool(notify_email),
+                        error_code,
+                        exc,
+                    )
+                    logger.exception("Storage export notification failed export_id=%s", export_id)
+                metadata["notification_status"] = notification_status
+                if notification_error:
+                    metadata["notification_error"] = notification_error
+                if notification_status == "failed" and error_code:
+                    metadata["notification_error_code"] = error_code
+                await batch_state_store.update_export_record_metadata(export_id, metadata)
+        except Exception:
+            logger.exception("Failed to persist storage export metadata session=%s", session_id)
+
+    return {
+        "status": "created",
+        "export_id": export_id,
+        "file_name": file_name,
+        "bucket_name": bucket_name,
+        "object_name": object_name,
+        "download_url": download_url,
+        "download_url_expires_at": download_url_expires_at,
+        "notification_status": notification_status,
+    }
+
+
+@app.get("/batch_exports/storage/{export_id}")
+async def get_storage_batch_export_download(export_id: str, request: Request):
+    await _require_feature(request, "export_results", "此帳號尚未開放匯出辨識結果功能")
+    if not batch_state_store.enabled:
+        raise HTTPException(status_code=404, detail="找不到這份暫存匯出")
+
+    owner_id = _get_client_id(request)
+    record = await batch_state_store.get_export_record(owner_id, export_id)
+    if not isinstance(record, dict) or record.get("target") != "storage":
+        raise HTTPException(status_code=404, detail="找不到這份暫存匯出")
+
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    bucket_name = str(metadata.get("bucket_name") or "").strip()
+    object_name = str(metadata.get("object_name") or "").strip()
+    if not bucket_name or not object_name:
+        raise HTTPException(status_code=409, detail="這份暫存匯出缺少下載資訊")
+
+    try:
+        download_url, download_url_expires_at = await run_in_threadpool(
+            _generate_storage_signed_url,
+            bucket_name,
+            object_name,
+            EXPORT_SIGNED_URL_TTL_MINUTES,
+        )
+    except Exception as exc:
+        logger.exception("Storage export signed URL refresh failed export_id=%s", export_id)
+        raise HTTPException(status_code=500, detail=f"無法建立下載連結：{exc}") from exc
+
+    return {
+        "status": "ready",
+        "export_id": export_id,
+        "session_id": record.get("session_id"),
+        "file_name": record.get("file_name"),
+        "download_url": download_url,
+        "download_url_expires_at": download_url_expires_at,
+    }
+
+
+@app.get("/batch_exports/storage/{export_id}/download")
+async def download_storage_batch_export(export_id: str, request: Request):
+    userinfo = _get_google_userinfo(request)
+    if not isinstance(userinfo, dict):
+        login_url = app.url_path_for("google_auth")
+        next_path = str(request.url.path)
+        if request.url.query:
+            next_path = f"{next_path}?{request.url.query}"
+        logger.info(
+            "Storage export download requires login export_id=%s redirect_to_auth=true",
+            export_id,
+        )
+        return RedirectResponse(url=f"{login_url}?next={quote(next_path, safe='/?=&')}", status_code=307)
+    await _require_feature(request, "export_results", "此帳號尚未開放匯出辨識結果功能")
+    if not batch_state_store.enabled:
+        raise HTTPException(status_code=404, detail="找不到這份暫存匯出")
+
+    owner_id = _get_client_id(request)
+    record = await batch_state_store.get_export_record(owner_id, export_id)
+    if not isinstance(record, dict):
+        google_user_id = normalize_google_user_id(userinfo)
+        user_account = str(userinfo.get("email") or "").strip()
+        record = await batch_state_store.get_export_record_for_user(
+            export_id,
+            google_user_id,
+            user_account,
+        )
+        if isinstance(record, dict):
+            logger.info(
+                "Storage export download recovered by google identity export_id=%s owner=%s google_user_id=%s",
+                export_id,
+                owner_id,
+                google_user_id,
+            )
+    if not isinstance(record, dict) or record.get("target") != "storage":
+        raise HTTPException(status_code=404, detail="找不到這份暫存匯出")
+
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    bucket_name = str(metadata.get("bucket_name") or "").strip()
+    object_name = str(metadata.get("object_name") or "").strip()
+    if not bucket_name or not object_name:
+        raise HTTPException(status_code=409, detail="這份暫存匯出缺少下載資訊")
+
+    try:
+        download_url, _ = await run_in_threadpool(
+            _generate_storage_signed_url,
+            bucket_name,
+            object_name,
+            EXPORT_SIGNED_URL_TTL_MINUTES,
+        )
+    except Exception as exc:
+        logger.exception("Storage export signed URL redirect failed export_id=%s", export_id)
+        raise HTTPException(status_code=500, detail=f"無法建立下載連結：{exc}") from exc
+    logger.info(
+        "Storage export download redirect export_id=%s session=%s owner=%s",
+        export_id,
+        record.get("session_id"),
+        owner_id,
+    )
+    return RedirectResponse(url=download_url)
 
 
 @app.get("/face_clusters/{session_id}")

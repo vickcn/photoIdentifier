@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 import main
 
@@ -365,6 +366,58 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(events[-1]["face_clustering"]["reason"], "not_requested")
         self.assertEqual(events[-1]["face_clusters"], [])
 
+    def test_batch_upload_stream_auto_sends_email_when_google_user_is_logged_in(self):
+        async def fake_batch_stream(images, **kwargs):
+            yield {
+                "status": "ok",
+                "file_name": images[0].filename,
+                "total": 1,
+                "index": 1,
+                "result": {"moderation_status": "public", "is_safe_for_public": True},
+                "original_image_b64": "b3JpZ2luYWw=",
+                "drawn_image_b64": "ZHJhd24=",
+            }
+
+        fake_store = AsyncMock()
+        fake_store.enabled = True
+        fake_store.create_export_record.return_value = "export-auto-1"
+        credentials = object()
+        async def fake_classify_session_faces(session_id):
+            main._batch_sessions[session_id]["face_clusters"] = []
+            return {"available": True, "cluster_count": 0}
+
+        with (
+            patch.object(main, "batch_state_store", fake_store),
+            patch.object(main, "_get_batch_user_account", return_value="user@example.com"),
+            patch.object(main, "_get_google_user_id", return_value="google-1"),
+            patch.object(main, "get_drive_credentials", return_value=credentials),
+            patch.object(main, "batch_process_uploads_stream", fake_batch_stream),
+            patch.object(main, "_classify_session_faces", fake_classify_session_faces),
+            patch.object(main, "_upload_storage_export"),
+            patch.object(
+                main,
+                "_generate_storage_signed_url",
+                return_value=("https://signed.example/export.zip", "2026-08-11T10:00:00+00:00"),
+            ),
+            patch.object(main, "_send_gmail_notification") as send_mail,
+        ):
+            response = self.client.post(
+                "/batch_upload_stream/",
+                files=[("files", ("one.jpg", b"one", "image/jpeg"))],
+                data={
+                    "session_id": "upload-test",
+                    "run_public_classification": "false",
+                    "run_face_clustering": "true",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        send_mail.assert_called_once()
+        self.assertEqual(send_mail.call_args.args[0], credentials)
+        self.assertEqual(send_mail.call_args.args[1], "user@example.com")
+        self.assertIn("/batch_exports/storage/export-auto-1/download", send_mail.call_args.args[3])
+        self.assertEqual(fake_store.create_export_record.call_args.args[0], "upload-test")
+
     def test_batch_upload_requires_at_least_one_processing_feature(self):
         response = self.client.post(
             "/batch_upload_stream/",
@@ -407,3 +460,70 @@ class BatchUploadApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertIn("另一個頁籤", response.json()["detail"])
+
+
+class FeatureGateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_require_feature_rejects_unauthenticated_with_login_message(self):
+        request = Request({"type": "http", "session": {}})
+        with patch.object(main, "_get_google_userinfo", return_value=None):
+            with self.assertRaises(main.HTTPException) as ctx:
+                await main._require_feature(request, "export_results", "ignored")
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail, main.LOGIN_REQUIRED_DETAIL)
+
+    async def test_require_feature_keeps_feature_specific_message_when_disabled(self):
+        request = Request({"type": "http", "session": {}})
+        user = {"google_user_id": "user-1", "enabled": True, "features": {"export_results": False}}
+        with patch.object(main, "_get_google_userinfo", return_value={"id": "user-1", "email": "a@example.com"}):
+            with patch.object(main, "_get_or_create_current_user_record", new=AsyncMock(return_value=user)):
+                with self.assertRaises(main.HTTPException) as ctx:
+                    await main._require_feature(request, "export_results", "此帳號尚未開放匯出辨識結果功能")
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail, "此帳號尚未開放匯出辨識結果功能")
+
+    async def test_notify_completed_batch_session_skips_when_auto_email_disabled(self):
+        main._batch_sessions["notify-pref-test"] = {
+            "session_id": "notify-pref-test",
+            "owner_id": "owner-a",
+            "user_account": "user@example.com",
+            "google_user_id": "google-1",
+            "results": [],
+        }
+        request = Request({"type": "http", "session": {}})
+        try:
+            with patch.object(main.user_store, "get_user", new=AsyncMock(return_value={"preferences": {"auto_email_results": False}})):
+                with patch.object(main, "_persist_session_update", new=AsyncMock()) as persist_update:
+                    result = await main._notify_completed_batch_session("notify-pref-test", request)
+        finally:
+            main._batch_sessions.pop("notify-pref-test", None)
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "auto_email_disabled")
+        persist_update.assert_awaited_once()
+
+
+class UserPreferencesApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(main.app)
+
+    def test_update_user_preferences_persists_auto_email_toggle(self):
+        updated_user = {
+            "google_user_id": "google-1",
+            "email": "user@example.com",
+            "name": "User",
+            "picture": "",
+            "enabled": True,
+            "features": {},
+            "preferences": {"auto_email_results": False},
+        }
+        with (
+            patch.object(main, "_get_google_userinfo", return_value={"id": "google-1", "email": "user@example.com"}),
+            patch.object(main.user_store, "update_preferences", new=AsyncMock(return_value=updated_user)) as update_preferences,
+        ):
+            response = self.client.patch("/api/user/preferences", json={"auto_email_results": False})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["preferences"]["auto_email_results"], False)
+        update_preferences.assert_awaited_once_with("google-1", {"auto_email_results": False})

@@ -95,8 +95,12 @@ python -m pytest
 - `FIRESTORE_DATABASE`
 - `PHOTOIDENTIFIER_BACKEND_SERVICE_ACCOUNT_JSON`（Vercel server-side 優先）
 - `FIRESTORE_SERVICE_ACCOUNT_JSON`（舊值，保留作為遷移 fallback）
+- `PHOTOIDENTIFIER_EXPORTS_BUCKET`（暫存 ZIP 匯出 bucket，預設 `vision-493709-photoidentifier-exports`）
+- `EXPORT_SIGNED_URL_TTL_MINUTES`（登入後換取短效下載連結的有效分鐘數，預設 `60`）
 
-若未設定，系統會退回記憶體模式，不影響本機測試。
+匯出完成後系統會透過使用者的 Google OAuth credentials 寄出 Gmail 通知，信件中的連結會回到 `photoIdentifier` 重新驗證登入身分，再產生短效 Storage signed URL。若使用者是在加入 Gmail scope 前登入，請先登出再重新連結 Google 帳號。
+
+若未設定 Firestore，系統會退回記憶體模式，不影響本機測試；但暫存匯出通知需要 Firestore export metadata 才能從 email 下載入口回查。
 
 ---
 

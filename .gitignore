@@ -28,6 +28,9 @@ MANIFEST
 **.secr**
 data*/
 scripts
+!scripts/
+scripts/*
+!scripts/provision_photoidentifier_backend_storage.sh
 # PyInstaller
 *.manifest
 *.spec
@@ -182,6 +185,7 @@ models
 *.jpg
 *.svg
 *.sh
+!scripts/provision_photoidentifier_backend_storage.sh
 *.bat
 *.zsh
 *.iss

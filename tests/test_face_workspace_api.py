@@ -1,8 +1,11 @@
 import json
 import unittest
+import zipfile
+from io import BytesIO
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 import main
 
@@ -12,6 +15,8 @@ class FakeBatchStateStore:
 
     def __init__(self):
         self.updated_clusters = []
+        self.saved_assignments = []
+        self.export_records = {}
 
     async def get_session(self, owner_id, session_id):
         if owner_id != "owner-a" or session_id != "stored-session":
@@ -62,6 +67,61 @@ class FakeBatchStateStore:
                 "status": "completed",
             }
         ]
+
+    async def save_photo_assignments(
+        self,
+        session_id,
+        owner_id,
+        document,
+        user_account="",
+        google_user_id="",
+    ):
+        self.saved_assignments.append((session_id, owner_id, document, user_account, google_user_id))
+
+    async def create_export_record(
+        self,
+        session_id,
+        owner_id,
+        target,
+        file_name,
+        status,
+        metadata=None,
+        user_account="",
+        google_user_id="",
+    ):
+        export_id = f"export-{len(self.export_records) + 1}"
+        self.export_records[export_id] = {
+            "export_id": export_id,
+            "session_id": session_id,
+            "owner_id": owner_id,
+            "target": target,
+            "file_name": file_name,
+            "status": status,
+            "metadata": metadata or {},
+            "user_account": user_account,
+            "google_user_id": google_user_id,
+        }
+        return export_id
+
+    async def get_export_record(self, owner_id, export_id):
+        record = self.export_records.get(export_id)
+        if not record or record.get("owner_id") != owner_id:
+            return None
+        return dict(record)
+
+    async def get_export_record_for_user(self, export_id, google_user_id="", user_account=""):
+        record = self.export_records.get(export_id)
+        if not record:
+            return None
+        if google_user_id and record.get("google_user_id") == google_user_id:
+            return dict(record)
+        if user_account and record.get("user_account") == user_account:
+            return dict(record)
+        return None
+
+    async def update_export_record_metadata(self, export_id, metadata):
+        if export_id in self.export_records:
+            self.export_records[export_id]["metadata"] = dict(metadata)
 
 
 class FaceWorkspaceApiTests(unittest.TestCase):
@@ -393,6 +453,291 @@ class FaceWorkspaceApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["sessions"][0]["session_id"], "stored-session")
+
+    def test_storage_export_creates_zip_metadata_and_signed_url(self):
+        store = FakeBatchStateStore()
+        main._batch_sessions["face-workspace-test"]["batch_mode"] = "drive"
+        main._batch_sessions["face-workspace-test"]["user_account"] = "user@example.com"
+        document = {"session_id": "face-workspace-test", "photos": []}
+        with (
+            patch.object(main, "batch_state_store", store),
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+            patch.object(main, "PHOTOIDENTIFIER_EXPORTS_BUCKET", "test-exports"),
+            patch.object(main, "_upload_storage_export") as upload_export,
+            patch.object(
+                main,
+                "_generate_storage_signed_url",
+                return_value=("https://signed.example/export.zip", "2026-08-11T10:00:00+00:00"),
+            ) as signed_url,
+        ):
+            response = self.client.post(
+                "/batch_exports/storage",
+                json={"session_id": "face-workspace-test", "document": document},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["export_id"], "export-1")
+        self.assertEqual(payload["bucket_name"], "test-exports")
+        self.assertRegex(payload["file_name"], r"^results_face-workspace-test_\d{8}_\d{6}\.zip$")
+        self.assertEqual(
+            upload_export.call_args.args[:2],
+            ("test-exports", f"exports/owner-a/face-workspace-test/{payload['file_name']}"),
+        )
+        self.assertTrue(isinstance(upload_export.call_args.args[2], bytes))
+        self.assertEqual(signed_url.call_args.args[:2], ("test-exports", payload["object_name"]))
+        self.assertEqual(store.saved_assignments[0][0], "face-workspace-test")
+        self.assertEqual(
+            store.export_records["export-1"]["metadata"]["notify_email"],
+            "user@example.com",
+        )
+
+    def test_storage_export_sends_gmail_notification_with_app_download_link(self):
+        store = FakeBatchStateStore()
+        main._batch_sessions["face-workspace-test"]["batch_mode"] = "drive"
+        main._batch_sessions["face-workspace-test"]["user_account"] = "user@example.com"
+        document = {"session_id": "face-workspace-test", "photos": []}
+        credentials = object()
+        with (
+            patch.object(main, "batch_state_store", store),
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+            patch.object(main, "get_drive_credentials", return_value=credentials),
+            patch.object(main, "PHOTOIDENTIFIER_EXPORTS_BUCKET", "test-exports"),
+            patch.object(main, "_upload_storage_export"),
+            patch.object(
+                main,
+                "_generate_storage_signed_url",
+                return_value=("https://signed.example/export.zip", "2026-08-11T10:00:00+00:00"),
+            ),
+            patch.object(main, "_send_gmail_notification", create=True) as send_mail,
+        ):
+            response = self.client.post(
+                "/batch_exports/storage",
+                json={"session_id": "face-workspace-test", "document": document},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        send_mail.assert_called_once()
+        self.assertEqual(send_mail.call_args.args[0], credentials)
+        self.assertEqual(send_mail.call_args.args[1], "user@example.com")
+        self.assertIn("/batch_exports/storage/export-1/download", send_mail.call_args.args[3])
+        self.assertNotIn("https://signed.example/export.zip", send_mail.call_args.args[3])
+        self.assertEqual(store.export_records["export-1"]["metadata"]["notification_status"], "sent")
+
+    def test_storage_export_refreshes_signed_url_for_owner_only(self):
+        store = FakeBatchStateStore()
+        store.export_records["export-9"] = {
+            "export_id": "export-9",
+            "session_id": "face-workspace-test",
+            "owner_id": "owner-a",
+            "target": "storage",
+            "file_name": "results_face-workspace-test_20260811_100000.zip",
+            "metadata": {
+                "bucket_name": "test-exports",
+                "object_name": "exports/owner-a/face-workspace-test/results_face-workspace-test_20260811_100000.zip",
+            },
+        }
+        with (
+            patch.object(main, "batch_state_store", store),
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+            patch.object(
+                main,
+                "_generate_storage_signed_url",
+                return_value=("https://signed.example/fresh.zip", "2026-08-11T11:00:00+00:00"),
+            ) as signed_url,
+        ):
+            response = self.client.get("/batch_exports/storage/export-9")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["download_url"], "https://signed.example/fresh.zip")
+        self.assertEqual(
+            signed_url.call_args.args[:2],
+            (
+                "test-exports",
+                "exports/owner-a/face-workspace-test/results_face-workspace-test_20260811_100000.zip",
+            ),
+        )
+
+    def test_storage_export_refresh_rejects_other_owner(self):
+        store = FakeBatchStateStore()
+        store.export_records["export-9"] = {
+            "export_id": "export-9",
+            "session_id": "face-workspace-test",
+            "owner_id": "owner-a",
+            "target": "storage",
+            "file_name": "results.zip",
+            "metadata": {"bucket_name": "test-exports", "object_name": "exports/owner-a/face-workspace-test/results.zip"},
+        }
+        with (
+            patch.object(main, "batch_state_store", store),
+            patch.object(main, "_get_client_id", return_value="owner-b"),
+        ):
+            response = self.client.get("/batch_exports/storage/export-9")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_storage_export_download_entry_redirects_to_fresh_signed_url(self):
+        store = FakeBatchStateStore()
+        store.export_records["export-9"] = {
+            "export_id": "export-9",
+            "session_id": "face-workspace-test",
+            "owner_id": "owner-a",
+            "target": "storage",
+            "file_name": "results.zip",
+            "metadata": {"bucket_name": "test-exports", "object_name": "exports/owner-a/face-workspace-test/results.zip"},
+        }
+        with (
+            patch.object(main, "batch_state_store", store),
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+            patch.object(main, "_get_google_userinfo", return_value={"id": "user-1", "email": "user@example.com"}),
+            patch.object(
+                main,
+                "_generate_storage_signed_url",
+                return_value=("https://signed.example/fresh.zip", "2026-08-11T11:00:00+00:00"),
+            ),
+        ):
+            response = self.client.get("/batch_exports/storage/export-9/download", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "https://signed.example/fresh.zip")
+
+    def test_google_auth_stores_relative_next_redirect(self):
+        request = Request({"type": "http", "session": {}})
+        with (
+            patch.object(main, "_validate_oauth_request_host"),
+            patch.object(main, "get_auth_url", return_value=("https://accounts.google.com/o/oauth2/auth", "state-1", "verifier-1")),
+        ):
+            response = main.google_auth(request, next="/batch_exports/storage/export-1/download")
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "https://accounts.google.com/o/oauth2/auth")
+        self.assertEqual(request.session.get("oauth_next"), "/batch_exports/storage/export-1/download")
+
+    def test_storage_export_download_redirects_to_login_when_not_authenticated(self):
+        store = FakeBatchStateStore()
+        store.export_records["export-9"] = {
+            "export_id": "export-9",
+            "session_id": "face-workspace-test",
+            "owner_id": "owner-a",
+            "target": "storage",
+            "file_name": "results.zip",
+            "metadata": {"bucket_name": "test-exports", "object_name": "exports/owner-a/face-workspace-test/results.zip"},
+        }
+        with (
+            patch.object(main, "batch_state_store", store),
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+            patch.object(main, "_get_google_userinfo", return_value=None),
+        ):
+            response = self.client.get("/batch_exports/storage/export-9/download", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(
+            response.headers["location"],
+            "/auth/google?next=/batch_exports/storage/export-9/download",
+        )
+
+    def test_storage_export_download_recovers_record_by_google_identity(self):
+        store = FakeBatchStateStore()
+        store.export_records["export-9"] = {
+            "export_id": "export-9",
+            "session_id": "face-workspace-test",
+            "owner_id": "owner-original",
+            "target": "storage",
+            "file_name": "results.zip",
+            "user_account": "user@example.com",
+            "google_user_id": "google-1",
+            "metadata": {"bucket_name": "test-exports", "object_name": "exports/owner-original/face-workspace-test/results.zip"},
+        }
+        with (
+            patch.object(main, "batch_state_store", store),
+            patch.object(main, "_get_client_id", return_value="owner-new"),
+            patch.object(main, "_get_google_userinfo", return_value={"id": "google-1", "email": "user@example.com"}),
+            patch.object(
+                main,
+                "_generate_storage_signed_url",
+                return_value=("https://signed.example/fresh.zip", "2026-08-11T11:00:00+00:00"),
+            ),
+        ):
+            response = self.client.get("/batch_exports/storage/export-9/download", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "https://signed.example/fresh.zip")
+
+    def test_storage_export_zip_contains_importable_workspace_files(self):
+        document = {
+            "schema_version": "photoidentifier.export.v1",
+            "session_id": "face-workspace-test",
+            "batch_mode": "drive",
+            "results": [{"file_name": "one.jpg"}],
+            "face_clusters": [],
+            "photos": [{"file_name": "one.jpg", "people": []}],
+        }
+
+        file_name, content = main._build_storage_export_zip(document, "face-workspace-test")
+
+        self.assertTrue(file_name.endswith(".zip"))
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            names = set(archive.namelist())
+            self.assertIn("result.json", names)
+            self.assertIn("workspace.json", names)
+            self.assertTrue(any(name.startswith("photo_people_") and name.endswith(".json") for name in names))
+            self.assertEqual(json.loads(archive.read("workspace.json")), document)
+            self.assertEqual(json.loads(archive.read("result.json")), document)
+
+    def test_storage_export_zip_contains_original_images_and_archive_paths(self):
+        document = {
+            "schema_version": "photoidentifier.export.v1",
+            "session_id": "face-workspace-test",
+            "batch_mode": "upload",
+            "photo_angle_folders": [
+                {
+                    "name": "0人",
+                    "path_segments": ["0人"],
+                    "photos": [{"file_name": "one.jpg", "drive_id": None, "people": []}],
+                }
+            ],
+            "results": [{"file_name": "one.jpg"}],
+            "face_clusters": [],
+            "photos": [{"file_name": "one.jpg", "people": []}],
+        }
+        session = {
+            "session_id": "face-workspace-test",
+            "results": [{"file_name": "one.jpg", "original_image_b64": "cHJldmlldy1pbWFnZQ=="}],
+            "original_images": {"one.jpg": b"full-original-image"},
+        }
+
+        export_document, image_entries = main._build_storage_export_images(document, session)
+        _file_name, content = main._build_storage_export_zip(export_document, "face-workspace-test", image_entries)
+
+        self.assertEqual(len(image_entries), 1)
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            names = set(archive.namelist())
+            self.assertIn("0人/one.jpg", names)
+            self.assertEqual(archive.read("0人/one.jpg"), b"full-original-image")
+            workspace = json.loads(archive.read("workspace.json"))
+            self.assertEqual(workspace["photos"][0]["archive_relative_path"], "0人/one.jpg")
+            self.assertEqual(workspace["results"][0]["archive_relative_path"], "0人/one.jpg")
+
+    def test_session_export_document_builds_photo_angle_folders(self):
+        session = {
+            "session_id": "face-workspace-test",
+            "batch_mode": "upload",
+            "results": [{"file_name": "one.jpg", "status": "ok"}],
+            "face_clusters": [
+                {
+                    "cluster_id": "cluster_001",
+                    "display_name": "人物 001",
+                    "status": "confirmed",
+                    "evidence_photos": [{"file_name": "one.jpg"}],
+                }
+            ],
+        }
+
+        document = main._build_session_export_document(session)
+
+        self.assertEqual(document["photos"][0]["people"][0]["cluster_id"], "cluster_001")
+        self.assertEqual(document["photo_angle_folders"][0]["path_segments"], ["1人", "人物 001"])
+        self.assertEqual(document["photo_angle_folders"][0]["photos"][0]["file_name"], "one.jpg")
 
 
 if __name__ == "__main__":

@@ -141,6 +141,24 @@ class NullBatchStateStore:
         metadata: dict[str, Any] | None = None,
         user_account: str = "",
         google_user_id: str = "",
+    ) -> str:
+        return ""
+
+    async def get_export_record(self, owner_id: str, export_id: str) -> dict[str, Any] | None:
+        return None
+
+    async def get_export_record_for_user(
+        self,
+        export_id: str,
+        google_user_id: str = "",
+        user_account: str = "",
+    ) -> dict[str, Any] | None:
+        return None
+
+    async def update_export_record_metadata(
+        self,
+        export_id: str,
+        metadata: dict[str, Any],
     ) -> None:
         return None
 
@@ -392,7 +410,7 @@ class FirestoreBatchStateStore:
         metadata: dict[str, Any] | None = None,
         user_account: str = "",
         google_user_id: str = "",
-    ) -> None:
+    ) -> str:
         payload = {
             "export_id": export_doc_id(session_id, file_name),
             "session_id": session_id,
@@ -409,6 +427,54 @@ class FirestoreBatchStateStore:
         await run_in_threadpool(
             self._client.collection("exports").document(payload["export_id"]).set,
             payload,
+        )
+        return str(payload["export_id"])
+
+    async def get_export_record(self, owner_id: str, export_id: str) -> dict[str, Any] | None:
+        def read() -> dict[str, Any] | None:
+            snap = self._client.collection("exports").document(export_id).get()
+            if not snap.exists:
+                return None
+            payload = snap.to_dict() or {}
+            if payload.get("owner_id") != owner_id:
+                return None
+            return payload
+
+        return await run_in_threadpool(read)
+
+    async def get_export_record_for_user(
+        self,
+        export_id: str,
+        google_user_id: str = "",
+        user_account: str = "",
+    ) -> dict[str, Any] | None:
+        normalized_google_user_id = str(google_user_id or "").strip()
+        normalized_user_account = str(user_account or "").strip().lower()
+
+        def read() -> dict[str, Any] | None:
+            snap = self._client.collection("exports").document(export_id).get()
+            if not snap.exists:
+                return None
+            payload = snap.to_dict() or {}
+            payload_google_user_id = str(payload.get("google_user_id") or "").strip()
+            payload_user_account = str(payload.get("user_account") or "").strip().lower()
+            if normalized_google_user_id and payload_google_user_id == normalized_google_user_id:
+                return payload
+            if normalized_user_account and payload_user_account == normalized_user_account:
+                return payload
+            return None
+
+        return await run_in_threadpool(read)
+
+    async def update_export_record_metadata(
+        self,
+        export_id: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        await run_in_threadpool(
+            self._client.collection("exports").document(export_id).set,
+            {"metadata": strip_image_payload(metadata), "updated_at": iso_utc()},
+            merge=True,
         )
 
 

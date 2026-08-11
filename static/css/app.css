@@ -942,6 +942,7 @@ body.app-busy {
     flex-direction: column;
     flex: 1;
     min-width: 0;
+    gap: 0.18rem;
 }
 
 .user-name {
@@ -959,6 +960,37 @@ body.app-busy {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.user-pref-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-top: 0.35rem;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    width: fit-content;
+}
+
+.user-pref-toggle input {
+    accent-color: var(--accent-color);
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.user-pref-toggle span {
+    color: var(--text-primary);
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.user-pref-status {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    line-height: 1.2;
 }
 
 .logout-btn {
@@ -1007,6 +1039,19 @@ body.app-busy {
 }
 
 @media (max-width: 640px) {
+    .user-profile-mini {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .user-info-text {
+        min-width: calc(100% - 58px);
+    }
+
+    .user-pref-toggle {
+        flex-wrap: wrap;
+    }
+
     .logout-btn {
         min-width: 64px;
         height: 34px;

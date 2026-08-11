@@ -13,6 +13,7 @@ DEFAULT_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
     "https://www.googleapis.com/auth/drive", # 需要完整的 Drive 權限以列出檔案並有可能移動檔案
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 # 偵測 Vercel 環境以確保檔案寫入權限 (Vercel 只有 /tmp 是可寫的)

@@ -46,6 +46,11 @@
                         <div class="user-info-text">
                             <span id="user-name" class="user-name">載入中...</span>
                             <span id="user-email" class="user-email"></span>
+                            <label class="user-pref-toggle" for="auto-email-results-toggle">
+                                <input type="checkbox" id="auto-email-results-toggle" checked>
+                                <span>自動寄送辨識結果</span>
+                                <small id="auto-email-results-status" class="user-pref-status">已開啟</small>
+                            </label>
                         </div>
                         <button id="google-logout-btn" class="logout-btn" onclick="location.href='/auth/logout'" title="登出並清除授權">
                             <span class="logout-btn-label">登出</span>

@@ -17,6 +17,9 @@ DEFAULT_FEATURES = {
     "export_results": True,
     "public_classification": False,
 }
+DEFAULT_PREFERENCES = {
+    "auto_email_results": True,
+}
 
 PUBLIC_CLASSIFICATION_DENIED_DETAIL = "此帳號尚未開放可公開性判定功能"
 
@@ -34,6 +37,7 @@ def default_user_record(userinfo: dict[str, Any] | None = None) -> dict[str, Any
         "picture": str((userinfo or {}).get("picture") or ""),
         "enabled": True,
         "features": dict(DEFAULT_FEATURES),
+        "preferences": dict(DEFAULT_PREFERENCES),
         "created_at": iso_utc(),
         "updated_at": iso_utc(),
         "last_login_at": iso_utc(),
@@ -51,12 +55,22 @@ def public_user_payload(user: dict[str, Any] | None) -> dict[str, Any]:
                 "picture": str(user.get("picture") or ""),
                 "enabled": user.get("enabled") is True,
                 "features": _read_features(user),
+                "preferences": _read_preferences(user),
                 "created_at": user.get("created_at") or "",
                 "updated_at": user.get("updated_at") or "",
                 "last_login_at": user.get("last_login_at") or "",
             }
         )
     return payload
+
+
+def _read_preferences(user: dict[str, Any] | None) -> dict[str, bool]:
+    raw_preferences = (user or {}).get("preferences")
+    raw_preferences = raw_preferences if isinstance(raw_preferences, dict) else {}
+    preferences: dict[str, bool] = {}
+    for preference, default_value in DEFAULT_PREFERENCES.items():
+        preferences[preference] = raw_preferences.get(preference, default_value) is True
+    return preferences
 
 
 def _read_features(user: dict[str, Any] | None) -> dict[str, bool]:
@@ -104,6 +118,11 @@ class NullUserStore:
         if feature == "public_classification":
             return False
         return DEFAULT_FEATURES.get(feature) is True
+
+    async def update_preferences(self, google_user_id: str, preferences: dict[str, bool]) -> dict[str, Any]:
+        payload = default_user_record({"id": google_user_id})
+        payload["preferences"] = {**DEFAULT_PREFERENCES, **preferences}
+        return payload
 
 
 class FirestoreUserStore:
@@ -167,6 +186,7 @@ class FirestoreUserStore:
             **profile_payload,
             "enabled": True,
             "features": dict(DEFAULT_FEATURES),
+            "preferences": dict(DEFAULT_PREFERENCES),
             "created_at": now,
         }
         ref.set(payload)
@@ -188,6 +208,26 @@ class FirestoreUserStore:
             logger.exception("Failed to read user permission google_user_id=%s feature=%s", google_user_id, feature)
             return False
         return feature_enabled(user, feature)
+
+    def update_preferences_sync(self, google_user_id: str, preferences: dict[str, bool]) -> dict[str, Any]:
+        google_user_id = str(google_user_id or "").strip()
+        if not google_user_id:
+            raise ValueError("Google user id is required")
+        payload = {
+            "preferences": {
+                **DEFAULT_PREFERENCES,
+                **{key: value is True for key, value in preferences.items() if key in DEFAULT_PREFERENCES},
+            },
+            "updated_at": iso_utc(),
+        }
+        ref = self._user_ref(google_user_id)
+        ref.set(payload, merge=True)
+        user = ref.get().to_dict() or {}
+        user["google_user_id"] = google_user_id
+        return user
+
+    async def update_preferences(self, google_user_id: str, preferences: dict[str, bool]) -> dict[str, Any]:
+        return await run_in_threadpool(self.update_preferences_sync, google_user_id, preferences)
 
 
 def create_user_store() -> FirestoreUserStore | NullUserStore:

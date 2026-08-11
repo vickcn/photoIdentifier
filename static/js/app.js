@@ -44,6 +44,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const localBatchInputs = document.getElementById('local-batch-inputs');
     const driveBatchInputs = document.getElementById('drive-batch-inputs');
     const googleLoginBtn = document.getElementById('google-login-btn');
+    const autoEmailResultsToggle = document.getElementById('auto-email-results-toggle');
+    const autoEmailResultsStatus = document.getElementById('auto-email-results-status');
 
     const batchDropZone = document.getElementById('batch-drop-zone');
     const batchFileInput = document.getElementById('batch-file-input');
@@ -77,10 +79,14 @@ document.addEventListener('DOMContentLoaded', () => {
         export_results: true,
         public_classification: false,
     };
+    const DEFAULT_USER_PREFERENCES = {
+        auto_email_results: true,
+    };
     let currentUser = {
         logged_in: false,
         enabled: false,
         features: { ...DEFAULT_USER_FEATURES },
+        preferences: { ...DEFAULT_USER_PREFERENCES },
     };
 
     function userHasFeature(feature) {
@@ -89,6 +95,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function syncSingleAnalyzeAvailability() {
         analyzeSingleBtn.disabled = !singleSelectedFile || !userHasFeature('public_classification');
+    }
+
+    function syncAutoEmailPreferenceUi() {
+        if (!autoEmailResultsToggle || !autoEmailResultsStatus) return;
+        const enabled = currentUser?.preferences?.auto_email_results !== false;
+        autoEmailResultsToggle.checked = enabled;
+        autoEmailResultsToggle.disabled = !currentUser?.logged_in;
+        autoEmailResultsStatus.textContent = enabled ? '已開啟' : '已關閉';
     }
 
     function syncPermissionUi() {
@@ -273,8 +287,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     googleLoginBtn.addEventListener('click', () => {
-        // 這裡導向後端的 OAuth 入口 (預計實作為 /auth/google)
-        window.location.href = '/auth/google';
+        const next = `${window.location.pathname}${window.location.search}`;
+        window.location.href = `/auth/google?next=${encodeURIComponent(next)}`;
     });
 
     async function checkLoginStatus() {
@@ -290,6 +304,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ...data,
                     enabled: data.enabled === true,
                     features: { ...DEFAULT_USER_FEATURES, ...(data.features || {}) },
+                    preferences: { ...DEFAULT_USER_PREFERENCES, ...(data.preferences || {}) },
                 };
                 guestArea.classList.add('hidden');
                 userArea.classList.remove('hidden');
@@ -301,10 +316,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     logged_in: false,
                     enabled: false,
                     features: { ...DEFAULT_USER_FEATURES },
+                    preferences: { ...DEFAULT_USER_PREFERENCES },
                 };
                 guestArea.classList.remove('hidden');
                 userArea.classList.add('hidden');
             }
+            syncAutoEmailPreferenceUi();
             syncPermissionUi();
         } catch (err) {
             console.warn("Failed to check login status:", err);
@@ -312,10 +329,40 @@ document.addEventListener('DOMContentLoaded', () => {
                 logged_in: false,
                 enabled: false,
                 features: { ...DEFAULT_USER_FEATURES },
+                preferences: { ...DEFAULT_USER_PREFERENCES },
             };
+            syncAutoEmailPreferenceUi();
             syncPermissionUi();
         }
     }
+
+    autoEmailResultsToggle?.addEventListener('change', async () => {
+        if (!currentUser.logged_in) {
+            autoEmailResultsToggle.checked = currentUser?.preferences?.auto_email_results !== false;
+            return;
+        }
+        const nextValue = autoEmailResultsToggle.checked;
+        autoEmailResultsToggle.disabled = true;
+        autoEmailResultsStatus.textContent = '儲存中…';
+        try {
+            const response = await fetch('/api/user/preferences', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ auto_email_results: nextValue }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || '偏好設定更新失敗');
+            currentUser.preferences = { ...DEFAULT_USER_PREFERENCES, ...(data.preferences || {}), auto_email_results: nextValue };
+            syncAutoEmailPreferenceUi();
+            showToast(nextValue ? '已開啟自動寄送' : '已關閉自動寄送');
+        } catch (error) {
+            currentUser.preferences = { ...currentUser.preferences, auto_email_results: !nextValue };
+            syncAutoEmailPreferenceUi();
+            showToast(error.message || '偏好設定更新失敗', 'error');
+        } finally {
+            autoEmailResultsToggle.disabled = false;
+        }
+    });
 
     checkLoginStatus();
 
@@ -3524,6 +3571,30 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function saveExportToStorage(document) {
+        if (!window._currentSessionId) return { attempted: false };
+        try {
+            const response = await fetch('/batch_exports/storage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: window._currentSessionId,
+                    document,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || '暫存下載通知建立失敗');
+            return {
+                attempted: true,
+                success: true,
+                exportId: data.export_id,
+                notificationStatus: data.notification_status,
+            };
+        } catch (error) {
+            return { attempted: true, success: false, error: error.message };
+        }
+    }
+
     async function saveBatchResultsToDrive() {
         if (batchMode !== 'drive' || currentBatchResults.length === 0) {
             showToast('目前沒有可儲存的雲端辨識結果', 'error');
@@ -3544,11 +3615,25 @@ document.addEventListener('DOMContentLoaded', () => {
         showLoading(true);
         document.getElementById('loading-text').textContent = '正在儲存辨識結果…';
         try {
-            const result = await saveExportToDrive(buildBatchResultExport());
+            const exportDocument = buildBatchResultExport();
+            const result = await saveExportToDrive(exportDocument);
             if (!result.success) throw new Error(result.error || 'Google 雲端儲存失敗');
+            const storageResult = await saveExportToStorage(exportDocument);
             const copiedCount = result.peopleCopy?.copied_count || 0;
             const copySuffix = copiedCount ? `，已複製 ${copiedCount} 張照片到人物資料夾` : '';
-            showToast(`已儲存辨識結果：${result.fileName}${copySuffix}`);
+            let notificationSuffix = '';
+            let toastType = 'success';
+            if (storageResult.success) {
+                notificationSuffix = storageResult.notificationStatus === 'sent'
+                    ? '，已寄出下載通知'
+                    : storageResult.notificationStatus === 'failed'
+                        ? '，暫存下載已建立但通知寄送失敗'
+                        : '，已建立暫存下載';
+            } else if (storageResult.attempted) {
+                notificationSuffix = `，暫存下載通知失敗：${storageResult.error}`;
+                toastType = 'error';
+            }
+            showToast(`已儲存辨識結果：${result.fileName}${copySuffix}${notificationSuffix}`, toastType);
         } catch (error) {
             showToast(`儲存失敗：${error.message}`, 'error');
         } finally {
@@ -3652,7 +3737,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            showToast(localMessage, localMessageType);
+            let notificationSuffix = '';
+            if (userHasFeature('export_results')) {
+                const storageResult = await saveExportToStorage(exportDocument);
+                if (storageResult.success) {
+                    notificationSuffix = storageResult.notificationStatus === 'sent'
+                        ? '，已寄出下載通知'
+                        : storageResult.notificationStatus === 'failed'
+                            ? '，暫存下載已建立但通知寄送失敗'
+                            : '，已建立暫存下載';
+                } else if (storageResult.attempted) {
+                    notificationSuffix = `，暫存下載通知失敗：${storageResult.error}`;
+                    localMessageType = 'error';
+                }
+            }
+            showToast(`${localMessage}${notificationSuffix}`, localMessageType);
         } catch (error) {
             console.error('Batch result export failed:', error);
             downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
