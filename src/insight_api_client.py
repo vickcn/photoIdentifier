@@ -548,6 +548,33 @@ def _image_dimensions_for_source(source: dict | None) -> tuple[int | None, int |
         return None, None
 
 
+def _read_positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _bbox_basis_for_face(face: dict[str, Any], image: dict[str, Any], source: dict | None) -> tuple[int | None, int | None]:
+    source_width, source_height = _image_dimensions_for_source(source)
+    width = (
+        _read_positive_int(face.get("image_width"))
+        or _read_positive_int(face.get("source_width"))
+        or _read_positive_int(image.get("image_width"))
+        or _read_positive_int(image.get("width"))
+        or source_width
+    )
+    height = (
+        _read_positive_int(face.get("image_height"))
+        or _read_positive_int(face.get("source_height"))
+        or _read_positive_int(image.get("image_height"))
+        or _read_positive_int(image.get("height"))
+        or source_height
+    )
+    return width, height
+
+
 def _source_ref_for_cluster_evidence(source: dict | None) -> tuple[str, str | None]:
     if not source:
         return "missing", None
@@ -596,12 +623,16 @@ def build_clusters_from_response(response: dict, source_by_name: dict[str, dict]
             if source is None:
                 missing_source_names.add(file_name)
             source_type, source_key = _source_ref_for_cluster_evidence(source)
-            image_width, image_height = _image_dimensions_for_source(source)
+            image_width, image_height = _bbox_basis_for_face(face, image, source)
             evidence_photos.append(
                 {
                     "file_name": file_name,
                     "face_index": face["face_index"],
                     "bbox": face["bbox"],
+                    "bbox_space": str(face.get("bbox_space") or "pixel"),
+                    "bbox_order": str(face.get("bbox_order") or "xyxy"),
+                    "bbox_basis_width": image_width,
+                    "bbox_basis_height": image_height,
                     "score": face["score"],
                     "image_b64": source.get("original_image_b64") if source else None,
                     "thumbnail_b64": _thumbnail_b64_for_source(source),

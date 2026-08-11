@@ -138,7 +138,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (source === 'drive') {
             return config?.batch_upload_concurrency_cloud_message || `Google 雲端一次最多先看 ${getBatchConcurrencyCap(source)} 張，這樣整理起來會比較穩。`;
         }
-        return config?.batch_upload_concurrency_local_message || `這台電腦一次最多先看 ${getBatchConcurrencyCap(source)} 張，我會慢慢幫你整理好。`;
+        return config?.batch_upload_concurrency_local_message || `這台裝置一次最多先看 ${getBatchConcurrencyCap(source)} 張，我會慢慢幫你整理好。`;
     }
 
     function getBatchUploadLimits(source = getSelectedBatchSource()) {
@@ -163,7 +163,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return config?.batch_upload_limits_cloud_message || `Google 雲端會每 ${getBatchUploadLimits(source).batchSize} 張分成一批送出，全部準備好後再整理人物。`;
         }
         const limits = getBatchUploadLimits(source);
-        return config?.batch_upload_limits_local_message || `這台電腦一次可先準備 ${limits.totalMaxFiles} 張，會每 ${limits.batchSize} 張分成一批整理；單檔 ${config?.batch_upload_max_file_mb || 2}MB、合計 ${config?.batch_upload_max_total_mb || 4}MB 以內。`;
+        return config?.batch_upload_limits_local_message || `這台裝置一次可先準備 ${limits.totalMaxFiles} 張，會每 ${limits.batchSize} 張分成一批整理；單檔 ${config?.batch_upload_max_file_mb || 2}MB、合計 ${config?.batch_upload_max_total_mb || 4}MB 以內。`;
     }
 
     function normalizeDrivePickerFile(doc) {
@@ -185,13 +185,12 @@ document.addEventListener('DOMContentLoaded', () => {
             driveSourceSelectionSummary.textContent = `已選 ${selectedDriveFiles.length} 張雲端圖片`;
             return;
         }
-        driveSourceSelectionSummary.textContent = driveFolderId.value.trim()
-            ? '已選 Google 雲端資料夾，會整理資料夾內的圖片。'
-            : '可選一個資料夾，或一次選多張圖片。';
+        driveSourceSelectionSummary.textContent = '尚未選取雲端圖片。';
     }
 
     function clearSelectedDriveFiles() {
         selectedDriveFiles = [];
+        if (driveFolderId) driveFolderId.value = '';
         syncDriveSourceSelectionSummary();
     }
 
@@ -1291,6 +1290,63 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    function readFaceBboxBasis(evidence = {}, fallbackWidth = 0, fallbackHeight = 0) {
+        const width = Number(evidence.bbox_basis_width || evidence.image_width || evidence.source_width || 0) || Number(fallbackWidth || 0);
+        const height = Number(evidence.bbox_basis_height || evidence.image_height || evidence.source_height || 0) || Number(fallbackHeight || 0);
+        const space = String(evidence.bbox_space || 'pixel').toLowerCase();
+        const rawOrder = String(evidence.bbox_order || 'xyxy').toLowerCase();
+        return {
+            width,
+            height,
+            space,
+            order: space.includes('yxyx') ? 'yxyx' : rawOrder,
+        };
+    }
+
+    function normalizeFaceBboxToPixelSpace(bbox, evidence = {}, targetWidth = 0, targetHeight = 0) {
+        if (!Array.isArray(bbox) || bbox.length !== 4) return null;
+        const values = bbox.map(Number);
+        if (values.some(value => !Number.isFinite(value))) return null;
+
+        const basis = readFaceBboxBasis(evidence, targetWidth, targetHeight);
+        const basisWidth = basis.width || targetWidth;
+        const basisHeight = basis.height || targetHeight;
+        if (!basisWidth || !basisHeight || !targetWidth || !targetHeight) return null;
+
+        let x1;
+        let y1;
+        let x2;
+        let y2;
+        if (basis.order === 'yxyx') {
+            [y1, x1, y2, x2] = values;
+        } else {
+            [x1, y1, x2, y2] = values;
+        }
+
+        if (basis.space === 'normalized_1000' || basis.space === 'normalized_1000_yxyx') {
+            x1 = (x1 / 1000) * targetWidth;
+            x2 = (x2 / 1000) * targetWidth;
+            y1 = (y1 / 1000) * targetHeight;
+            y2 = (y2 / 1000) * targetHeight;
+        } else {
+            x1 = (x1 / basisWidth) * targetWidth;
+            x2 = (x2 / basisWidth) * targetWidth;
+            y1 = (y1 / basisHeight) * targetHeight;
+            y2 = (y2 / basisHeight) * targetHeight;
+        }
+
+        const left = Math.min(x1, x2);
+        const top = Math.min(y1, y2);
+        const right = Math.max(x1, x2);
+        const bottom = Math.max(y1, y2);
+        return [
+            Math.max(0, Math.min(targetWidth, left)),
+            Math.max(0, Math.min(targetHeight, top)),
+            Math.max(0, Math.min(targetWidth, right)),
+            Math.max(0, Math.min(targetHeight, bottom)),
+        ];
+    }
+
     function renderFaceFocusOverlay() {
         const overlay = getFaceFocusOverlay();
         const bbox = Array.isArray(focusedFaceEvidence?.bbox) ? focusedFaceEvidence.bbox.map(Number) : null;
@@ -1299,13 +1355,17 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const [x1, y1, x2, y2] = scaleFaceBboxForImageSize(
+        const pixelBbox = normalizeFaceBboxToPixelSpace(
             bbox,
-            Number(focusedFaceEvidence?.image_width || 0),
-            Number(focusedFaceEvidence?.image_height || 0),
+            focusedFaceEvidence,
             annotatedImg.naturalWidth,
             annotatedImg.naturalHeight,
         );
+        if (!pixelBbox) {
+            overlay.classList.add('hidden');
+            return;
+        }
+        const [x1, y1, x2, y2] = pixelBbox;
         const imageRect = getContainedImageContentRect(annotatedImg);
         const parentRect = annotatedImg.closest('.image-box').getBoundingClientRect();
         const left = imageRect.left - parentRect.left + (x1 / annotatedImg.naturalWidth) * imageRect.width;
@@ -1815,15 +1875,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if (memory) localUploadCommonFields.collaborative_memory = memory;
             requestOptions = { method: 'POST' };
         } else {
-            const fId = driveFolderId.value.trim();
             const tId = driveTargetId.value.trim();
-            if (!fId && selectedDriveFiles.length === 0) {
-                showToast('請先選 Google 雲端資料夾或圖片', 'error');
+            if (selectedDriveFiles.length === 0) {
+                showToast('請先選 Google 雲端圖片', 'error');
                 return;
             }
             endpoint = '/batch_drive_start/';
             body = {
-                folder_id: fId || null,
+                folder_id: null,
                 drive_files: selectedDriveFiles.length ? selectedDriveFiles : null,
                 target_folder_id: tId || null,
                 concurrency: currentConcurrency,
@@ -2347,31 +2406,32 @@ document.addEventListener('DOMContentLoaded', () => {
         if (imageSource?.kind) attrs.push(`data-face-source-kind="${escapeHtml(imageSource.kind)}"`);
         if (Number(evidence.image_width) > 0) attrs.push(`data-face-source-width="${Number(evidence.image_width)}"`);
         if (Number(evidence.image_height) > 0) attrs.push(`data-face-source-height="${Number(evidence.image_height)}"`);
+        if (Number(evidence.bbox_basis_width) > 0) attrs.push(`data-face-bbox-basis-width="${Number(evidence.bbox_basis_width)}"`);
+        if (Number(evidence.bbox_basis_height) > 0) attrs.push(`data-face-bbox-basis-height="${Number(evidence.bbox_basis_height)}"`);
+        if (evidence.bbox_space) attrs.push(`data-face-bbox-space="${escapeHtml(evidence.bbox_space)}"`);
+        if (evidence.bbox_order) attrs.push(`data-face-bbox-order="${escapeHtml(evidence.bbox_order)}"`);
         return attrs.length ? ` ${attrs.join(' ')}` : '';
-    }
-
-    function scaleFaceBboxForImageSize(bbox, sourceWidth, sourceHeight, targetWidth, targetHeight) {
-        const scaleX = sourceWidth ? targetWidth / sourceWidth : 1;
-        const scaleY = sourceHeight ? targetHeight / sourceHeight : 1;
-        return [
-            bbox[0] * scaleX,
-            bbox[1] * scaleY,
-            bbox[2] * scaleX,
-            bbox[3] * scaleY,
-        ];
     }
 
     function scaleFaceBboxForLoadedImage(bbox, sourceImage, img) {
         const sourceKind = img.dataset.faceSourceKind || '';
-        const sourceWidth = Number(img.dataset.faceSourceWidth || 0);
-        const sourceHeight = Number(img.dataset.faceSourceHeight || 0);
-        if (sourceKind === 'thumbnail' && (!sourceWidth || !sourceHeight)) {
+        const evidence = {
+            bbox_basis_width: Number(img.dataset.faceBboxBasisWidth || 0),
+            bbox_basis_height: Number(img.dataset.faceBboxBasisHeight || 0),
+            image_width: Number(img.dataset.faceSourceWidth || 0),
+            image_height: Number(img.dataset.faceSourceHeight || 0),
+            bbox_space: img.dataset.faceBboxSpace || 'pixel',
+            bbox_order: img.dataset.faceBboxOrder || 'xyxy',
+        };
+        const hasExplicitBasis = Boolean(
+            evidence.bbox_basis_width || evidence.bbox_basis_height || evidence.image_width || evidence.image_height
+        );
+        if (sourceKind === 'thumbnail' && !hasExplicitBasis) {
             return null;
         }
-        return scaleFaceBboxForImageSize(
+        return normalizeFaceBboxToPixelSpace(
             bbox,
-            sourceWidth,
-            sourceHeight,
+            evidence,
             sourceImage.naturalWidth,
             sourceImage.naturalHeight,
         );
@@ -3371,6 +3431,10 @@ document.addEventListener('DOMContentLoaded', () => {
             face_id: evidence?.face_id || null,
             drive_id: evidence?.drive_id || null,
             bbox: Array.isArray(evidence?.bbox) ? evidence.bbox.map(Number) : null,
+            bbox_space: evidence?.bbox_space || 'pixel',
+            bbox_order: evidence?.bbox_order || 'xyxy',
+            bbox_basis_width: Number(evidence?.bbox_basis_width || evidence?.image_width) || 0,
+            bbox_basis_height: Number(evidence?.bbox_basis_height || evidence?.image_height) || 0,
             image_width: Number(evidence?.image_width) || 0,
             image_height: Number(evidence?.image_height) || 0,
         };
@@ -4333,21 +4397,26 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const isSourcePicker = targetId === 'drive-folder-id';
             const view = new google.picker.DocsView(google.picker.ViewId.DOCS);
-            view.setIncludeFolders(true);
-            view.setSelectFolderEnabled(true);
-            view.setMimeTypes(isSourcePicker
-                ? 'image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/vnd.google-apps.folder'
-                : 'application/vnd.google-apps.folder');
+            if (isSourcePicker) {
+                view.setIncludeFolders(false);
+                view.setMimeTypes('image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif');
+            } else {
+                view.setIncludeFolders(true);
+                view.setSelectFolderEnabled(true);
+                view.setMimeTypes('application/vnd.google-apps.folder');
+            }
 
-            const picker = new google.picker.PickerBuilder()
+            let builder = new google.picker.PickerBuilder()
                 .enableFeature(google.picker.Feature.NAV_HIDDEN)
-                .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
                 .setAppId(config.google_app_id)
                 .setOAuthToken(oauthToken)
                 .addView(view)
                 .setDeveloperKey(config.google_api_key)
-                .setCallback((data) => pickerCallback(data, targetId))
-                .build();
+                .setCallback((data) => pickerCallback(data, targetId));
+            if (isSourcePicker) {
+                builder = builder.enableFeature(google.picker.Feature.MULTISELECT_ENABLED);
+            }
+            const picker = builder.build();
 
             picker.setVisible(true);
         } catch (e) {
@@ -4368,24 +4437,19 @@ document.addEventListener('DOMContentLoaded', () => {
             const imageFiles = docs.map(normalizeDrivePickerFile).filter(Boolean);
             if (input) {
                 if (targetId === 'drive-folder-id') {
-                    if (imageFiles.length > 0) {
-                        selectedDriveFiles = imageFiles;
-                        input.value = '';
-                        input.dispatchEvent(new Event('change'));
-                        syncDriveSourceSelectionSummary();
-                        showToast(`已選取 ${imageFiles.length} 張雲端圖片`);
-                    } else if (folders.length > 0) {
-                        const folder = folders[0];
-                        selectedDriveFiles = [];
-                        input.value = folder.id;
-                        input.dispatchEvent(new Event('change'));
-                        syncDriveSourceSelectionSummary();
-                        showToast(`已選取資料夾：${folder.name}`);
-                        autoLoadCollaborativeMemoryForDrive(folder.id);
-                    } else {
-                        showToast('請選擇圖片或資料夾', 'error');
+                    if (imageFiles.length === 0) {
+                        if (folders.length > 0) {
+                            showToast('這裡只接受圖片，不接受資料夾', 'error');
+                        } else {
+                            showToast('請選擇圖片', 'error');
+                        }
                         return;
                     }
+                    selectedDriveFiles = imageFiles;
+                    input.value = '';
+                    input.dispatchEvent(new Event('change'));
+                    syncDriveSourceSelectionSummary();
+                    showToast(`已選取 ${imageFiles.length} 張雲端圖片`);
                 } else {
                     const folder = folders[0] || docs[0];
                     input.value = folder.id;
@@ -4394,7 +4458,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 const onPicked = pickerSelectionCallback;
                 pickerSelectionCallback = null;
-                if (onPicked) onPicked(targetId === 'drive-folder-id' && imageFiles.length > 0 ? imageFiles : (folders[0] || docs[0]));
+                if (onPicked) onPicked(targetId === 'drive-folder-id' ? imageFiles : (folders[0] || docs[0]));
             }
         } else if (data.action === google.picker.Action.CANCEL) {
             pickerSelectionCallback = null;
@@ -4892,15 +4956,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // 監聽 Google Drive 資料夾 ID 的變化，自動加載協作記憶
     const driveFolderIdInput = document.getElementById('drive-folder-id');
     if (driveFolderIdInput) {
-        driveFolderIdInput.addEventListener('input', () => {
-            clearSelectedDriveFiles();
-        });
         driveFolderIdInput.addEventListener('change', (e) => {
             const folderId = e.target.value.trim();
-            if (folderId) {
-                autoLoadCollaborativeMemoryForDrive(folderId);
-            } else {
-                // 清空資料夾時，清空協作記憶
+            if (!folderId) {
                 window._collaborativeMemories.drive = '';
             }
             syncDriveSourceSelectionSummary();

@@ -314,6 +314,10 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(evidence["thumbnail_b64"])
         self.assertEqual(evidence["image_width"], 12)
         self.assertEqual(evidence["image_height"], 8)
+        self.assertEqual(evidence["bbox_space"], "pixel")
+        self.assertEqual(evidence["bbox_order"], "xyxy")
+        self.assertEqual(evidence["bbox_basis_width"], 12)
+        self.assertEqual(evidence["bbox_basis_height"], 8)
         self.assertEqual(evidence["source_type"], "drive")
         self.assertEqual(evidence["source_key"], "drive-file-id-123")
 

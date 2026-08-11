@@ -76,7 +76,7 @@
                     <div class="source-selector">
                         <label class="radio-tab">
                             <input type="radio" name="batch-source" value="local" checked>
-                            <span>💻 這台電腦</span>
+                            <span>💻 這台裝置</span>
                         </label>
                         <label class="radio-tab">
                             <input type="radio" name="batch-source" value="drive">
@@ -98,7 +98,7 @@
                             <button type="button" id="switch-to-drive-btn" class="secondary-btn">改用 Google 雲端</button>
                         </div>
                         <input type="file" id="workspace-import-input" accept=".json,application/json,.zip,application/zip" hidden>
-                        <button id="import-workspace-btn" class="secondary-btn" type="button" style="width: 100%; margin-top: 1rem;">上傳辨識結果</button>
+                        <button id="import-workspace-btn" class="secondary-btn" type="button" style="width: 100%; margin-top: 1rem;">回顧辨識結果</button>
                         <p id="workspace-import-summary" class="input-hint hidden">已載入既有辨識結果。</p>
                         <button id="btn-add-memory-local" class="secondary-btn" style="width: 100%; margin-top: 1rem;">📝 加一點提醒</button>
                     </div>
@@ -108,10 +108,10 @@
                         <div class="input-group">
                             <label for="drive-folder-id">這場活動的照片</label>
                             <div class="input-with-button">
-                                <input type="text" id="drive-folder-id" placeholder="貼上資料夾 ID，或按右邊翻翻看">
-                                <button id="btn-browse-source" class="inline-btn" title="從雲端挑資料夾或多張圖片">📂 翻翻看</button>
+                                <input type="text" id="drive-folder-id" placeholder="請按右邊從雲端選圖片" readonly>
+                                <button id="btn-browse-source" class="inline-btn" title="從雲端挑多張圖片">📂 翻翻看</button>
                             </div>
-                            <p id="drive-source-selection-summary" class="input-hint">可選一個資料夾，或一次選多張圖片。</p>
+                            <p id="drive-source-selection-summary" class="input-hint">尚未選取雲端圖片。</p>
                         </div>
                         <div class="input-group">
                             <label for="drive-target-id">整理好要放的地方（可以留白）</label>
@@ -143,7 +143,7 @@
                     <div class="input-group row-group">
                         <label for="batch-concurrency">一次看幾張</label>
                         <input type="number" id="batch-concurrency" value="5" min="1" max="5">
-                        <p class="input-hint" id="batch-concurrency-hint">這台電腦一次最多先看 5 張，我會慢慢幫你整理好。</p>
+                        <p class="input-hint" id="batch-concurrency-hint">這台裝置一次最多先看 5 張，我會慢慢幫你整理好。</p>
                     </div>
 
                     <div class="cluster-settings-panel" id="cluster-settings-panel">
@@ -607,7 +607,7 @@
     <script src="/static/js/face_relationships.js?v=20260809-public-decision-optional"></script>
     <script src="/static/js/upload_limits.js?v=20260808-upload-limits"></script>
     <script src="/static/js/batch_image_sources.js?v=20260809-drive-preview-fix"></script>
-    <script src="/static/js/app.js?v=20260811-user-permissions"></script>
+    <script src="/static/js/app.js?v=20260812-bbox-basis"></script>
 </body>
 
 </html>
