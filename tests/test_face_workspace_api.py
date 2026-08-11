@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -67,6 +67,12 @@ class FakeBatchStateStore:
 class FaceWorkspaceApiTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(main.app)
+        self.feature_patch = patch.object(
+            main,
+            "_require_feature",
+            new=AsyncMock(return_value={"enabled": True, "features": {}}),
+        )
+        self.feature_patch.start()
         main._batch_sessions["face-workspace-test"] = {
             "session_id": "face-workspace-test",
             "owner_id": "owner-a",
@@ -84,6 +90,7 @@ class FaceWorkspaceApiTests(unittest.TestCase):
         }
 
     def tearDown(self):
+        self.feature_patch.stop()
         main._batch_sessions.pop("face-workspace-test", None)
         main._batch_sessions.pop("stored-session", None)
 

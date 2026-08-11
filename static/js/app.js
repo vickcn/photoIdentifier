@@ -71,6 +71,43 @@ document.addEventListener('DOMContentLoaded', () => {
     const driveSourceSelectionSummary = document.getElementById('drive-source-selection-summary');
     let selectedDriveFiles = [];
     const importedArchiveUrls = [];
+    const DEFAULT_USER_FEATURES = {
+        face_clustering: true,
+        drive_batch: true,
+        export_results: true,
+        public_classification: false,
+    };
+    let currentUser = {
+        logged_in: false,
+        enabled: false,
+        features: { ...DEFAULT_USER_FEATURES },
+    };
+
+    function userHasFeature(feature) {
+        return currentUser?.enabled === true && currentUser?.features?.[feature] === true;
+    }
+
+    function syncSingleAnalyzeAvailability() {
+        analyzeSingleBtn.disabled = !singleSelectedFile || !userHasFeature('public_classification');
+    }
+
+    function syncPermissionUi() {
+        const canPublic = userHasFeature('public_classification');
+        const publicOption = batchRunPublic?.closest('.processing-option');
+        if (publicOption) publicOption.classList.toggle('hidden', !canPublic);
+        if (batchRunPublic) {
+            if (!canPublic) batchRunPublic.checked = false;
+            batchRunPublic.disabled = !canPublic;
+        }
+        const singleNote = document.querySelector('.single-mode-note');
+        if (singleNote) {
+            singleNote.textContent = canPublic
+                ? '單張照片只做可公開性判定；人臉分群需要兩張以上照片，請使用「整場活動」。'
+                : '單張可公開性判定需要帳號開通；整場活動仍可先做人臉分群。';
+        }
+        syncSingleAnalyzeAvailability();
+        syncProcessingScope();
+    }
 
     function getSelectedBatchSource() {
         return document.querySelector('input[name="batch-source"]:checked')?.value || 'local';
@@ -249,17 +286,34 @@ document.addEventListener('DOMContentLoaded', () => {
             const userArea = document.getElementById('drive-user-area');
 
             if (data.logged_in) {
+                currentUser = {
+                    ...data,
+                    enabled: data.enabled === true,
+                    features: { ...DEFAULT_USER_FEATURES, ...(data.features || {}) },
+                };
                 guestArea.classList.add('hidden');
                 userArea.classList.remove('hidden');
                 document.getElementById('user-avatar').src = data.picture || '';
                 document.getElementById('user-name').textContent = data.name || '已登入';
                 document.getElementById('user-email').textContent = data.email || '';
             } else {
+                currentUser = {
+                    logged_in: false,
+                    enabled: false,
+                    features: { ...DEFAULT_USER_FEATURES },
+                };
                 guestArea.classList.remove('hidden');
                 userArea.classList.add('hidden');
             }
+            syncPermissionUi();
         } catch (err) {
             console.warn("Failed to check login status:", err);
+            currentUser = {
+                logged_in: false,
+                enabled: false,
+                features: { ...DEFAULT_USER_FEATURES },
+            };
+            syncPermissionUi();
         }
     }
 
@@ -452,7 +506,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function syncProcessingScope() {
-        const runPublic = batchRunPublic ? batchRunPublic.checked : false;
+        const canPublic = userHasFeature('public_classification');
+        if (batchRunPublic) {
+            const publicOption = batchRunPublic.closest('.processing-option');
+            if (publicOption) publicOption.classList.toggle('hidden', !canPublic);
+            if (!canPublic) batchRunPublic.checked = false;
+            batchRunPublic.disabled = !canPublic;
+        }
+        const runPublic = batchRunPublic ? canPublic && batchRunPublic.checked : false;
         const runFaces = batchRunFaces ? batchRunFaces.checked : true;
         const noFeatureSelected = !runPublic && !runFaces;
         const clusterPanel = document.getElementById('cluster-settings-panel');
@@ -1127,7 +1188,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         singleSelectedFile = file;
         dropZone.querySelector('p').textContent = `已選擇：${file.name}`;
-        analyzeSingleBtn.disabled = false;
+        syncSingleAnalyzeAvailability();
 
         // Preview original instantly
         const reader = new FileReader();
@@ -1222,6 +1283,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     analyzeSingleBtn.addEventListener('click', async () => {
         if (!singleSelectedFile) return;
+        if (!userHasFeature('public_classification')) {
+            showToast('此帳號尚未開放可公開性判定功能', 'error');
+            syncSingleAnalyzeAvailability();
+            return;
+        }
         if (!(await beginSharedBusy('辨識照片'))) return;
 
         showLoading(true);
@@ -1630,6 +1696,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const runPublicClassification = batchRunPublic ? batchRunPublic.checked : false;
         const runFaceClustering = batchRunFaces ? batchRunFaces.checked : true;
         let faceClusterParams = getFaceClusterDefaults();
+
+        if (runPublicClassification && !userHasFeature('public_classification')) {
+            showToast('此帳號尚未開放可公開性判定功能', 'error');
+            if (batchRunPublic) batchRunPublic.checked = false;
+            syncProcessingScope();
+            return;
+        }
+        if (source !== 'local') {
+            if (!currentUser.logged_in) {
+                showToast('請先連結 Google 帳號，再使用雲端模式', 'error');
+                return;
+            }
+            if (!userHasFeature('drive_batch')) {
+                showToast('此帳號尚未開放 Google 雲端批次功能', 'error');
+                return;
+            }
+        }
 
         try {
             validateBatchConcurrency(source, currentConcurrency);
@@ -3444,6 +3527,10 @@ document.addEventListener('DOMContentLoaded', () => {
     async function saveBatchResultsToDrive() {
         if (batchMode !== 'drive' || currentBatchResults.length === 0) {
             showToast('目前沒有可儲存的雲端辨識結果', 'error');
+            return;
+        }
+        if (!userHasFeature('export_results')) {
+            showToast('此帳號尚未開放匯出辨識結果功能', 'error');
             return;
         }
 

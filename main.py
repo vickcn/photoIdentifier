@@ -39,6 +39,14 @@ from src.insight_api_client import (
     prepare_cluster_images,
 )
 from src.batch_state_store import create_batch_state_store
+from src.user_store import (
+    PUBLIC_CLASSIFICATION_DENIED_DETAIL,
+    create_user_store,
+    default_user_record,
+    feature_enabled,
+    normalize_google_user_id,
+    public_user_payload,
+)
 
 DEFAULT_MAX_UPLOAD_SIZE_MB = 25
 DEFAULT_BATCH_UPLOAD_BATCH_SIZE = DEFAULT_CLUSTER_BATCH_SIZE
@@ -341,6 +349,7 @@ _batch_sessions: dict[str, dict] = {}
 _active_batch_owners: dict[str, str] = {}
 _batch_session_locks: dict[str, asyncio.Lock] = {}
 batch_state_store = create_batch_state_store()
+user_store = create_user_store()
 
 
 def _get_client_id(request: Request) -> str:
@@ -421,7 +430,11 @@ async def _persist_photo_result(session_id: str, owner_id: str, result: dict[str
         await batch_state_store.add_photo_result(
             session_id,
             owner_id,
-            {**result, "user_account": str(session.get("user_account") or "")},
+            {
+                **result,
+                "user_account": str(session.get("user_account") or ""),
+                "google_user_id": str(session.get("google_user_id") or ""),
+            },
         )
     except Exception:
         logger.exception("Failed to persist photo result session=%s", session_id)
@@ -533,7 +546,12 @@ async def _classify_session_faces(
         )
         if batch_state_store.enabled:
             try:
-                await batch_state_store.save_face_clusters(session_id, session["owner_id"], clusters)
+                await batch_state_store.save_face_clusters(
+                    session_id,
+                    session["owner_id"],
+                    clusters,
+                    str(session.get("google_user_id") or ""),
+                )
             except Exception:
                 logger.exception("Failed to persist face clusters session=%s", session_id)
         session["face_clustering"] = {
@@ -771,17 +789,92 @@ async def get_current_user(request: Request):
     userinfo = _get_google_userinfo(request)
     if userinfo is None:
         return {"logged_in": False}
+    user_record = await _get_or_create_current_user_record(request, userinfo)
     return {
         "logged_in": True,
+        **public_user_payload(user_record),
+    }
+
+
+def _cache_google_userinfo(request: Request, userinfo: dict[str, Any]) -> dict[str, Any]:
+    cached = {
+        "id": str(userinfo.get("id") or userinfo.get("sub") or userinfo.get("google_user_id") or ""),
         "email": userinfo.get("email"),
         "name": userinfo.get("name"),
         "picture": userinfo.get("picture"),
     }
+    request.session["google_userinfo"] = cached
+    google_user_id = normalize_google_user_id(cached)
+    if google_user_id:
+        request.session["google_user_id"] = google_user_id
+    return cached
+
+
+def _sync_logged_in_user_sync(request: Request, userinfo: dict[str, Any]) -> dict[str, Any] | None:
+    cached = _cache_google_userinfo(request, userinfo)
+    if not normalize_google_user_id(cached):
+        logger.warning("Google userinfo missing stable id; email=%s", cached.get("email"))
+        return None
+    try:
+        return user_store.get_or_create_user_sync(cached)
+    except Exception:
+        logger.exception("Failed to sync application user google_user_id=%s", cached.get("id"))
+        return None
+
+
+async def _get_or_create_current_user_record(
+    request: Request,
+    userinfo: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    userinfo = userinfo or _get_google_userinfo(request)
+    if not isinstance(userinfo, dict):
+        raise HTTPException(status_code=403, detail=PUBLIC_CLASSIFICATION_DENIED_DETAIL)
+    cached = _cache_google_userinfo(request, userinfo)
+    try:
+        return await user_store.get_or_create_user(cached)
+    except Exception:
+        logger.exception("Failed to read application user google_user_id=%s", cached.get("id"))
+        fallback = default_user_record(cached)
+        fallback["enabled"] = False
+        fallback["features"]["public_classification"] = False
+        return fallback
+
+
+async def _require_feature(
+    request: Request,
+    feature: str,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    userinfo = _get_google_userinfo(request)
+    if not isinstance(userinfo, dict):
+        raise HTTPException(status_code=403, detail=detail or PUBLIC_CLASSIFICATION_DENIED_DETAIL)
+    user = await _get_or_create_current_user_record(request, userinfo)
+    if not feature_enabled(user, feature):
+        raise HTTPException(status_code=403, detail=detail or PUBLIC_CLASSIFICATION_DENIED_DETAIL)
+    return user
+
+
+async def _require_public_classification_if_requested(
+    request: Request,
+    run_public_classification: bool,
+) -> None:
+    if run_public_classification:
+        await _require_feature(request, "public_classification", PUBLIC_CLASSIFICATION_DENIED_DETAIL)
+
+
+def _get_google_user_id(request: Request) -> str:
+    google_user_id = str(request.session.get("google_user_id") or "").strip()
+    if google_user_id:
+        return google_user_id
+    userinfo = _get_google_userinfo(request)
+    if not isinstance(userinfo, dict):
+        return ""
+    return normalize_google_user_id(userinfo)
 
 
 def _get_google_userinfo(request: Request) -> dict[str, Any] | None:
     cached = request.session.get("google_userinfo")
-    if isinstance(cached, dict) and cached.get("email"):
+    if isinstance(cached, dict) and cached.get("email") and normalize_google_user_id(cached):
         return cached
     try:
         creds = get_drive_credentials(request)
@@ -793,20 +886,14 @@ def _get_google_userinfo(request: Request) -> dict[str, Any] | None:
         service = build("oauth2", "v2", credentials=creds, cache_discovery=False)
         userinfo = service.userinfo().get().execute()
         if isinstance(userinfo, dict):
-            request.session["google_userinfo"] = {
-                "email": userinfo.get("email"),
-                "name": userinfo.get("name"),
-                "picture": userinfo.get("picture"),
-            }
-        return userinfo if isinstance(userinfo, dict) else None
+            return _cache_google_userinfo(request, userinfo)
+        return None
     except Exception as e:
         logger.error(f"取得使用者資訊失敗: {e}")
         return None
 
 
 def _get_batch_user_account(request: Request, batch_mode: str) -> str:
-    if batch_mode != "drive":
-        return ""
     userinfo = _get_google_userinfo(request)
     email = userinfo.get("email") if isinstance(userinfo, dict) else ""
     return str(email or "")
@@ -861,7 +948,12 @@ async def get_drive_file(file_id: str, request: Request):
 
 
 @app.post("/analyze/", response_model=PhotoAnalysisResult)
-async def analyze_photo(file: UploadFile = File(...), collaborative_memory: str = Form(None)):
+async def analyze_photo(
+    request: Request,
+    file: UploadFile = File(...),
+    collaborative_memory: str = Form(None),
+):
+    await _require_feature(request, "public_classification", PUBLIC_CLASSIFICATION_DENIED_DETAIL)
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="請上傳圖片檔案")
 
@@ -897,7 +989,12 @@ async def analyze_photo(file: UploadFile = File(...), collaborative_memory: str 
 
 
 @app.post("/visualize/", response_class=Response)
-async def visualize_photo(file: UploadFile = File(...), collaborative_memory: str = Form(None)):
+async def visualize_photo(
+    request: Request,
+    file: UploadFile = File(...),
+    collaborative_memory: str = Form(None),
+):
+    await _require_feature(request, "public_classification", PUBLIC_CLASSIFICATION_DENIED_DETAIL)
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="請上傳圖片檔案")
 
@@ -926,11 +1023,13 @@ async def visualize_photo(file: UploadFile = File(...), collaborative_memory: st
 
 @app.post("/analyze_with_image/")
 async def analyze_with_image(
+    request: Request,
     file: UploadFile = File(...),
     color_rules_json: Optional[str] = Form(None),
     collaborative_memory: Optional[str] = Form(None),
 ):
     """專門給單圖 UI 使用，回傳 JSON 結果，且夾帶畫好框的 base64 圖片供前端立即渲染"""
+    await _require_feature(request, "public_classification", PUBLIC_CLASSIFICATION_DENIED_DETAIL)
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="請上傳圖片檔案")
     try:
@@ -983,6 +1082,7 @@ async def batch_upload_stream(
     upload_total_files: Optional[int] = Form(None),
 ):
     _validate_processing_scope(run_public_classification, run_face_clustering)
+    await _require_public_classification_if_requested(request, run_public_classification)
     _validate_local_api_concurrency(concurrency)
     _validate_batch_file_count(len(files), mode="local")
     if upload_chunk_total < 1:
@@ -1055,6 +1155,7 @@ async def batch_upload_stream(
             "owner_id": owner_id,
             "batch_mode": "upload",
             "user_account": _get_batch_user_account(request, "upload"),
+            "google_user_id": _get_google_user_id(request),
             "status": "processing",
             "stage": "photos",
             "start_time": start_time.isoformat(),
@@ -1067,6 +1168,7 @@ async def batch_upload_stream(
                 "face_cluster_min_samples": face_cluster_min_samples,
                 "face_cluster_batch_size": BATCH_UPLOAD_BATCH_SIZE_LOCAL,
                 "run_public_classification": run_public_classification,
+                "public_classification_authorized": bool(run_public_classification),
                 "run_face_clustering": run_face_clustering,
                 "upload_chunk_total": upload_chunk_total,
                 "upload_next_chunk_index": upload_chunk_index + 1,
@@ -1199,6 +1301,7 @@ async def batch_upload_stream(
 @app.post("/batch/")
 async def batch_visualize(req: BatchRequest, request: Request):
     _validate_processing_scope(req.run_public_classification, req.run_face_clustering)
+    await _require_public_classification_if_requested(request, req.run_public_classification)
     input_path = Path(req.input_folder)
     if not input_path.exists() or not input_path.is_dir():
         raise HTTPException(status_code=400, detail=f"資料夾不存在：{req.input_folder}")
@@ -1225,6 +1328,7 @@ async def batch_visualize(req: BatchRequest, request: Request):
         "owner_id": owner_id,
         "batch_mode": "local",
         "user_account": _get_batch_user_account(request, "local"),
+        "google_user_id": _get_google_user_id(request),
         "start_time": start_time.isoformat(),
         "end_time": None,
         "results": [],
@@ -1235,6 +1339,7 @@ async def batch_visualize(req: BatchRequest, request: Request):
             "face_cluster_min_samples": face_cluster_min_samples,
             "face_cluster_batch_size": BATCH_UPLOAD_BATCH_SIZE,
             "run_public_classification": req.run_public_classification,
+            "public_classification_authorized": bool(req.run_public_classification),
             "run_face_clustering": req.run_face_clustering,
         },
         "completed": False
@@ -1459,6 +1564,8 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
     if next_index < len(drive_files):
         session["status"] = "processing"
         session["stage"] = "photos"
+        if processing_info.get("run_public_classification") and not processing_info.get("public_classification_authorized"):
+            raise HTTPException(status_code=403, detail=PUBLIC_CLASSIFICATION_DENIED_DETAIL)
         creds = get_drive_credentials(request)
         batch_items = drive_files[next_index: next_index + concurrency]
         tasks = [
@@ -1605,7 +1712,12 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
             "min_samples": int(processing_info.get("face_cluster_min_samples", DEFAULT_CLUSTER_MIN_SAMPLES)),
         }
         if batch_state_store.enabled:
-            await batch_state_store.save_face_clusters(session_id, owner_id, clusters)
+            await batch_state_store.save_face_clusters(
+                session_id,
+                owner_id,
+                clusters,
+                str(session.get("google_user_id") or ""),
+            )
         session["status"] = "completed"
         session["stage"] = "completed"
         session["completed"] = True
@@ -1655,6 +1767,8 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
     user_key = request.session.get("user_key")
     if not user_key:
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
+    await _require_feature(request, "drive_batch", "此帳號尚未開放 Google 雲端批次功能")
+    await _require_public_classification_if_requested(request, req.run_public_classification)
 
     creds = get_drive_credentials(request)
     if req.run_face_clustering:
@@ -1677,6 +1791,7 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
         "owner_id": owner_id,
         "batch_mode": "drive",
         "user_account": _get_batch_user_account(request, "drive"),
+        "google_user_id": _get_google_user_id(request),
         "status": "processing",
         "stage": "queued",
         "start_time": start_time.isoformat(),
@@ -1696,6 +1811,7 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
             "face_cluster_min_samples": face_cluster_min_samples,
             "face_cluster_batch_size": BATCH_UPLOAD_BATCH_SIZE_CLOUD,
             "run_public_classification": req.run_public_classification,
+            "public_classification_authorized": bool(req.run_public_classification),
             "run_face_clustering": req.run_face_clustering,
         },
         "completed": False,
@@ -1743,6 +1859,8 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
     user_key = request.session.get("user_key")
     if not user_key:
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
+    await _require_feature(request, "drive_batch", "此帳號尚未開放 Google 雲端批次功能")
+    await _require_public_classification_if_requested(request, req.run_public_classification)
     
     try:
         creds = get_drive_credentials(request)
@@ -1806,6 +1924,8 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
     user_key = request.session.get("user_key")
     if not user_key:
         raise HTTPException(status_code=401, detail="尚未登入 Google 帳號")
+    await _require_feature(request, "drive_batch", "此帳號尚未開放 Google 雲端批次功能")
+    await _require_public_classification_if_requested(request, req.run_public_classification)
 
     try:
         creds = get_drive_credentials(request)
@@ -1859,6 +1979,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
             "owner_id": owner_id,
             "batch_mode": "drive",
             "user_account": _get_batch_user_account(request, "drive"),
+            "google_user_id": _get_google_user_id(request),
             "start_time": start_time.isoformat(),
             "end_time": None,
             "results": [],
@@ -1868,6 +1989,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                 "face_cluster_eps": face_cluster_eps,
                 "face_cluster_min_samples": face_cluster_min_samples,
                 "run_public_classification": req.run_public_classification,
+                "public_classification_authorized": bool(req.run_public_classification),
                 "run_face_clustering": req.run_face_clustering,
             },
             "completed": False,
@@ -2102,6 +2224,9 @@ def google_auth_callback(request: Request, code: str, state: str):
 
         # 同步備份到 session，供 Vercel /tmp 失效時使用
         _save_creds_to_session(request, creds)
+        userinfo = _get_google_userinfo(request)
+        if isinstance(userinfo, dict):
+            _sync_logged_in_user_sync(request, userinfo)
 
         request.session.pop("oauth_state", None)
         request.session.pop("oauth_code_verifier", None)
@@ -2294,6 +2419,7 @@ def _rename_drive_output_folder(credentials, folder_id: str, name: str) -> dict:
 
 @app.post("/drive/output-folders")
 async def create_drive_output_folder(req: DriveOutputFolderRequest, request: Request):
+    await _require_feature(request, "export_results", "此帳號尚未開放匯出辨識結果功能")
     name = _normalized_drive_folder_name(req.name)
     parent_folder_id = (req.parent_folder_id or "root").strip() or "root"
     credentials = get_drive_credentials(request)
@@ -2313,6 +2439,7 @@ async def create_drive_output_folder(req: DriveOutputFolderRequest, request: Req
 async def rename_drive_output_folder(
     folder_id: str, req: DriveOutputFolderRenameRequest, request: Request
 ):
+    await _require_feature(request, "export_results", "此帳號尚未開放匯出辨識結果功能")
     folder_id = folder_id.strip()
     if not folder_id:
         raise HTTPException(status_code=400, detail="Google 雲端輸出區不可留白")
@@ -2433,6 +2560,7 @@ def _copy_people_folders_to_drive(
 
 @app.post("/batch_exports/drive")
 async def create_drive_batch_export(req: DriveBatchExportRequest, request: Request):
+    await _require_feature(request, "export_results", "此帳號尚未開放匯出辨識結果功能")
     session_id = req.session_id.strip()
     target_folder_id = req.target_folder_id.strip()
     if not session_id or not target_folder_id:
@@ -2481,6 +2609,7 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
                     "failed",
                     {"target_folder_id": target_folder_id, "error": str(exc)},
                     str(session.get("user_account") or ""),
+                    str(session.get("google_user_id") or ""),
                 )
             except Exception:
                 logger.exception("Failed to persist failed export metadata session=%s", session_id)
@@ -2493,6 +2622,7 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
                 session["owner_id"],
                 req.document,
                 str(session.get("user_account") or ""),
+                str(session.get("google_user_id") or ""),
             )
             await batch_state_store.create_export_record(
                 session_id,
@@ -2506,6 +2636,7 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
                     "people_copy": people_copy,
                 },
                 str(session.get("user_account") or ""),
+                str(session.get("google_user_id") or ""),
             )
         except Exception:
             logger.exception("Failed to persist Drive export metadata session=%s", session_id)

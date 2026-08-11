@@ -94,7 +94,13 @@ class NullBatchStateStore:
     async def add_photo_result(self, session_id: str, owner_id: str, result: dict[str, Any]) -> None:
         return None
 
-    async def save_face_clusters(self, session_id: str, owner_id: str, clusters: list[dict[str, Any]]) -> None:
+    async def save_face_clusters(
+        self,
+        session_id: str,
+        owner_id: str,
+        clusters: list[dict[str, Any]],
+        google_user_id: str = "",
+    ) -> None:
         return None
 
     async def get_session(self, owner_id: str, session_id: str) -> dict[str, Any] | None:
@@ -118,6 +124,7 @@ class NullBatchStateStore:
         owner_id: str,
         document: dict[str, Any],
         user_account: str = "",
+        google_user_id: str = "",
     ) -> None:
         return None
 
@@ -133,6 +140,7 @@ class NullBatchStateStore:
         status: str,
         metadata: dict[str, Any] | None = None,
         user_account: str = "",
+        google_user_id: str = "",
     ) -> None:
         return None
 
@@ -161,6 +169,7 @@ class FirestoreBatchStateStore:
             "owner_id": session["owner_id"],
             "batch_mode": session.get("batch_mode"),
             "user_account": str(session.get("user_account") or ""),
+            "google_user_id": str(session.get("google_user_id") or ""),
             "status": "processing",
             "created_at": session.get("start_time") or iso_utc(),
             "updated_at": iso_utc(),
@@ -197,6 +206,7 @@ class FirestoreBatchStateStore:
             "session_id": session_id,
             "owner_id": owner_id,
             "user_account": str(result.get("user_account") or ""),
+            "google_user_id": str(result.get("google_user_id") or ""),
             "file_name": file_name,
             "drive_id": result.get("drive_id"),
             "public_decision": analysis.get("moderation_status") or result.get("moderation_status"),
@@ -215,7 +225,13 @@ class FirestoreBatchStateStore:
             payload,
         )
 
-    async def save_face_clusters(self, session_id: str, owner_id: str, clusters: list[dict[str, Any]]) -> None:
+    async def save_face_clusters(
+        self,
+        session_id: str,
+        owner_id: str,
+        clusters: list[dict[str, Any]],
+        google_user_id: str = "",
+    ) -> None:
         def write_batch() -> None:
             batch = self._client.batch()
             has_writes = False
@@ -228,6 +244,7 @@ class FirestoreBatchStateStore:
                     "cluster_id": cluster_id,
                     "session_id": session_id,
                     "owner_id": owner_id,
+                    "google_user_id": str(google_user_id or ""),
                     "updated_at": iso_utc(),
                     "expires_at": expires_after(DEFAULT_ACTIVE_TTL_DAYS),
                 }
@@ -314,6 +331,7 @@ class FirestoreBatchStateStore:
         owner_id: str,
         document: dict[str, Any],
         user_account: str = "",
+        google_user_id: str = "",
     ) -> None:
         def write_batch() -> None:
             batch = self._client.batch()
@@ -331,6 +349,7 @@ class FirestoreBatchStateStore:
                     "session_id": session_id,
                     "owner_id": owner_id,
                     "user_account": user_account,
+                    "google_user_id": str(google_user_id or ""),
                     "photo_id": photo_id,
                     "file_name": file_name,
                     "cluster_ids": cluster_ids,
@@ -372,12 +391,14 @@ class FirestoreBatchStateStore:
         status: str,
         metadata: dict[str, Any] | None = None,
         user_account: str = "",
+        google_user_id: str = "",
     ) -> None:
         payload = {
             "export_id": export_doc_id(session_id, file_name),
             "session_id": session_id,
             "owner_id": owner_id,
             "user_account": str(user_account or ""),
+            "google_user_id": str(google_user_id or ""),
             "target": target,
             "file_name": file_name,
             "status": status,

@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -345,6 +345,7 @@ class BatchUploadApiTests(unittest.TestCase):
             }
 
         with (
+            patch.object(main, "_require_feature", new=AsyncMock(return_value={})),
             patch.object(main, "batch_process_uploads_stream", fake_batch_stream),
             patch.object(main, "_classify_session_faces") as classify,
         ):

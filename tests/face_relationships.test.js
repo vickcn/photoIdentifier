@@ -100,7 +100,7 @@ test('buildExport groups photos under photo angle by single, multiple, and empty
         },
     });
 
-    assert.deepEqual(output.photo_angle_folders.map(folder => folder.name), ['王小明', '多人']);
+    assert.deepEqual(output.photo_angle_folders.map(folder => folder.name), ['王小明', '2人']);
     assert.deepEqual(output.photo_angle_folders[0].photos.map(photo => photo.file_name), ['a.jpg', 'b.jpg']);
     assert.deepEqual(output.photo_angle_folders[1].photos.map(photo => photo.file_name), ['c.jpg']);
 });
