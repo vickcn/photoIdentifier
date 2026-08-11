@@ -55,6 +55,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Drive Elements
     const driveFolderId = document.getElementById('drive-folder-id');
     const driveTargetId = document.getElementById('drive-target-id');
+    const driveSourceSelectionSummary = document.getElementById('drive-source-selection-summary');
+    let selectedDriveFiles = [];
 
     function getSelectedBatchSource() {
         return document.querySelector('input[name="batch-source"]:checked')?.value || 'local';
@@ -97,6 +99,35 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const limits = getBatchUploadLimits(source);
         return config?.batch_upload_limits_local_message || `這台電腦一次可先準備 ${limits.totalMaxFiles} 張，會每 ${limits.batchSize} 張分成一批整理；單檔 ${config?.batch_upload_max_file_mb || 2}MB、合計 ${config?.batch_upload_max_total_mb || 4}MB 以內。`;
+    }
+
+    function normalizeDrivePickerFile(doc) {
+        const mimeType = String(doc?.mimeType || doc?.type || '');
+        const id = String(doc?.id || '');
+        if (!id || !mimeType.startsWith('image/')) return null;
+        return {
+            id,
+            name: String(doc?.name || id),
+            mimeType,
+            size: doc?.sizeBytes || doc?.size || null,
+            thumbnailLink: doc?.thumbnails?.[0]?.url || doc?.thumbnailLink || '',
+        };
+    }
+
+    function syncDriveSourceSelectionSummary() {
+        if (!driveSourceSelectionSummary) return;
+        if (selectedDriveFiles.length > 0) {
+            driveSourceSelectionSummary.textContent = `已選 ${selectedDriveFiles.length} 張雲端圖片`;
+            return;
+        }
+        driveSourceSelectionSummary.textContent = driveFolderId.value.trim()
+            ? '已選 Google 雲端資料夾，會整理資料夾內的圖片。'
+            : '可選一個資料夾，或一次選多張圖片。';
+    }
+
+    function clearSelectedDriveFiles() {
+        selectedDriveFiles = [];
+        syncDriveSourceSelectionSummary();
     }
 
     function buildLocalUploadChunks(files) {
@@ -1640,13 +1671,14 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             const fId = driveFolderId.value.trim();
             const tId = driveTargetId.value.trim();
-            if (!fId) {
-                showToast('請先選一個 Google 雲端資料夾', 'error');
+            if (!fId && selectedDriveFiles.length === 0) {
+                showToast('請先選 Google 雲端資料夾或圖片', 'error');
                 return;
             }
             endpoint = '/batch_drive_start/';
             body = {
-                folder_id: fId,
+                folder_id: fId || null,
+                drive_files: selectedDriveFiles.length ? selectedDriveFiles : null,
                 target_folder_id: tId || null,
                 concurrency: currentConcurrency,
                 color_rules: colorSwatches,
@@ -3847,9 +3879,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
+            const isSourcePicker = targetId === 'drive-folder-id';
             const view = new google.picker.DocsView(google.picker.ViewId.DOCS);
             view.setIncludeFolders(true);
             view.setSelectFolderEnabled(true);
+            view.setMimeTypes(isSourcePicker
+                ? 'image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/vnd.google-apps.folder'
+                : 'application/vnd.google-apps.folder');
 
             const picker = new google.picker.PickerBuilder()
                 .enableFeature(google.picker.Feature.NAV_HIDDEN)
@@ -3871,22 +3907,42 @@ document.addEventListener('DOMContentLoaded', () => {
     function pickerCallback(data, targetId) {
         if (data.action === google.picker.Action.PICKED) {
             if (!data.docs || data.docs.length === 0) {
-                showToast('未選取任何資料夾', 'warning');
+                showToast('未選取任何項目', 'warning');
                 return;
             }
-            const folder = data.docs[0];
             const input = document.getElementById(targetId);
+            const docs = Array.from(data.docs || []);
+            const folders = docs.filter(doc => doc.mimeType === 'application/vnd.google-apps.folder');
+            const imageFiles = docs.map(normalizeDrivePickerFile).filter(Boolean);
             if (input) {
-                input.value = folder.id;
-                input.dispatchEvent(new Event('change'));
-                showToast(`已選取資料夾：${folder.name}`);
-                // 當選擇輸入資料夾時，自動加載該資料夾的協作記憶
                 if (targetId === 'drive-folder-id') {
-                    autoLoadCollaborativeMemoryForDrive(folder.id);
+                    if (imageFiles.length > 0) {
+                        selectedDriveFiles = imageFiles;
+                        input.value = '';
+                        input.dispatchEvent(new Event('change'));
+                        syncDriveSourceSelectionSummary();
+                        showToast(`已選取 ${imageFiles.length} 張雲端圖片`);
+                    } else if (folders.length > 0) {
+                        const folder = folders[0];
+                        selectedDriveFiles = [];
+                        input.value = folder.id;
+                        input.dispatchEvent(new Event('change'));
+                        syncDriveSourceSelectionSummary();
+                        showToast(`已選取資料夾：${folder.name}`);
+                        autoLoadCollaborativeMemoryForDrive(folder.id);
+                    } else {
+                        showToast('請選擇圖片或資料夾', 'error');
+                        return;
+                    }
+                } else {
+                    const folder = folders[0] || docs[0];
+                    input.value = folder.id;
+                    input.dispatchEvent(new Event('change'));
+                    showToast(`已選取資料夾：${folder.name}`);
                 }
                 const onPicked = pickerSelectionCallback;
                 pickerSelectionCallback = null;
-                if (onPicked) onPicked(folder);
+                if (onPicked) onPicked(targetId === 'drive-folder-id' && imageFiles.length > 0 ? imageFiles : (folders[0] || docs[0]));
             }
         } else if (data.action === google.picker.Action.CANCEL) {
             pickerSelectionCallback = null;
@@ -4384,6 +4440,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // 監聽 Google Drive 資料夾 ID 的變化，自動加載協作記憶
     const driveFolderIdInput = document.getElementById('drive-folder-id');
     if (driveFolderIdInput) {
+        driveFolderIdInput.addEventListener('input', () => {
+            clearSelectedDriveFiles();
+        });
         driveFolderIdInput.addEventListener('change', (e) => {
             const folderId = e.target.value.trim();
             if (folderId) {
@@ -4392,6 +4451,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 清空資料夾時，清空協作記憶
                 window._collaborativeMemories.drive = '';
             }
+            syncDriveSourceSelectionSummary();
         });
     }
 

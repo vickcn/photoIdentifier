@@ -1302,7 +1302,8 @@ async def batch_visualize(req: BatchRequest, request: Request):
 
 
 class DriveBatchRequest(BaseModel):
-    folder_id: str
+    folder_id: Optional[str] = None
+    drive_files: Optional[list[dict[str, Any]]] = None
     target_folder_id: Optional[str] = None
     concurrency: int = 3
     color_rules: Optional[list] = None
@@ -1317,6 +1318,8 @@ class DriveBatchRequest(BaseModel):
 async def _load_drive_collaborative_memory(req: DriveBatchRequest, creds) -> str | None:
     collaborative_memory = req.collaborative_memory
     if collaborative_memory or not req.run_public_classification:
+        return collaborative_memory
+    if not req.folder_id:
         return collaborative_memory
     try:
         from googleapiclient.discovery import build
@@ -1339,6 +1342,35 @@ async def _load_drive_collaborative_memory(req: DriveBatchRequest, creds) -> str
     except Exception as exc:
         logger.warning("無法獲取協作記憶文件: %s", exc)
         return None
+
+
+def _normalize_selected_drive_files(files: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in files or []:
+        file_id = str(item.get("id") or item.get("file_id") or "").strip()
+        name = str(item.get("name") or item.get("file_name") or file_id).strip()
+        mime_type = str(item.get("mimeType") or item.get("mime_type") or "").strip()
+        if not file_id or not mime_type.startswith("image/"):
+            continue
+        normalized.append(
+            {
+                "id": file_id,
+                "name": name or file_id,
+                "mimeType": mime_type,
+                "size": item.get("size"),
+                "thumbnailLink": item.get("thumbnailLink") or item.get("thumbnail_link") or "",
+            }
+        )
+    return normalized
+
+
+async def _resolve_drive_batch_files(req: DriveBatchRequest, creds) -> list[dict[str, Any]]:
+    selected_files = _normalize_selected_drive_files(req.drive_files)
+    if selected_files:
+        return selected_files
+    if not req.folder_id:
+        raise HTTPException(status_code=400, detail="請選擇 Google 雲端資料夾或圖片")
+    return await list_drive_image_files(req.folder_id, creds)
 
 
 def _batch_status_payload(session: dict[str, Any]) -> dict[str, Any]:
@@ -1633,7 +1665,7 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
         )
     else:
         face_cluster_eps, face_cluster_min_samples = DEFAULT_CLUSTER_EPS, DEFAULT_CLUSTER_MIN_SAMPLES
-    drive_files = await list_drive_image_files(req.folder_id, creds)
+    drive_files = await _resolve_drive_batch_files(req, creds)
     accepted_drive_files, blocked_drive_files = _split_drive_files_by_upload_limit(drive_files)
     _validate_batch_file_count(len(accepted_drive_files), mode="cloud")
     session_id = req.session_id or str(uuid.uuid4())
@@ -1714,7 +1746,7 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
     
     try:
         creds = get_drive_credentials(request)
-        drive_files = await list_drive_image_files(req.folder_id, creds)
+        drive_files = await _resolve_drive_batch_files(req, creds)
         accepted_drive_files, blocked_drive_files = _split_drive_files_by_upload_limit(drive_files)
         _validate_batch_file_count(len(accepted_drive_files), mode="cloud")
         if req.run_face_clustering:
@@ -1777,7 +1809,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
 
     try:
         creds = get_drive_credentials(request)
-        drive_files = await list_drive_image_files(req.folder_id, creds)
+        drive_files = await _resolve_drive_batch_files(req, creds)
         accepted_drive_files, blocked_drive_files = _split_drive_files_by_upload_limit(drive_files)
         _validate_batch_file_count(len(accepted_drive_files), mode="cloud")
         if req.run_face_clustering:
@@ -1792,7 +1824,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
         # 1. 獲取協作記憶：優先使用請求提供的，再從遠端讀取
         collaborative_memory = req.collaborative_memory
 
-        if not collaborative_memory and req.run_public_classification:
+        if not collaborative_memory and req.run_public_classification and req.folder_id:
             # 嘗試從 Google Drive 讀取
             try:
                 from googleapiclient.discovery import build

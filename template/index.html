@@ -100,8 +100,9 @@
                             <label for="drive-folder-id">這場活動的照片</label>
                             <div class="input-with-button">
                                 <input type="text" id="drive-folder-id" placeholder="貼上資料夾 ID，或按右邊翻翻看">
-                                <button id="btn-browse-source" class="inline-btn" title="從雲端挑一個資料夾">📂 翻翻看</button>
+                                <button id="btn-browse-source" class="inline-btn" title="從雲端挑資料夾或多張圖片">📂 翻翻看</button>
                             </div>
+                            <p id="drive-source-selection-summary" class="input-hint">可選一個資料夾，或一次選多張圖片。</p>
                         </div>
                         <div class="input-group">
                             <label for="drive-target-id">整理好要放的地方（可以留白）</label>
@@ -599,7 +600,7 @@
     <script src="/static/js/face_relationships.js?v=20260809-public-decision-optional"></script>
     <script src="/static/js/upload_limits.js?v=20260808-upload-limits"></script>
     <script src="/static/js/batch_image_sources.js?v=20260809-drive-preview-fix"></script>
-    <script src="/static/js/app.js?v=20260811-face-cluster-delete-persist"></script>
+    <script src="/static/js/app.js?v=20260811-drive-picker-multiselect"></script>
 </body>
 
 </html>
