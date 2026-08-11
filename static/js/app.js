@@ -260,12 +260,14 @@ document.addEventListener('DOMContentLoaded', () => {
             splitViewer.classList.remove('fullscreen-mode');
             document.body.style.overflow = '';
         }
+        scheduleFaceFocusOverlayRender();
     });
     document.addEventListener('webkitfullscreenchange', () => {
         if (!document.webkitFullscreenElement) {
             splitViewer.classList.remove('fullscreen-mode');
             document.body.style.overflow = '';
         }
+        scheduleFaceFocusOverlayRender();
     });
 
     // State
@@ -286,6 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
         evidenceSelectionMode: false,
         clusterSelectionMode: false,
     };
+    let lastFaceEvidenceTap = null;
     let relationshipViewMode = 'people';
     let photoPeopleAssignments = {};
     const photoClusterUi = { expanded: new Set() };
@@ -311,6 +314,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function setViewerPublicDecisionVisible(visible) {
         safetyBadge?.classList.toggle('hidden', !visible);
         moderationReason?.classList.toggle('hidden', !visible);
+        splitViewer?.classList.toggle('public-classification-off', !visible);
         if (!visible) {
             decisionButtons.style.display = 'none';
         }
@@ -720,6 +724,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const finalizeBtn = document.getElementById('finalize-btn');
 
     // === Helpers ===
+    function scheduleFaceFocusOverlayRender() {
+        requestAnimationFrame(() => {
+            renderFaceFocusOverlay();
+            requestAnimationFrame(renderFaceFocusOverlay);
+        });
+        window.setTimeout(renderFaceFocusOverlay, 180);
+    }
+
     function toggleFullscreen(force) {
         const isCurrentlyFS = splitViewer.classList.contains('fullscreen-mode');
         const shouldBeFS = (force !== undefined) ? force : !isCurrentlyFS;
@@ -727,6 +739,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (shouldBeFS) {
             splitViewer.classList.add('fullscreen-mode');
             document.body.style.overflow = 'hidden';
+            scheduleFaceFocusOverlayRender();
 
             // Try to enter native browser fullscreen if possible
             try {
@@ -742,6 +755,7 @@ document.addEventListener('DOMContentLoaded', () => {
             resetZoom();
             splitViewer.classList.remove('fullscreen-mode');
             document.body.style.overflow = '';
+            scheduleFaceFocusOverlayRender();
 
             // Exit native browser fullscreen if we are in it
             try {
@@ -1130,7 +1144,13 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const [x1, y1, x2, y2] = bbox;
+        const [x1, y1, x2, y2] = scaleFaceBboxForImageSize(
+            bbox,
+            Number(focusedFaceEvidence?.image_width || 0),
+            Number(focusedFaceEvidence?.image_height || 0),
+            annotatedImg.naturalWidth,
+            annotatedImg.naturalHeight,
+        );
         const imageRect = getContainedImageContentRect(annotatedImg);
         const parentRect = annotatedImg.closest('.image-box').getBoundingClientRect();
         const left = imageRect.left - parentRect.left + (x1 / annotatedImg.naturalWidth) * imageRect.width;
@@ -1150,8 +1170,8 @@ document.addEventListener('DOMContentLoaded', () => {
         getFaceFocusOverlay()?.classList.add('hidden');
     }
 
-    annotatedImg.addEventListener('load', renderFaceFocusOverlay);
-    window.addEventListener('resize', renderFaceFocusOverlay);
+    annotatedImg.addEventListener('load', scheduleFaceFocusOverlayRender);
+    window.addEventListener('resize', scheduleFaceFocusOverlayRender);
 
     analyzeSingleBtn.addEventListener('click', async () => {
         if (!singleSelectedFile) return;
@@ -1201,7 +1221,7 @@ document.addEventListener('DOMContentLoaded', () => {
             safetyBadge.textContent = '未判定';
             safetyBadge.className = 'status-badge status-pending';
             moderationReason.textContent = analysis.moderation_reason || '本次未執行可公開性判定';
-            faceCount.textContent = '-';
+            faceCount.textContent = analysis.face_bboxes ? analysis.face_bboxes.length : 0;
             strapCount.textContent = '-';
             strapColor.textContent = '-';
             return;
@@ -2117,7 +2137,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!evidence) {
             return showPublicClassification
                 ? '<p class="face-photo-decision-hint">點選任一人臉框，查看該張照片的可公開判定。</p>'
-                : '<p class="face-photo-decision-hint">點選任一人臉框，可查看完整照片或調整所屬人物。</p>';
+                : '<p class="face-photo-decision-hint">點選任一人臉框後可調整人物；連續點兩下可查看完整照片。</p>';
         }
         const decision = getFaceEvidenceDecision(evidence);
         const personOptions = currentFaceClusters
@@ -2127,9 +2147,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const decisionPanel = showPublicClassification ? `<div class="face-photo-decision status-${escapeHtml(decision.decision)}" role="status">
             <span>這張照片的判定</span>
             <strong>${decision.label}</strong>
-            <button type="button" data-face-action="open-photo" data-cluster-id="${escapeHtml(clusterId)}" data-result-index="${decision.resultIndex}" data-evidence-index="${evidenceIndex}">查看完整照片</button>
+            <small class="face-photo-decision-hint">連續點兩下上方人臉框可查看完整照片</small>
         </div>` : `<div class="face-photo-action-panel">
-            <button type="button" data-face-action="open-photo" data-cluster-id="${escapeHtml(clusterId)}" data-result-index="${decision.resultIndex}" data-evidence-index="${evidenceIndex}">查看完整照片</button>
+            <small class="face-photo-decision-hint">連續點兩下上方人臉框可查看完整照片</small>
         </div>`;
         return `${decisionPanel}
         ${personOptions ? `<div class="face-evidence-transfer" data-face-transfer-source="${escapeHtml(clusterId)}" data-evidence-index="${evidenceIndex}">
@@ -2152,6 +2172,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return attrs.length ? ` ${attrs.join(' ')}` : '';
     }
 
+    function scaleFaceBboxForImageSize(bbox, sourceWidth, sourceHeight, targetWidth, targetHeight) {
+        const scaleX = sourceWidth ? targetWidth / sourceWidth : 1;
+        const scaleY = sourceHeight ? targetHeight / sourceHeight : 1;
+        return [
+            bbox[0] * scaleX,
+            bbox[1] * scaleY,
+            bbox[2] * scaleX,
+            bbox[3] * scaleY,
+        ];
+    }
+
     function scaleFaceBboxForLoadedImage(bbox, sourceImage, img) {
         const sourceKind = img.dataset.faceSourceKind || '';
         const sourceWidth = Number(img.dataset.faceSourceWidth || 0);
@@ -2159,14 +2190,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (sourceKind === 'thumbnail' && (!sourceWidth || !sourceHeight)) {
             return null;
         }
-        const scaleX = sourceWidth ? sourceImage.naturalWidth / sourceWidth : 1;
-        const scaleY = sourceHeight ? sourceImage.naturalHeight / sourceHeight : 1;
-        return [
-            bbox[0] * scaleX,
-            bbox[1] * scaleY,
-            bbox[2] * scaleX,
-            bbox[3] * scaleY,
-        ];
+        return scaleFaceBboxForImageSize(
+            bbox,
+            sourceWidth,
+            sourceHeight,
+            sourceImage.naturalWidth,
+            sourceImage.naturalHeight,
+        );
     }
 
     function cropFaceEvidenceImages(container) {
@@ -2302,7 +2332,19 @@ document.addEventListener('DOMContentLoaded', () => {
         return true;
     }
 
-    function deleteFaceCluster(clusterId) {
+    function persistBatchViewState() {
+        saveBatchViewSnapshot({ active: false });
+    }
+
+    async function deleteFaceClusterOnServer(clusterId) {
+        if (!window._currentSessionId) return true;
+        const response = await fetch(`/face_clusters/${encodeURIComponent(window._currentSessionId)}/${encodeURIComponent(clusterId)}`, {
+            method: 'DELETE',
+        });
+        return response.ok || response.status === 404;
+    }
+
+    async function deleteFaceCluster(clusterId) {
         const cluster = currentFaceClusters.find(item => String(item.cluster_id) === String(clusterId));
         if (!cluster) return;
         const confirmed = window.confirm(`確定要刪除「${cluster.display_name || cluster.cluster_id}」嗎？\n\n此人物會從本次辨識結果與輸出人物資料夾移除，原始照片不會被刪除。`);
@@ -2311,9 +2353,23 @@ document.addEventListener('DOMContentLoaded', () => {
         removeClusterFromPhotoAssignments(clusterId);
         faceClusterUi.expanded.delete(String(clusterId));
         faceClusterUi.selectedEvidenceIndexes.delete(String(clusterId));
+        faceClusterUi.selectedClusterIds.delete(String(clusterId));
+        if (faceClusterUi.selectedClusterIds.size === 0) {
+            faceClusterUi.clusterSelectionMode = false;
+        }
         if (String(selectedFaceClusterId) === String(clusterId)) selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
+        if (currentFaceClusters.length === 0) {
+            faceClusterUi.evidenceSelectionMode = false;
+        }
+        persistBatchViewState();
         renderBatchOverview();
         showToast(`已從本次結果移除「${cluster.display_name || cluster.cluster_id}」`);
+        try {
+            if (!(await deleteFaceClusterOnServer(clusterId))) throw new Error('server delete failed');
+        } catch (error) {
+            console.warn('Face cluster delete stayed in browser only:', error);
+            showToast('已從畫面移除；伺服器同步失敗，重新整理後可能會回來', 'error');
+        }
     }
 
     function clearFaceMultiSelection() {
@@ -2412,11 +2468,12 @@ document.addEventListener('DOMContentLoaded', () => {
         currentFaceClusters = [merged, ...currentFaceClusters.filter(cluster => !selectedIds.has(String(cluster.cluster_id)))];
         selectedFaceClusterId = merged.cluster_id;
         clearFaceMultiSelection();
+        persistBatchViewState();
         renderBatchOverview();
         showToast(`已將 ${selected.length} 個人物合併為「${merged.display_name}」`);
     }
 
-    function deleteSelectedFaceClusters() {
+    async function deleteSelectedFaceClusters() {
         const selected = currentFaceClusters.filter(cluster => faceClusterUi.selectedClusterIds.has(String(cluster.cluster_id)));
         if (!selected.length || !window.confirm(`確定要刪除選取的 ${selected.length} 個人物嗎？\n\n原始照片不會被刪除。`)) return;
         const selectedIds = new Set(selected.map(cluster => String(cluster.cluster_id)));
@@ -2424,8 +2481,17 @@ document.addEventListener('DOMContentLoaded', () => {
         selectedIds.forEach(removeClusterFromPhotoAssignments);
         selectedFaceClusterId = currentFaceClusters[0]?.cluster_id || null;
         clearFaceMultiSelection();
+        persistBatchViewState();
         renderBatchOverview();
         showToast(`已刪除 ${selected.length} 個人物`);
+        if (!window._currentSessionId) return;
+        try {
+            const results = await Promise.all(Array.from(selectedIds, deleteFaceClusterOnServer));
+            if (results.some(result => !result)) throw new Error('server delete failed');
+        } catch (error) {
+            console.warn('Selected face cluster delete stayed in browser only:', error);
+            showToast('已從畫面移除；部分人物伺服器同步失敗，重新整理後可能會回來', 'error');
+        }
     }
 
     function getSelectedEvidenceEntries() {
@@ -2463,6 +2529,7 @@ document.addEventListener('DOMContentLoaded', () => {
         initializePhotoPeopleAssignments();
         faceClusterUi.selectedEvidenceIndexes.clear();
         faceClusterUi.evidenceSelectionMode = false;
+        persistBatchViewState();
         renderBatchOverview();
         showToast(`已刪除 ${entries.length} 張人臉框`);
     }
@@ -2489,6 +2556,7 @@ document.addEventListener('DOMContentLoaded', () => {
         faceClusterUi.selectedEvidenceIndexes.clear();
         faceClusterUi.evidenceSelectionMode = false;
         faceClusterUi.expanded.add(String(targetClusterId));
+        persistBatchViewState();
         renderBatchOverview();
         showToast(`已將 ${evidence.length} 張人臉框移到「${target.display_name || target.cluster_id}」`);
     }
@@ -2522,6 +2590,7 @@ document.addEventListener('DOMContentLoaded', () => {
         faceClusterUi.selectedEvidenceIndexes.clear();
         faceClusterUi.evidenceSelectionMode = false;
         faceClusterUi.expanded.add(String(newCluster.cluster_id));
+        persistBatchViewState();
         renderBatchOverview();
         showToast(`已建立人物「${newCluster.display_name}」`);
     }
@@ -2601,6 +2670,15 @@ document.addEventListener('DOMContentLoaded', () => {
         container.innerHTML = `<div class="face-cluster-list">${clusterToolbar}${evidenceToolbar}${clusterItems}</div>`;
 
         cropFaceEvidenceImages(container);
+    }
+
+    function openFaceEvidencePhoto(clusterId, evidenceIndex) {
+        const cluster = currentFaceClusters.find(item => String(item.cluster_id) === String(clusterId));
+        const evidence = Number.isInteger(evidenceIndex) ? cluster?.evidence_photos?.[evidenceIndex] : null;
+        const decision = evidence ? getFaceEvidenceDecision(evidence) : null;
+        if (decision && decision.resultIndex >= 0) {
+            openReviewFromOverview(decision.resultIndex, evidence || null);
+        }
     }
 
     function getResultDecision(item) {
@@ -2738,6 +2816,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         renderFaceWorkspace(container);
                         return;
                     }
+                    const tapKey = `${String(clusterId)}:${evidenceIndex}`;
+                    const tapNow = Date.now();
+                    const isDoubleTap = lastFaceEvidenceTap
+                        && lastFaceEvidenceTap.key === tapKey
+                        && tapNow - lastFaceEvidenceTap.at <= 350;
+                    lastFaceEvidenceTap = { key: tapKey, at: tapNow };
                     faceClusterUi.selectedEvidenceIndexes.set(clusterId, evidenceIndex);
                     const personCard = actionTarget.closest('.face-person-card');
                     personCard.querySelectorAll('.face-evidence-card.selected').forEach(card => card.classList.remove('selected'));
@@ -2745,6 +2829,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     const cluster = currentFaceClusters.find(item => String(item.cluster_id) === String(clusterId));
                     const selectedEvidence = cluster?.evidence_photos?.[evidenceIndex];
                     personCard.querySelector('.face-photo-decision-slot').innerHTML = renderFacePhotoDecision(selectedEvidence, clusterId, evidenceIndex);
+                    if (isDoubleTap) {
+                        lastFaceEvidenceTap = null;
+                        openFaceEvidencePhoto(clusterId, evidenceIndex);
+                    }
                 } else if (actionTarget.dataset.faceAction === 'open-photo') {
                     const resultIndex = Number(actionTarget.dataset.resultIndex);
                     const evidenceIndex = Number(actionTarget.dataset.evidenceIndex);
@@ -2757,7 +2845,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (actionTarget.dataset.faceAction === 'save-cluster') {
                     saveSelectedFaceCluster(clusterId, actionTarget.closest('[data-cluster-editor]'));
                 } else if (actionTarget.dataset.faceAction === 'delete-cluster') {
-                    deleteFaceCluster(clusterId);
+                    await deleteFaceCluster(clusterId);
                 } else if (actionTarget.dataset.faceAction === 'merge-selected-clusters') {
                     await mergeSelectedFaceClusters();
                 } else if (actionTarget.dataset.faceAction === 'delete-selected-clusters') {
@@ -2813,6 +2901,17 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (photoTarget.dataset.photoAction === 'open-photo') {
                 openReviewFromOverview(resultIndex);
             }
+        };
+
+        container.onkeydown = event => {
+            if (event.key !== 'Enter' || event.isComposing) return;
+            const input = event.target.closest('.face-person-name-input');
+            if (!input || !container.contains(input)) return;
+            event.preventDefault();
+            const saveButton = input.closest('.face-person-row')?.querySelector('[data-face-action="save-name"]');
+            const clusterId = saveButton?.dataset.clusterId;
+            if (!clusterId) return;
+            saveFaceClusterUpdate(clusterId, { display_name: input.value.trim() });
         };
     }
 

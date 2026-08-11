@@ -93,7 +93,8 @@ python -m pytest
 - `BATCH_STATE_BACKEND=auto` 或 `firestore`
 - `FIRESTORE_PROJECT_ID`
 - `FIRESTORE_DATABASE`
-- `FIRESTORE_SERVICE_ACCOUNT_JSON`（非 GCP 環境常用）
+- `PHOTOIDENTIFIER_BACKEND_SERVICE_ACCOUNT_JSON`（Vercel server-side 優先）
+- `FIRESTORE_SERVICE_ACCOUNT_JSON`（舊值，保留作為遷移 fallback）
 
 若未設定，系統會退回記憶體模式，不影響本機測試。
 

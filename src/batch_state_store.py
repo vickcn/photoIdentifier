@@ -15,6 +15,14 @@ DEFAULT_ACTIVE_TTL_DAYS = 7
 DEFAULT_HISTORY_TTL_DAYS = 30
 
 
+def get_backend_service_account_json() -> str:
+    """Prefer the new backend env and keep the legacy Firestore env as rollback."""
+    preferred = str(os.getenv("PHOTOIDENTIFIER_BACKEND_SERVICE_ACCOUNT_JSON") or "").strip()
+    if preferred:
+        return preferred
+    return str(os.getenv("FIRESTORE_SERVICE_ACCOUNT_JSON") or "").strip()
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -101,6 +109,9 @@ class NullBatchStateStore:
     ) -> dict[str, Any] | None:
         return None
 
+    async def delete_face_cluster(self, session_id: str, owner_id: str, cluster_id: str) -> bool:
+        return False
+
     async def save_photo_assignments(
         self,
         session_id: str,
@@ -132,7 +143,7 @@ class FirestoreBatchStateStore:
     def __init__(self, project_id: str | None = None, database: str = "(default)") -> None:
         from google.cloud import firestore
 
-        service_account_json = os.getenv("FIRESTORE_SERVICE_ACCOUNT_JSON")
+        service_account_json = get_backend_service_account_json()
         if service_account_json:
             from google.oauth2 import service_account
 
@@ -283,6 +294,20 @@ class FirestoreBatchStateStore:
 
         return await run_in_threadpool(update)
 
+    async def delete_face_cluster(self, session_id: str, owner_id: str, cluster_id: str) -> bool:
+        def delete() -> bool:
+            ref = self._client.collection("face_clusters").document(cluster_doc_id(session_id, cluster_id))
+            snap = ref.get()
+            if not snap.exists:
+                return False
+            cluster = snap.to_dict() or {}
+            if cluster.get("owner_id") != owner_id:
+                return False
+            ref.delete()
+            return True
+
+        return await run_in_threadpool(delete)
+
     async def save_photo_assignments(
         self,
         session_id: str,
@@ -372,7 +397,7 @@ def create_batch_state_store() -> FirestoreBatchStateStore | NullBatchStateStore
         return NullBatchStateStore()
 
     project_id = os.getenv("FIRESTORE_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
-    should_try_firestore = backend == "firestore" or bool(project_id) or bool(os.getenv("FIRESTORE_SERVICE_ACCOUNT_JSON"))
+    should_try_firestore = backend == "firestore" or bool(project_id) or bool(get_backend_service_account_json())
     if not should_try_firestore:
         return NullBatchStateStore()
 

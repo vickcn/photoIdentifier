@@ -2548,6 +2548,30 @@ async def update_face_cluster(session_id: str, cluster_id: str, req: FaceCluster
     return {"session_id": session_id, "cluster": cluster}
 
 
+@app.delete("/face_clusters/{session_id}/{cluster_id}")
+async def delete_face_cluster(session_id: str, cluster_id: str, request: Request):
+    session = await _owned_batch_session_async(request, session_id)
+    clusters = session.get("face_clusters", [])
+    cluster = next(
+        (item for item in clusters if item.get("cluster_id") == cluster_id),
+        None,
+    )
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="找不到指定的人物群組")
+
+    session["face_clusters"] = [
+        item for item in clusters if item.get("cluster_id") != cluster_id
+    ]
+    deleted = False
+    if batch_state_store.enabled:
+        deleted = await batch_state_store.delete_face_cluster(
+            session_id,
+            session["owner_id"],
+            cluster_id,
+        )
+    return {"session_id": session_id, "cluster_id": cluster_id, "deleted": True, "persisted": deleted}
+
+
 @app.post("/batch_summary/")
 async def get_batch_summary(req: BatchSummaryRequest, request: Request):
     """獲取批次處理的綜合指標與混淆矩陣"""

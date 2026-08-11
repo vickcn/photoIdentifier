@@ -1,5 +1,5 @@
 import io
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 def draw_bboxes_on_image(
     image_bytes: bytes,
@@ -12,7 +12,7 @@ def draw_bboxes_on_image(
     """
     讀取原始圖片，根據多個 0-1000 的正規化 bbox 座標畫框，並轉回 bytes 回傳
     """
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    image = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB")
     draw = ImageDraw.Draw(image)
     width, height = image.size
 
@@ -65,4 +65,3 @@ def draw_bboxes_on_image(
     out_io = io.BytesIO()
     image.save(out_io, format="JPEG")
     return out_io.getvalue()
-

@@ -4,7 +4,7 @@ import mimetypes
 import io
 import json
 import logging
-from PIL import Image
+from PIL import Image, ImageOps
 from pathlib import Path
 from typing import Tuple, List, Optional
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
@@ -23,6 +23,20 @@ except Exception:
     REQUEST_TIMEOUT = 600
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+
+def make_frontend_preview_b64(image_bytes: bytes, max_size: int = 800, quality: int = 75) -> str:
+    """Return an oriented JPEG preview used as the browser-side bbox coordinate base."""
+    output = io.BytesIO()
+    with Image.open(io.BytesIO(image_bytes)) as img:
+        img = ImageOps.exif_transpose(img)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        img.thumbnail((max_size, max_size))
+        img.save(output, format="JPEG", quality=quality)
+    return base64.b64encode(output.getvalue()).decode("utf-8")
 
 def resize_image_if_needed(image_bytes: bytes, max_size: int = 1600) -> bytes:
     """如果圖片太大的話，將長邊縮放至 max_size，節省傳輸頻寬與 AI 處理時間"""
@@ -183,7 +197,7 @@ async def batch_process_uploads_stream(
                     "status": "ok",
                     "file_name": image.filename,
                     "result": result.model_dump(),
-                    "original_image_b64": base64.b64encode(image.content).decode("ascii"),
+                    "original_image_b64": make_frontend_preview_b64(image.content),
                     "drawn_image_b64": base64.b64encode(drawn_bytes).decode("ascii"),
                 }
             except Exception as exc:
@@ -322,7 +336,7 @@ async def batch_process_drive(
                     "moderation_status": result.moderation_status,
                     "moderation_reason": result.moderation_reason,
                     "public_classification_performed": result.public_classification_performed,
-                    "original_image_b64": base64.b64encode(image_bytes).decode('utf-8'),
+                    "original_image_b64": make_frontend_preview_b64(image_bytes),
                     "ai_decision": ai_decision,
                     "status": "ok",
                 }
@@ -393,14 +407,6 @@ async def process_drive_file_item(
             img.save(preview_io, format="JPEG", quality=75)
         preview_b64 = base64.b64encode(preview_io.getvalue()).decode("utf-8")
 
-        orig_io = io.BytesIO()
-        with Image.open(io.BytesIO(image_bytes)) as img:
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            img.thumbnail((800, 800))
-            img.save(orig_io, format="JPEG", quality=75)
-        orig_b64 = base64.b64encode(orig_io.getvalue()).decode("utf-8")
-
         ai_decision = "safe" if analysis.moderation_status == "public" else "unsafe" if analysis.moderation_status == "private" else "pending"
         result_dict = analysis.model_dump()
         result_dict["ai_decision"] = ai_decision
@@ -413,7 +419,7 @@ async def process_drive_file_item(
             "drive_id": file_id,
             "result": result_dict,
             "drawn_image_b64": preview_b64,
-            "original_image_b64": orig_b64,
+            "original_image_b64": make_frontend_preview_b64(image_bytes),
         }
     except Exception as e:
         print(f"[ERROR] Stream failed for {file_name}: {repr(e)}")

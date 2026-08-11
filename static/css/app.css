@@ -733,6 +733,14 @@ button:disabled {
     gap: 1rem;
 }
 
+.split-viewer.public-classification-off .stats-grid {
+    grid-template-columns: minmax(220px, 1fr);
+}
+
+.split-viewer.public-classification-off .stat-card-public-classification {
+    display: none;
+}
+
 .stat-card {
     background: rgba(255,255,255,0.78);
     padding: 1rem;
@@ -1818,7 +1826,7 @@ body.app-busy {
 
 .overview-content {
     min-height: 200px;
-    max-height: calc(100vh - 280px);
+    max-height: calc(100vh - 220px);
     overflow-y: auto;
 }
 
@@ -1838,6 +1846,7 @@ body.app-busy {
     display: flex;
     flex-direction: column;
     gap: 0.65rem;
+    min-height: clamp(520px, calc(100vh - 250px), 780px);
     padding: 1rem;
     border: 1px solid var(--glass-border);
     border-radius: 1rem;
@@ -1919,6 +1928,7 @@ body.app-busy {
     display: flex;
     flex-direction: column;
     gap: 0.65rem;
+    min-height: 100%;
 }
 
 .face-person-card {
