@@ -1,17 +1,23 @@
 document.addEventListener('DOMContentLoaded', () => {
     const previewImageSources = window.BatchImageSources || {};
-    const getOriginalPreviewSrc = previewImageSources.originalImageSrc
-        || (item => item?.original_image_b64 ? `data:image/jpeg;base64,${item.original_image_b64}` : null);
+    const getOriginalPreviewSrc = item => item?.imported_image_url
+        || (previewImageSources.originalImageSrc
+            ? previewImageSources.originalImageSrc(item)
+            : item?.original_image_b64 ? `data:image/jpeg;base64,${item.original_image_b64}` : null);
     const getAnnotatedPreviewSrc = previewImageSources.annotatedImageSrc
         || (item => item?.drawn_image_b64 ? `data:image/jpeg;base64,${item.drawn_image_b64}` : null);
-    const getFaceImageSource = previewImageSources.faceImageSource
-        || ((face, matchedResult) => face?.image_b64
-            ? { kind: 'full', src: `data:image/jpeg;base64,${face.image_b64}` }
-            : matchedResult?.original_image_b64
-                ? { kind: 'result', src: `data:image/jpeg;base64,${matchedResult.original_image_b64}` }
-                : face?.thumbnail_b64
-                    ? { kind: 'thumbnail', src: `data:image/jpeg;base64,${face.thumbnail_b64}` }
-                    : { kind: 'placeholder', src: null });
+    const getFaceImageSource = (face, matchedResult) => {
+        if (face?.imported_image_url) return { kind: 'imported', src: face.imported_image_url };
+        return previewImageSources.faceImageSource
+            ? previewImageSources.faceImageSource(face, matchedResult)
+            : face?.image_b64
+                ? { kind: 'full', src: `data:image/jpeg;base64,${face.image_b64}` }
+                : matchedResult?.original_image_b64
+                    ? { kind: 'result', src: `data:image/jpeg;base64,${matchedResult.original_image_b64}` }
+                    : face?.thumbnail_b64
+                        ? { kind: 'thumbnail', src: `data:image/jpeg;base64,${face.thumbnail_b64}` }
+                        : { kind: 'placeholder', src: null };
+    };
     const getFaceImageFallbackMessage = previewImageSources.faceImageFallbackMessage
         || (source => source === 'drive'
             ? '雲端模式可從 Google 來源重新載入完整圖。'
@@ -39,6 +45,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const batchFileInput = document.getElementById('batch-file-input');
     const batchFileSummary = document.getElementById('batch-file-summary');
     const batchCloudGuidance = document.getElementById('batch-cloud-guidance');
+    const workspaceImportInput = document.getElementById('workspace-import-input');
+    const importWorkspaceBtn = document.getElementById('import-workspace-btn');
+    const workspaceImportSummary = document.getElementById('workspace-import-summary');
     const batchConcurrency = document.getElementById('batch-concurrency');
     const batchConcurrencyHint = document.getElementById('batch-concurrency-hint');
     const faceClusterEpsInput = document.getElementById('face-cluster-eps');
@@ -57,6 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const driveTargetId = document.getElementById('drive-target-id');
     const driveSourceSelectionSummary = document.getElementById('drive-source-selection-summary');
     let selectedDriveFiles = [];
+    const importedArchiveUrls = [];
 
     function getSelectedBatchSource() {
         return document.querySelector('input[name="batch-source"]:checked')?.value || 'local';
@@ -654,6 +664,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     batchDropZone.addEventListener('click', () => batchFileInput.click());
     batchFileInput.addEventListener('change', () => selectBatchFiles(batchFileInput.files));
+    importWorkspaceBtn?.addEventListener('click', () => workspaceImportInput?.click());
+    workspaceImportInput?.addEventListener('change', () => importWorkspaceFile(workspaceImportInput.files?.[0]));
     batchDropZone.addEventListener('dragover', event => {
         event.preventDefault();
         batchDropZone.classList.add('dragover');
@@ -3049,6 +3061,10 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
+    function revokeImportedArchiveUrls() {
+        while (importedArchiveUrls.length) URL.revokeObjectURL(importedArchiveUrls.pop());
+    }
+
     function base64ByteLength(value) {
         if (!value) return 0;
         const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
@@ -3131,6 +3147,30 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function buildWorkspaceExport(exportDocument) {
+        return {
+            schema_version: 'photoidentifier.workspace.v1',
+            exported_at: new Date().toISOString(),
+            app: 'photoIdentifier',
+            result_file: 'result.json',
+            archive_meta: {
+                archive_id: window._currentSessionId || `archive_${Date.now()}`,
+                source_kind: batchMode,
+                image_count: currentBatchResults.length,
+            },
+            editable_state: {
+                batch_mode: batchMode,
+                results: cloneExportData(currentBatchResults),
+                face_clusters: cloneExportData(currentFaceClusters),
+                face_clustering: cloneExportData(faceClusteringInfo || null),
+                photo_people_assignments: cloneExportData(photoPeopleAssignments || {}),
+                blocked_files: cloneExportData(batchBlockedUploadFiles || []),
+                relationship_view_mode: relationshipViewMode,
+            },
+            result_summary: cloneExportData(exportDocument),
+        };
+    }
+
     function cloneExportData(exportData) {
         if (typeof structuredClone === 'function') return structuredClone(exportData);
         return JSON.parse(JSON.stringify(exportData));
@@ -3156,6 +3196,146 @@ document.addEventListener('DOMContentLoaded', () => {
             if (archivePath) result.archive_relative_path = archivePath;
         });
         return nextExport;
+    }
+
+    function collectArchiveImageSources(zipImageSources) {
+        const byPath = new Map();
+        const byName = new Map();
+        (zipImageSources || []).forEach(item => {
+            byPath.set(item.path, item.url);
+            byName.set(item.name, item.url);
+        });
+        return { byPath, byName };
+    }
+
+    function attachImportedImageSources(workspace, zipImageSources) {
+        const imageSources = collectArchiveImageSources(zipImageSources);
+        const state = workspace?.editable_state || {};
+        const resultSummary = workspace?.result_summary || {};
+        const archiveByFileName = new Map();
+        (resultSummary.photos || []).forEach(photo => {
+            if (photo.file_name && photo.archive_relative_path) {
+                archiveByFileName.set(photo.file_name, photo.archive_relative_path);
+            }
+        });
+        (state.results || []).forEach(item => {
+            const fileName = item.file_name || item.file || item.result?.file_name;
+            const archivePath = item.archive_relative_path || archiveByFileName.get(fileName);
+            const source = (archivePath && imageSources.byPath.get(archivePath)) || imageSources.byName.get(fileName);
+            if (source) item.imported_image_url = source;
+        });
+        (state.face_clusters || []).forEach(cluster => {
+            (cluster.evidence_photos || []).forEach(evidence => {
+                const archivePath = archiveByFileName.get(evidence.file_name);
+                const source = (archivePath && imageSources.byPath.get(archivePath)) || imageSources.byName.get(evidence.file_name);
+                if (source) evidence.imported_image_url = source;
+            });
+        });
+    }
+
+    function normalizeWorkspaceDocument(raw) {
+        if (raw?.schema_version === 'photoidentifier.workspace.v1' && raw.editable_state) return raw;
+        if (raw?.results && raw?.face_clusters) {
+            return {
+                schema_version: 'photoidentifier.workspace.v1',
+                exported_at: raw.exported_at || new Date().toISOString(),
+                app: 'photoIdentifier',
+                result_file: 'result.json',
+                archive_meta: {
+                    archive_id: raw.session_id || `archive_${Date.now()}`,
+                    source_kind: raw.batch_mode || 'archive',
+                    image_count: Array.isArray(raw.results) ? raw.results.length : 0,
+                },
+                editable_state: {
+                    batch_mode: raw.batch_mode || 'archive',
+                    results: raw.results || [],
+                    face_clusters: raw.face_clusters || [],
+                    face_clustering: raw.face_clustering || null,
+                    photo_people_assignments: Object.fromEntries(
+                        (raw.photos || []).map(photo => [
+                            photo.file_name,
+                            (photo.people || []).map(person => person.cluster_id).filter(Boolean),
+                        ]),
+                    ),
+                    blocked_files: raw.blocked_files || [],
+                    relationship_view_mode: 'people',
+                },
+                result_summary: raw,
+            };
+        }
+        throw new Error('這不是支援的辨識結果紀錄');
+    }
+
+    async function readWorkspaceImportFile(file) {
+        if (!file) throw new Error('請先選擇辨識結果檔案');
+        if (file.name.toLowerCase().endsWith('.zip')) {
+            if (typeof JSZip === 'undefined') throw new Error('壓縮元件未載入，無法讀取 ZIP');
+            const zip = await JSZip.loadAsync(file);
+            const workspaceEntry = zip.file('workspace.json') || zip.file('result.json');
+            if (!workspaceEntry) throw new Error('ZIP 裡找不到 workspace.json 或 result.json');
+            const raw = JSON.parse(await workspaceEntry.async('string'));
+            const workspace = normalizeWorkspaceDocument(raw);
+            const imageEntries = Object.values(zip.files).filter(entry =>
+                !entry.dir && /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(entry.name)
+            );
+            const zipImageSources = [];
+            for (const entry of imageEntries) {
+                const blob = await entry.async('blob');
+                const url = URL.createObjectURL(blob);
+                importedArchiveUrls.push(url);
+                zipImageSources.push({
+                    path: entry.name,
+                    name: entry.name.split('/').pop(),
+                    url,
+                });
+            }
+            attachImportedImageSources(workspace, zipImageSources);
+            return workspace;
+        }
+        return normalizeWorkspaceDocument(JSON.parse(await file.text()));
+    }
+
+    function applyImportedWorkspace(workspace) {
+        const state = workspace.editable_state || {};
+        window._currentSessionId = workspace.archive_meta?.archive_id || `import_${Date.now()}`;
+        batchMode = state.batch_mode || workspace.archive_meta?.source_kind || 'archive';
+        currentIndex = 0;
+        currentBatchResults = Array.isArray(state.results) ? state.results : [];
+        currentFaceClusters = Array.isArray(state.face_clusters) ? state.face_clusters : [];
+        faceClusteringInfo = state.face_clustering || null;
+        photoPeopleAssignments = state.photo_people_assignments || PhotoRelationships.createAssignments(currentFaceClusters);
+        setBatchBlockedUploadFiles(state.blocked_files || []);
+        relationshipViewMode = state.relationship_view_mode || 'people';
+        batchOverviewActive = true;
+        batchFailureDetails = [];
+        clearFaceMultiSelection();
+        photoClusterUi.expanded.clear();
+        faceClusterUi.expanded.clear();
+        faceClusterUi.selectedEvidenceIndexes.clear();
+        updateProgressUI(currentBatchResults.length, currentBatchResults.length, currentBatchResults.length, 0);
+        saveBatchViewSnapshot({ active: false });
+        showBatchOverview();
+        if (workspaceImportSummary) {
+            workspaceImportSummary.textContent = `已載入 ${currentBatchResults.length} 張辨識結果，可繼續檢視與編輯。`;
+            workspaceImportSummary.classList.remove('hidden');
+        }
+    }
+
+    async function importWorkspaceFile(file) {
+        showLoading(true);
+        document.getElementById('loading-text').textContent = '正在載入辨識結果…';
+        try {
+            revokeImportedArchiveUrls();
+            const workspace = await readWorkspaceImportFile(file);
+            applyImportedWorkspace(workspace);
+            showToast('已載入辨識結果');
+        } catch (error) {
+            showToast(error.message || '辨識結果載入失敗', 'error');
+        } finally {
+            showLoading(false);
+            document.getElementById('loading-text').textContent = '正在一張一張看過去…';
+            if (workspaceImportInput) workspaceImportInput.value = '';
+        }
     }
 
     async function saveExportToDrive(document) {
@@ -3254,8 +3434,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const exportDocument = wantsPhotoFolders && folderPhotoEntries.length > 0
             ? addArchiveRelativePaths(exportData, folderPhotoEntries)
             : exportData;
+        const workspaceDocument = buildWorkspaceExport(exportDocument);
         const json = JSON.stringify(exportDocument, null, 2);
+        const workspaceJson = JSON.stringify(workspaceDocument, null, 2);
         const jsonBlob = new Blob([json], { type: 'application/json;charset=utf-8' });
+        const workspaceBlob = new Blob([workspaceJson], { type: 'application/json;charset=utf-8' });
         const imageBytes = folderPhotoEntries.reduce((total, item) => total + item.source.size, 0);
         // 本機原圖已由瀏覽器持有，沿用上傳總量限制即可；雲端模式仍保留
         // 下載大小保護，避免一次把大量 Drive 檔案組成瀏覽器 ZIP。
@@ -3268,7 +3451,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const shouldUseJsonOnly = !wantsPhotoFolders
                 || folderPhotoEntries.length === 0
-                || imageBytes + jsonBlob.size > maxBytes
+                || imageBytes + jsonBlob.size + workspaceBlob.size > maxBytes
                 || typeof JSZip === 'undefined';
             if (shouldUseJsonOnly) {
                 downloadBlob(jsonBlob, `photo_people_${Date.now()}.json`);
@@ -3284,6 +3467,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const zip = new JSZip();
                 zip.file('result.json', json);
+                zip.file('workspace.json', workspaceJson);
                 folderPhotoEntries.forEach(entry => {
                     const folder = zip.folder(entry.folderPathSegments.join('/'));
                     folder.file(entry.photoName, entry.source.blob);

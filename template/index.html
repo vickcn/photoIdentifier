@@ -75,6 +75,9 @@
                             <p>照片較多或較大時，改用自己的 Google 雲端資料夾比較穩定。</p>
                             <button type="button" id="switch-to-drive-btn" class="secondary-btn">改用 Google 雲端</button>
                         </div>
+                        <input type="file" id="workspace-import-input" accept=".json,application/json,.zip,application/zip" hidden>
+                        <button id="import-workspace-btn" class="secondary-btn" type="button" style="width: 100%; margin-top: 1rem;">上傳辨識結果</button>
+                        <p id="workspace-import-summary" class="input-hint hidden">已載入既有辨識結果。</p>
                         <button id="btn-add-memory-local" class="secondary-btn" style="width: 100%; margin-top: 1rem;">📝 加一點提醒</button>
                     </div>
 
@@ -600,7 +603,7 @@
     <script src="/static/js/face_relationships.js?v=20260809-public-decision-optional"></script>
     <script src="/static/js/upload_limits.js?v=20260808-upload-limits"></script>
     <script src="/static/js/batch_image_sources.js?v=20260809-drive-preview-fix"></script>
-    <script src="/static/js/app.js?v=20260811-drive-picker-multiselect"></script>
+    <script src="/static/js/app.js?v=20260811-workspace-import"></script>
 </body>
 
 </html>
