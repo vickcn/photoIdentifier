@@ -185,12 +185,20 @@ document.addEventListener('DOMContentLoaded', () => {
             driveSourceSelectionSummary.textContent = `已選 ${selectedDriveFiles.length} 張雲端圖片`;
             return;
         }
-        driveSourceSelectionSummary.textContent = '尚未選取雲端圖片。';
+        if (driveFolderId?.value?.trim()) {
+            const folderName = driveFolderId.dataset.folderName;
+            driveSourceSelectionSummary.textContent = folderName ? `已選資料夾：${folderName}` : '已選雲端資料夾';
+            return;
+        }
+        driveSourceSelectionSummary.textContent = '尚未選取雲端圖片或資料夾。';
     }
 
     function clearSelectedDriveFiles() {
         selectedDriveFiles = [];
-        if (driveFolderId) driveFolderId.value = '';
+        if (driveFolderId) {
+            driveFolderId.value = '';
+            delete driveFolderId.dataset.folderName;
+        }
         syncDriveSourceSelectionSummary();
     }
 
@@ -1876,13 +1884,14 @@ document.addEventListener('DOMContentLoaded', () => {
             requestOptions = { method: 'POST' };
         } else {
             const tId = driveTargetId.value.trim();
-            if (selectedDriveFiles.length === 0) {
-                showToast('請先選 Google 雲端圖片', 'error');
+            const sourceFolderId = driveFolderId.value.trim();
+            if (selectedDriveFiles.length === 0 && !sourceFolderId) {
+                showToast('請先選 Google 雲端圖片或資料夾', 'error');
                 return;
             }
             endpoint = '/batch_drive_start/';
             body = {
-                folder_id: null,
+                folder_id: selectedDriveFiles.length ? null : sourceFolderId,
                 drive_files: selectedDriveFiles.length ? selectedDriveFiles : null,
                 target_folder_id: tId || null,
                 concurrency: currentConcurrency,
@@ -4398,8 +4407,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const isSourcePicker = targetId === 'drive-folder-id';
             const view = new google.picker.DocsView(google.picker.ViewId.DOCS);
             if (isSourcePicker) {
-                view.setIncludeFolders(false);
-                view.setMimeTypes('image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif');
+                view.setIncludeFolders(true);
+                view.setSelectFolderEnabled(true);
+                view.setMimeTypes('image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/vnd.google-apps.folder');
             } else {
                 view.setIncludeFolders(true);
                 view.setSelectFolderEnabled(true);
@@ -4435,30 +4445,49 @@ document.addEventListener('DOMContentLoaded', () => {
             const docs = Array.from(data.docs || []);
             const folders = docs.filter(doc => doc.mimeType === 'application/vnd.google-apps.folder');
             const imageFiles = docs.map(normalizeDrivePickerFile).filter(Boolean);
+            let pickedPayload = null;
             if (input) {
                 if (targetId === 'drive-folder-id') {
-                    if (imageFiles.length === 0) {
-                        if (folders.length > 0) {
-                            showToast('這裡只接受圖片，不接受資料夾', 'error');
-                        } else {
-                            showToast('請選擇圖片', 'error');
-                        }
+                    if (folders.length > 0 && imageFiles.length > 0) {
+                        showToast('請擇一選取：多張圖片，或一個資料夾', 'error');
                         return;
                     }
-                    selectedDriveFiles = imageFiles;
-                    input.value = '';
-                    input.dispatchEvent(new Event('change'));
-                    syncDriveSourceSelectionSummary();
-                    showToast(`已選取 ${imageFiles.length} 張雲端圖片`);
+                    if (folders.length > 1) {
+                        showToast('資料夾一次只能選一個', 'error');
+                        return;
+                    }
+                    if (imageFiles.length === 0 && folders.length === 0) {
+                        showToast('請選擇圖片或資料夾', 'error');
+                        return;
+                    }
+                    if (folders.length === 1) {
+                        selectedDriveFiles = [];
+                        const folder = folders[0];
+                        input.value = folder.id;
+                        input.dataset.folderName = folder.name || folder.id;
+                        input.dispatchEvent(new Event('change'));
+                        syncDriveSourceSelectionSummary();
+                        showToast(`已選取資料夾：${folder.name || folder.id}`);
+                        pickedPayload = folder;
+                    } else {
+                        selectedDriveFiles = imageFiles;
+                        input.value = '';
+                        delete input.dataset.folderName;
+                        input.dispatchEvent(new Event('change'));
+                        syncDriveSourceSelectionSummary();
+                        showToast(`已選取 ${imageFiles.length} 張雲端圖片`);
+                        pickedPayload = imageFiles;
+                    }
                 } else {
                     const folder = folders[0] || docs[0];
                     input.value = folder.id;
                     input.dispatchEvent(new Event('change'));
                     showToast(`已選取資料夾：${folder.name}`);
+                    pickedPayload = folder;
                 }
                 const onPicked = pickerSelectionCallback;
                 pickerSelectionCallback = null;
-                if (onPicked) onPicked(targetId === 'drive-folder-id' ? imageFiles : (folders[0] || docs[0]));
+                if (onPicked) onPicked(pickedPayload);
             }
         } else if (data.action === google.picker.Action.CANCEL) {
             pickerSelectionCallback = null;
