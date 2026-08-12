@@ -3592,7 +3592,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function sanitizeWorkspaceFaceEvidence(evidence) {
-        return {
+        const item = {
             file_name: evidence?.file_name || '',
             face_id: evidence?.face_id || null,
             drive_id: evidence?.drive_id || null,
@@ -3604,6 +3604,9 @@ document.addEventListener('DOMContentLoaded', () => {
             image_width: Number(evidence?.image_width) || 0,
             image_height: Number(evidence?.image_height) || 0,
         };
+        if (evidence?.image_b64) item.image_b64 = evidence.image_b64;
+        if (evidence?.thumbnail_b64) item.thumbnail_b64 = evidence.thumbnail_b64;
+        return item;
     }
 
     function sanitizeWorkspaceFaceClusters(clusters) {
