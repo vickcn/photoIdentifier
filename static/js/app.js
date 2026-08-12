@@ -35,6 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
             : '本機模式的完整圖只保證在目前 session 存活期內可用。');
     const DEFAULT_ORIGINAL_PLACEHOLDER = 'https://placehold.co/600x400?text=Processing+Drive+File';
     const DEFAULT_ANNOTATED_PLACEHOLDER = 'https://placehold.co/600x400?text=Preview+Unavailable';
+    const LEGACY_FACE_BBOX_PREVIEW_MAX_SIZE = 800;
 
     // === DOM Elements ===
     const tabBtns = document.querySelectorAll('.tab-btn');
@@ -1503,6 +1504,26 @@ document.addEventListener('DOMContentLoaded', () => {
         ];
     }
 
+    function inferLegacyPreviewBboxBasis(bbox, evidence, sourceKind, targetWidth, targetHeight) {
+        const hasExplicitBasis = Boolean(
+            evidence.bbox_basis_width || evidence.bbox_basis_height || evidence.image_width || evidence.image_height
+        );
+        if (hasExplicitBasis || !targetWidth || !targetHeight) return null;
+        if (!['imported', 'drive', 'local_path'].includes(sourceKind)) return null;
+        const space = String(evidence.bbox_space || 'pixel').toLowerCase();
+        if (space !== 'pixel') return null;
+        const values = Array.isArray(bbox) ? bbox.map(Number) : [];
+        if (values.length !== 4 || values.some(value => !Number.isFinite(value))) return null;
+        if (Math.max(...values) > 1000 || Math.max(targetWidth, targetHeight) <= LEGACY_FACE_BBOX_PREVIEW_MAX_SIZE) {
+            return null;
+        }
+        const scale = LEGACY_FACE_BBOX_PREVIEW_MAX_SIZE / Math.max(targetWidth, targetHeight);
+        return {
+            bbox_basis_width: Math.round(targetWidth * scale),
+            bbox_basis_height: Math.round(targetHeight * scale),
+        };
+    }
+
     function renderFaceFocusOverlay() {
         const overlay = getFaceFocusOverlay();
         const bbox = Array.isArray(focusedFaceEvidence?.bbox) ? focusedFaceEvidence.bbox.map(Number) : null;
@@ -2586,9 +2607,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (sourceKind === 'thumbnail' && !hasExplicitBasis) {
             return null;
         }
-        return normalizeFaceBboxToPixelSpace(
+        const inferredBasis = inferLegacyPreviewBboxBasis(
             bbox,
             evidence,
+            sourceKind,
+            sourceImage.naturalWidth,
+            sourceImage.naturalHeight,
+        );
+        return normalizeFaceBboxToPixelSpace(
+            bbox,
+            inferredBasis ? { ...evidence, ...inferredBasis } : evidence,
             sourceImage.naturalWidth,
             sourceImage.naturalHeight,
         );
