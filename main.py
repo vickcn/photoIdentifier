@@ -25,7 +25,7 @@ import shutil
 
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 import os
 import uuid
 from urllib.parse import quote, urlparse
@@ -43,6 +43,14 @@ from src.insight_api_client import (
     prepare_cluster_images,
 )
 from src.batch_state_store import create_batch_state_store, get_backend_service_account_json
+from src.drive_name_memory import (
+    NAME_MEMORY_FILE_NAME,
+    default_name_memory_document,
+    is_storable_person_name,
+    merge_name_memory_names,
+    normalize_name_memory_document,
+    normalize_person_name,
+)
 from src.user_store import (
     PUBLIC_CLASSIFICATION_DENIED_DETAIL,
     create_user_store,
@@ -831,6 +839,137 @@ async def update_current_user_preferences(request: Request, req: UserPreferences
     return {
         "success": True,
         "preferences": public_user_payload(user_record).get("preferences", {}),
+    }
+
+
+class NameMemoryRecordRequest(BaseModel):
+    names: list[str] = Field(default_factory=list)
+    source: str = "manual"
+
+
+def _require_logged_in_google_user_id(request: Request) -> str:
+    userinfo = _get_google_userinfo(request)
+    if not isinstance(userinfo, dict):
+        raise HTTPException(status_code=401, detail=LOGIN_REQUIRED_DETAIL)
+    google_user_id = normalize_google_user_id(userinfo)
+    if not google_user_id:
+        raise HTTPException(status_code=400, detail="Google user id 不可留白")
+    return google_user_id
+
+
+def _find_drive_name_memory_file_id(drive_service) -> str | None:
+    query = f"name = '{NAME_MEMORY_FILE_NAME}' and 'root' in parents and trashed = false"
+    response = drive_service.files().list(
+        q=query,
+        fields="files(id)",
+        pageSize=1,
+    ).execute()
+    files = response.get("files", [])
+    if not files:
+        return None
+    return str(files[0].get("id") or "").strip() or None
+
+
+def _load_drive_name_memory_document(credentials) -> dict[str, Any]:
+    from googleapiclient.discovery import build
+
+    drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    file_id = _find_drive_name_memory_file_id(drive_service)
+    if not file_id:
+        return default_name_memory_document()
+    try:
+        raw_bytes = drive_service.files().get_media(fileId=file_id).execute()
+        raw = json.loads(raw_bytes.decode("utf-8"))
+    except Exception:
+        logger.warning("Drive name memory parse failed file_id=%s", file_id, exc_info=True)
+        return default_name_memory_document()
+    return normalize_name_memory_document(raw)
+
+
+def _save_drive_name_memory_document(credentials, document: dict[str, Any]) -> dict[str, Any]:
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+
+    drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    normalized_document = normalize_name_memory_document(document)
+    content = json.dumps(normalized_document, ensure_ascii=False, indent=2).encode("utf-8")
+    media = MediaIoBaseUpload(io.BytesIO(content), mimetype="application/json", resumable=False)
+    file_id = _find_drive_name_memory_file_id(drive_service)
+    metadata = {"name": NAME_MEMORY_FILE_NAME}
+    if file_id:
+        drive_service.files().update(
+            fileId=file_id,
+            body=metadata,
+            media_body=media,
+            fields="id",
+        ).execute()
+    else:
+        drive_service.files().create(
+            body={**metadata, "mimeType": "application/json", "parents": ["root"]},
+            media_body=media,
+            fields="id",
+        ).execute()
+    return normalized_document
+
+
+@app.get("/drive/name-memory")
+async def get_current_user_drive_name_memory(request: Request):
+    _require_logged_in_google_user_id(request)
+    credentials = get_drive_credentials(request)
+    document = await run_in_threadpool(_load_drive_name_memory_document, credentials)
+    items = document.get("names", []) if isinstance(document.get("names"), list) else []
+    return {
+        "logged_in": True,
+        "summary": {
+            "count": len(items),
+            "updated_at": str(document.get("updated_at") or ""),
+            "file_name": NAME_MEMORY_FILE_NAME,
+        },
+        "items": items,
+    }
+
+
+@app.post("/drive/name-memory/record")
+async def record_current_user_drive_name_memory(request: Request, req: NameMemoryRecordRequest):
+    _require_logged_in_google_user_id(request)
+    normalized_names = [
+        normalize_person_name(name)
+        for name in (req.names or [])
+        if is_storable_person_name(name)
+    ]
+    if not normalized_names:
+        return {
+            "success": True,
+            "recorded": 0,
+            "summary": {
+                "count": 0,
+                "updated_at": "",
+                "file_name": NAME_MEMORY_FILE_NAME,
+            },
+            "items": [],
+        }
+    credentials = get_drive_credentials(request)
+
+    def _record() -> dict[str, Any]:
+        current_document = _load_drive_name_memory_document(credentials)
+        merged_document = merge_name_memory_names(
+            current_document,
+            normalized_names,
+            source=req.source or "manual",
+        )
+        return _save_drive_name_memory_document(credentials, merged_document)
+
+    document = await run_in_threadpool(_record)
+    items = document.get("names", []) if isinstance(document.get("names"), list) else []
+    return {
+        "success": True,
+        "recorded": len({name for name in normalized_names}),
+        "summary": {
+            "count": len(items),
+            "updated_at": str(document.get("updated_at") or ""),
+            "file_name": NAME_MEMORY_FILE_NAME,
+        },
+        "items": items,
     }
 
 

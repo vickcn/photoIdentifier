@@ -31,6 +31,7 @@
     }
 
     function faceImageSource(face, matchedResult) {
+        const importedSrc = face?.imported_image_url || matchedResult?.imported_image_url || null;
         const thumbnailSrc = face?.thumbnail_b64 ? `data:image/jpeg;base64,${face.thumbnail_b64}` : null;
         if (face?.image_b64) {
             return { kind: 'full', src: `data:image/jpeg;base64,${face.image_b64}`, fallbackSrc: thumbnailSrc };
@@ -38,6 +39,9 @@
         if (matchedResult) {
             const src = originalImageSrc(matchedResult);
             if (src) return { kind: 'result', src, fallbackSrc: thumbnailSrc };
+        }
+        if (importedSrc) {
+            return { kind: 'imported', src: importedSrc, fallbackSrc: thumbnailSrc };
         }
         if (face?.source_type === 'drive' && face?.source_key) {
             return { kind: 'drive', src: driveFileSrc(face.source_key), fallbackSrc: thumbnailSrc };
