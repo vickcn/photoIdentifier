@@ -24,3 +24,12 @@ test('workspace review coverage log stays low frequency and summarized', () => {
     assert.match(appSource, /logWorkspaceReviewCoverage\('import_workspace'/);
     assert.match(appSource, /logWorkspaceReviewCoverage\('download_batch_results'/);
 });
+
+test('first legacy fallback logs detailed calculation data once', () => {
+    assert.match(appSource, /const legacyFaceBboxFallbackLogState = \{ logged: false \};/);
+    assert.match(appSource, /function logLegacyFaceBboxFallbackOnce/);
+    assert.match(appSource, /workspace\.review\.legacy_face_bbox_fallback file_name=\$\{details\.fileName \|\| ''\} source_kind=\$\{details\.sourceKind \|\| ''\} bbox=\$\{\(details\.bbox \|\| \[\]\)\.join\(','\)\} source_size=\$\{details\.sourceWidth \|\| 0\}x\$\{details\.sourceHeight \|\| 0\} inferred_preview_size=\$\{details\.inferredWidth \|\| 0\}x\$\{details\.inferredHeight \|\| 0\} basis_width=\$\{details\.basisWidth \|\| 0\} basis_height=\$\{details\.basisHeight \|\| 0\} pixel_bbox=\$\{\(details\.pixelBbox \|\| \[\]\)\.map\(value => Number\(value\)\.toFixed\(1\)\)\.join\(','\)\}/);
+    assert.match(appSource, /data-face-file-name="\$\{escapeHtml\(evidence\.file_name\)\}"/);
+    assert.match(appSource, /legacyFaceBboxFallbackLogState\.logged = false;/);
+    assert.match(appSource, /logLegacyFaceBboxFallbackOnce\(\{/);
+});

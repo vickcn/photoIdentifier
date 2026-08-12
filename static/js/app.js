@@ -36,6 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const DEFAULT_ORIGINAL_PLACEHOLDER = 'https://placehold.co/600x400?text=Processing+Drive+File';
     const DEFAULT_ANNOTATED_PLACEHOLDER = 'https://placehold.co/600x400?text=Preview+Unavailable';
     const LEGACY_FACE_BBOX_PREVIEW_MAX_SIZE = 800;
+    const legacyFaceBboxFallbackLogState = { logged: false };
 
     // === DOM Elements ===
     const tabBtns = document.querySelectorAll('.tab-btn');
@@ -2582,6 +2583,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const attrs = [];
         if (imageSource?.fallbackSrc) attrs.push(`data-fallback-src="${escapeHtml(imageSource.fallbackSrc)}"`);
         if (imageSource?.kind) attrs.push(`data-face-source-kind="${escapeHtml(imageSource.kind)}"`);
+        if (evidence.file_name) attrs.push(`data-face-file-name="${escapeHtml(evidence.file_name)}"`);
         if (Number(evidence.image_width) > 0) attrs.push(`data-face-source-width="${Number(evidence.image_width)}"`);
         if (Number(evidence.image_height) > 0) attrs.push(`data-face-source-height="${Number(evidence.image_height)}"`);
         if (Number(evidence.bbox_basis_width) > 0) attrs.push(`data-face-bbox-basis-width="${Number(evidence.bbox_basis_width)}"`);
@@ -2614,12 +2616,27 @@ document.addEventListener('DOMContentLoaded', () => {
             sourceImage.naturalWidth,
             sourceImage.naturalHeight,
         );
-        return normalizeFaceBboxToPixelSpace(
+        const scaled = normalizeFaceBboxToPixelSpace(
             bbox,
             inferredBasis ? { ...evidence, ...inferredBasis } : evidence,
             sourceImage.naturalWidth,
             sourceImage.naturalHeight,
         );
+        if (inferredBasis && scaled) {
+            logLegacyFaceBboxFallbackOnce({
+                fileName: img.dataset.faceFileName || img.alt || '',
+                sourceKind,
+                bbox,
+                sourceWidth: sourceImage.naturalWidth,
+                sourceHeight: sourceImage.naturalHeight,
+                inferredWidth: inferredBasis.bbox_basis_width,
+                inferredHeight: inferredBasis.bbox_basis_height,
+                basisWidth: inferredBasis.bbox_basis_width,
+                basisHeight: inferredBasis.bbox_basis_height,
+                pixelBbox: scaled,
+            });
+        }
+        return scaled;
     }
 
     function cropFaceEvidenceImages(container) {
@@ -3625,6 +3642,14 @@ document.addEventListener('DOMContentLoaded', () => {
         return summary;
     }
 
+    function logLegacyFaceBboxFallbackOnce(details) {
+        if (legacyFaceBboxFallbackLogState.logged) return;
+        legacyFaceBboxFallbackLogState.logged = true;
+        console.info(
+            `workspace.review.legacy_face_bbox_fallback file_name=${details.fileName || ''} source_kind=${details.sourceKind || ''} bbox=${(details.bbox || []).join(',')} source_size=${details.sourceWidth || 0}x${details.sourceHeight || 0} inferred_preview_size=${details.inferredWidth || 0}x${details.inferredHeight || 0} basis_width=${details.basisWidth || 0} basis_height=${details.basisHeight || 0} pixel_bbox=${(details.pixelBbox || []).map(value => Number(value).toFixed(1)).join(',')}`,
+        );
+    }
+
     function sanitizeWorkspaceResults(results) {
         return (results || []).map(item => {
             const analysis = item?.result || item || {};
@@ -3813,6 +3838,7 @@ document.addEventListener('DOMContentLoaded', () => {
         relationshipViewMode = state.relationship_view_mode || 'people';
         batchOverviewActive = true;
         batchFailureDetails = [];
+        legacyFaceBboxFallbackLogState.logged = false;
         clearFaceMultiSelection();
         photoClusterUi.expanded.clear();
         faceClusterUi.expanded.clear();
