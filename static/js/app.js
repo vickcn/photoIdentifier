@@ -3593,6 +3593,38 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    function summarizeFaceEvidenceDimensionCoverage(results, clusters) {
+        const seenFiles = new Map();
+        (clusters || []).forEach(cluster => {
+            (cluster?.evidence_photos || []).forEach(evidence => {
+                const fileName = String(evidence?.file_name || '').trim();
+                if (!fileName) return;
+                const hasRecordedDimensions = Boolean(
+                    Number(evidence?.bbox_basis_width || 0) > 0
+                    || Number(evidence?.bbox_basis_height || 0) > 0
+                    || Number(evidence?.image_width || 0) > 0
+                    || Number(evidence?.image_height || 0) > 0
+                );
+                const current = seenFiles.get(fileName) || { hasRecordedDimensions: false };
+                current.hasRecordedDimensions = current.hasRecordedDimensions || hasRecordedDimensions;
+                seenFiles.set(fileName, current);
+            });
+        });
+        return {
+            photoCount: Array.isArray(results) ? results.length : 0,
+            faceClusterCount: Array.isArray(clusters) ? clusters.length : 0,
+            photosWithRecordedDimensions: Array.from(seenFiles.values()).filter(item => item.hasRecordedDimensions).length,
+        };
+    }
+
+    function logWorkspaceReviewCoverage(source, results, clusters) {
+        const summary = summarizeFaceEvidenceDimensionCoverage(results, clusters);
+        console.info(
+            `workspace.review.coverage source=${source} photos=${summary.photoCount} face_clusters=${summary.faceClusterCount} photos_with_recorded_dimensions=${summary.photosWithRecordedDimensions}`,
+        );
+        return summary;
+    }
+
     function sanitizeWorkspaceResults(results) {
         return (results || []).map(item => {
             const analysis = item?.result || item || {};
@@ -3787,6 +3819,7 @@ document.addEventListener('DOMContentLoaded', () => {
         faceClusterUi.selectedEvidenceIndexes.clear();
         updateProgressUI(currentBatchResults.length, currentBatchResults.length, currentBatchResults.length, 0);
         saveBatchViewSnapshot({ active: false });
+        logWorkspaceReviewCoverage('import_workspace', currentBatchResults, currentFaceClusters);
         showBatchOverview();
         if (workspaceImportSummary) {
             workspaceImportSummary.textContent = `已載入 ${currentBatchResults.length} 張辨識結果，可繼續檢視與編輯。`;
@@ -3920,6 +3953,7 @@ document.addEventListener('DOMContentLoaded', () => {
         showLoading(true);
         document.getElementById('loading-text').textContent = '正在整理下載內容…';
         try {
+            logWorkspaceReviewCoverage('download_batch_results', currentBatchResults, currentFaceClusters);
             await persistCurrentPersonNames('download_export');
             if (wantsPhotoFolders && typeof JSZip !== 'undefined') {
                 for (const folder of exportData.photo_angle_folders || []) {

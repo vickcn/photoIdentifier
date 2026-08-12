@@ -17,3 +17,10 @@ test('legacy imported face evidence can infer the 800px preview bbox basis', () 
     assert.match(appSource, /bbox_basis_width: Math\.round\(targetWidth \* scale\)/);
     assert.match(appSource, /bbox_basis_height: Math\.round\(targetHeight \* scale\)/);
 });
+
+test('workspace review coverage log stays low frequency and summarized', () => {
+    assert.match(appSource, /function logWorkspaceReviewCoverage/);
+    assert.match(appSource, /workspace\.review\.coverage source=\$\{source\} photos=\$\{summary\.photoCount\} face_clusters=\$\{summary\.faceClusterCount\} photos_with_recorded_dimensions=\$\{summary\.photosWithRecordedDimensions\}/);
+    assert.match(appSource, /logWorkspaceReviewCoverage\('import_workspace'/);
+    assert.match(appSource, /logWorkspaceReviewCoverage\('download_batch_results'/);
+});
