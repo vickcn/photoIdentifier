@@ -256,7 +256,7 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["file_name"], "DSC_2387.JPG")
         self.assertIsNone(evidence["image_b64"])
 
-    def test_face_clusters_persist_thumbnail_and_source_key(self):
+    def test_strip_image_payload_removes_snapshot_fields_and_keeps_source_key(self):
         cluster = {
             "cluster_id": "cluster_001",
             "evidence_photos": [
@@ -275,8 +275,8 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
 
         evidence = safe["evidence_photos"][0]
         self.assertNotIn("image_b64", evidence)
+        self.assertNotIn("thumbnail_b64", evidence)
         self.assertNotIn("original_image_b64", evidence)
-        self.assertEqual(evidence["thumbnail_b64"], "thumb-data")
         self.assertEqual(evidence["source_type"], "drive")
         self.assertEqual(evidence["source_key"], "drive-file-id-123")
 

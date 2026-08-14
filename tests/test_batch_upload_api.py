@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
@@ -36,6 +37,154 @@ class BatchUploadApiTests(unittest.TestCase):
         self.assertEqual(response.json()["batch_download_max_mb"], main.BATCH_DOWNLOAD_MAX_MB)
         self.assertEqual(response.json()["face_cluster_default_eps"], main.DEFAULT_CLUSTER_EPS)
         self.assertEqual(response.json()["face_cluster_default_min_samples"], main.DEFAULT_CLUSTER_MIN_SAMPLES)
+
+    def test_externalize_result_previews_replaces_base64_with_storage_urls(self):
+        result = {
+            "status": "ok",
+            "file_name": "group photo.jpg",
+            "original_image_b64": "b3JpZ2luYWw=",
+            "drawn_image_b64": "ZHJhd24=",
+        }
+        uploaded = []
+
+        def fake_upload(bucket_name, object_name, content, content_type):
+            uploaded.append((bucket_name, object_name, content, content_type))
+            return f"https://storage.example/{object_name}"
+
+        externalized = main._externalize_result_previews(
+            result,
+            owner_id="owner/one",
+            session_id="session-one",
+            upload_preview=fake_upload,
+        )
+
+        self.assertNotIn("original_image_b64", externalized)
+        self.assertNotIn("drawn_image_b64", externalized)
+        self.assertEqual(
+            externalized["original_preview_url"],
+            "https://storage.example/previews/owner_one/session-one/group_photo_original.jpg",
+        )
+        self.assertEqual(
+            externalized["annotated_preview_url"],
+            "https://storage.example/previews/owner_one/session-one/group_photo_annotated.jpg",
+        )
+        self.assertEqual([entry[2] for entry in uploaded], [b"original", b"drawn"])
+        self.assertEqual(externalized["usage"]["preview_object_count"], 2)
+        self.assertEqual(externalized["usage"]["preview_bytes_uploaded"], len(b"original") + len(b"drawn"))
+
+    def test_externalize_result_previews_keeps_legacy_bytes_when_upload_fails(self):
+        result = {
+            "status": "ok",
+            "file_name": "photo.jpg",
+            "original_image_b64": "b3JpZ2luYWw=",
+            "drawn_image_b64": "ZHJhd24=",
+        }
+
+        def failed_upload(*_args):
+            raise RuntimeError("storage unavailable")
+
+        externalized = main._externalize_result_previews(
+            result,
+            owner_id="owner-one",
+            session_id="session-one",
+            upload_preview=failed_upload,
+        )
+
+        self.assertEqual(externalized["original_image_b64"], "b3JpZ2luYWw=")
+        self.assertEqual(externalized["drawn_image_b64"], "ZHJhd24=")
+        self.assertNotIn("original_preview_url", externalized)
+
+    def test_storage_export_usage_metrics_sums_zip_and_image_bytes(self):
+        usage = main._storage_export_usage_metrics(
+            zip_bytes=b"zip-content",
+            image_entries=[("a.jpg", b"1234"), ("b.jpg", b"567")],
+        )
+
+        self.assertEqual(usage["storage_export_bytes"], len(b"zip-content"))
+        self.assertEqual(usage["storage_export_image_bytes"], 7)
+        self.assertEqual(usage["storage_export_image_count"], 2)
+        self.assertEqual(usage["storage_export_count"], 1)
+
+    def test_build_session_export_document_strips_face_image_payloads(self):
+        session = {
+            "session_id": "session-test",
+            "batch_mode": "local",
+            "results": [
+                {
+                    "file_name": "group.jpg",
+                    "original_image_b64": "original-data",
+                    "drawn_image_b64": "drawn-data",
+                    "thumbnail_b64": "thumb-data",
+                    "result": {"face_count": 1},
+                }
+            ],
+            "face_clusters": [
+                {
+                    "cluster_id": "cluster_001",
+                    "display_name": "人物 001",
+                    "evidence_photos": [
+                        {
+                            "file_name": "group.jpg",
+                            "image_b64": "face-data",
+                            "thumbnail_b64": "thumb-data",
+                            "source_type": "drive",
+                            "source_key": "drive-123",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        document = main._build_session_export_document(session)
+
+        self.assertNotIn("original_image_b64", document["results"][0])
+        self.assertNotIn("drawn_image_b64", document["results"][0])
+        self.assertNotIn("thumbnail_b64", document["results"][0])
+        evidence = document["face_clusters"][0]["evidence_photos"][0]
+        self.assertNotIn("image_b64", evidence)
+        self.assertNotIn("thumbnail_b64", evidence)
+        self.assertEqual(evidence["source_type"], "drive")
+        self.assertEqual(evidence["source_key"], "drive-123")
+
+    def test_find_drive_name_memory_prefers_app_folder_then_root_fallback(self):
+        calls = []
+
+        class FakeFiles:
+            def list(self, **kwargs):
+                calls.append(kwargs["q"])
+                if f"name = '{main.DRIVE_APP_FOLDER_NAME}'" in kwargs["q"]:
+                    return SimpleNamespace(execute=lambda: {"files": []})
+                if "'root' in parents" in kwargs["q"]:
+                    return SimpleNamespace(execute=lambda: {"files": [{"id": "legacy-root-file"}]})
+                return SimpleNamespace(execute=lambda: {"files": []})
+
+        drive_service = SimpleNamespace(files=lambda: FakeFiles())
+
+        folder_id = main._find_drive_app_folder_id(drive_service)
+        file_id = main._find_drive_name_memory_file_id(drive_service, "root")
+
+        self.assertIsNone(folder_id)
+        self.assertEqual(file_id, "legacy-root-file")
+        self.assertTrue(any(main.DRIVE_APP_FOLDER_NAME in query for query in calls))
+
+    def test_ensure_drive_app_folder_creates_hidden_folder_under_root(self):
+        create_calls = []
+
+        class FakeFiles:
+            def list(self, **kwargs):
+                return SimpleNamespace(execute=lambda: {"files": []})
+
+            def create(self, **kwargs):
+                create_calls.append(kwargs["body"])
+                return SimpleNamespace(execute=lambda: {"id": "folder-123"})
+
+        drive_service = SimpleNamespace(files=lambda: FakeFiles())
+
+        folder_id = main._ensure_drive_app_folder_id(drive_service)
+
+        self.assertEqual(folder_id, "folder-123")
+        self.assertEqual(create_calls[0]["name"], main.DRIVE_APP_FOLDER_NAME)
+        self.assertEqual(create_calls[0]["parents"], ["root"])
 
     def test_drive_batch_rejects_high_cloud_api_concurrency_before_auth(self):
         response = self.client.post(
@@ -168,6 +317,46 @@ class BatchUploadApiTests(unittest.TestCase):
         other_response = TestClient(main.app).get("/face_clusters/upload-test")
         self.assertEqual(own_response.status_code, 200)
         self.assertEqual(other_response.status_code, 404)
+
+    def test_batch_upload_stream_sends_preview_urls_without_embedded_image_bytes(self):
+        async def fake_batch_stream(images, **_kwargs):
+            yield {
+                "status": "ok",
+                "file_name": images[0].filename,
+                "total": 1,
+                "index": 1,
+                "result": {"moderation_status": "pending"},
+                "original_image_b64": "b3JpZ2luYWw=",
+                "drawn_image_b64": "ZHJhd24=",
+            }
+
+        def fake_externalize(result, **_kwargs):
+            return {
+                key: value
+                for key, value in {
+                    **result,
+                    "original_preview_url": "https://storage.example/original.jpg",
+                    "annotated_preview_url": "https://storage.example/annotated.jpg",
+                }.items()
+                if key not in {"original_image_b64", "drawn_image_b64"}
+            }
+
+        with (
+            patch.object(main, "batch_process_uploads_stream", fake_batch_stream, create=True),
+            patch.object(main, "_externalize_result_previews", fake_externalize),
+            patch.object(main, "FACE_CLUSTERING_ENABLED", False, create=True),
+        ):
+            response = self.client.post(
+                "/batch_upload_stream/",
+                files=[("files", ("one.jpg", b"one", "image/jpeg"))],
+                data={"concurrency": "1", "session_id": "upload-test"},
+            )
+
+        first_event = json.loads(response.text.splitlines()[0])
+        self.assertNotIn("original_image_b64", first_event)
+        self.assertNotIn("drawn_image_b64", first_event)
+        self.assertEqual(first_event["original_preview_url"], "https://storage.example/original.jpg")
+        self.assertEqual(first_event["annotated_preview_url"], "https://storage.example/annotated.jpg")
 
     def test_batch_upload_stream_allows_local_upload_chunks_to_complete_one_session(self):
         async def fake_batch_stream(images, **kwargs):

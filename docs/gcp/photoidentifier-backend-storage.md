@@ -61,6 +61,12 @@ fi
 gcloud storage buckets add-iam-policy-binding "$EXPORTS_BUCKET" \
   --member="serviceAccount:${BACKEND_SA}" \
   --role="roles/storage.objectAdmin"
+
+# 讓前端直接讀取短效 preview，並允許 canvas 使用圖片。
+# 若正式網域不同，先調整 JSON 內的 origin。
+gcloud storage buckets update "$EXPORTS_BUCKET" \
+  --cors-file="docs/gcp/photoidentifier-preview-cors.json" \
+  --project="$PROJECT_ID"
 ```
 
 ## Verification CLI
@@ -70,7 +76,7 @@ Check bucket metadata:
 ```bash
 gcloud storage buckets describe gs://vision-493709-photoidentifier-exports \
   --project=vision-493709 \
-  --format="json"
+  --format="yaml(name,location,uniformBucketLevelAccess,publicAccessPrevention,lifecycle,cors_config)"
 ```
 
 Check bucket IAM and confirm there is no `allUsers` or `allAuthenticatedUsers` binding:

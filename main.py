@@ -42,7 +42,7 @@ from src.insight_api_client import (
     get_cluster_job_snapshot,
     prepare_cluster_images,
 )
-from src.batch_state_store import create_batch_state_store, get_backend_service_account_json
+from src.batch_state_store import create_batch_state_store, get_backend_service_account_json, strip_image_payload
 from src.drive_name_memory import (
     NAME_MEMORY_FILE_NAME,
     default_name_memory_document,
@@ -75,6 +75,7 @@ DEFAULT_BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP = 3
 DEFAULT_BATCH_DOWNLOAD_MAX_MB = 4000
 DEFAULT_FACE_CLUSTERING_ENABLED = True
 DEFAULT_EXPORT_SIGNED_URL_TTL_MINUTES = 60
+DEFAULT_PREVIEW_SIGNED_URL_TTL_MINUTES = 24 * 60
 FACE_CLUSTER_EPS_MIN = 0.05
 FACE_CLUSTER_EPS_MAX = 1.5
 IS_VERCEL = os.getenv("VERCEL") == "1"
@@ -83,6 +84,19 @@ CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
 FaceClusterProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 LOGIN_REQUIRED_DETAIL = "請先登入 Google 帳號再使用這個功能"
+
+
+def _env_url(name: str) -> str:
+    value = str(os.getenv(name, "") or "").strip().rstrip("/")
+    return value
+
+
+def _public_app_origin() -> str:
+    return _env_url("PUBLIC_APP_ORIGIN") or _env_url("APP_BASE_URL")
+
+
+def _app_base_url() -> str:
+    return _env_url("APP_BASE_URL") or _public_app_origin()
 
 
 def _setup_logging() -> None:
@@ -331,6 +345,13 @@ EXPORT_SIGNED_URL_TTL_MINUTES = _read_positive_int(
     minimum=1,
     maximum=24 * 60,
 )
+PREVIEW_SIGNED_URL_TTL_MINUTES = _read_positive_int(
+    os.getenv("PREVIEW_SIGNED_URL_TTL_MINUTES", DEFAULT_PREVIEW_SIGNED_URL_TTL_MINUTES),
+    key_name="PREVIEW_SIGNED_URL_TTL_MINUTES",
+    default=DEFAULT_PREVIEW_SIGNED_URL_TTL_MINUTES,
+    minimum=1,
+    maximum=7 * 24 * 60,
+)
 PHOTOIDENTIFIER_EXPORTS_BUCKET = str(
     os.getenv("PHOTOIDENTIFIER_EXPORTS_BUCKET") or "vision-493709-photoidentifier-exports"
 ).strip().removeprefix("gs://")
@@ -462,6 +483,145 @@ async def _persist_photo_result(session_id: str, owner_id: str, result: dict[str
         )
     except Exception:
         logger.exception("Failed to persist photo result session=%s", session_id)
+
+
+def _result_image_telemetry(result: dict[str, Any] | None) -> dict[str, int]:
+    if not isinstance(result, dict):
+        return {
+            "original_b64_chars": 0,
+            "drawn_b64_chars": 0,
+            "output_b64_chars": 0,
+            "result_bytes": 0,
+        }
+    original_b64 = str(result.get("original_image_b64") or "").strip()
+    drawn_b64 = str(result.get("drawn_image_b64") or "").strip()
+    output_b64 = str(result.get("output_b64") or "").strip()
+    payload = json.dumps(result, ensure_ascii=False).encode("utf-8")
+    return {
+        "original_b64_chars": len(original_b64),
+        "drawn_b64_chars": len(drawn_b64),
+        "output_b64_chars": len(output_b64),
+        "result_bytes": len(payload),
+    }
+
+
+def _log_result_telemetry(scope: str, result: dict[str, Any] | None, *, extra: dict[str, Any] | None = None) -> None:
+    telemetry = _result_image_telemetry(result)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "image_telemetry_detail scope=%s file=%s telemetry=%s extra=%s",
+            scope,
+            (result or {}).get("file_name") or (result or {}).get("file") or "",
+            telemetry,
+            extra or {},
+        )
+    logger.info(
+        "image_telemetry scope=%s file=%s result_bytes=%s b64_chars=%s/%s/%s extra=%s",
+        scope,
+        (result or {}).get("file_name") or (result or {}).get("file") or "",
+        telemetry["result_bytes"],
+        telemetry["original_b64_chars"],
+        telemetry["drawn_b64_chars"],
+        telemetry["output_b64_chars"],
+        extra or {},
+    )
+
+
+def _log_preview_externalized(scope: str, result: dict[str, Any] | None, *, extra: dict[str, Any] | None = None) -> None:
+    usage = (result or {}).get("usage") if isinstance(result, dict) else {}
+    logger.info(
+        "preview_externalized scope=%s file=%s original_preview_url=%s annotated_preview_url=%s original_b64_chars=%s drawn_b64_chars=%s usage=%s extra=%s",
+        scope,
+        (result or {}).get("file_name") or (result or {}).get("file") or "",
+        bool((result or {}).get("original_preview_url")),
+        bool((result or {}).get("annotated_preview_url")),
+        (result or {}).get("original_b64_chars", 0),
+        (result or {}).get("drawn_b64_chars", 0),
+        usage,
+        extra or {},
+    )
+
+
+def _log_bytes_telemetry(
+    scope: str,
+    *,
+    file_name: str = "",
+    byte_count: int = 0,
+    content_type: str = "",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    details = extra or {}
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "bytes_telemetry_detail scope=%s file=%s bytes=%s content_type=%s extra=%s",
+            scope,
+            file_name,
+            byte_count,
+            content_type,
+            details,
+        )
+    logger.info(
+        "bytes_telemetry scope=%s file=%s bytes=%s content_type=%s extra=%s",
+        scope,
+        file_name,
+        byte_count,
+        content_type,
+        details,
+    )
+
+
+def _log_gcs_object_written(scope: str, *, bucket_name: str, object_name: str, byte_count: int, extra: dict[str, Any] | None = None) -> None:
+    logger.info(
+        "gcs_object_written scope=%s bucket_name=%s object_name=%s bytes=%s extra=%s",
+        scope,
+        bucket_name,
+        object_name,
+        byte_count,
+        extra or {},
+    )
+
+
+def _log_firestore_usage_saved(scope: str, *, owner_id: str = "", session_id: str = "", export_id: str = "", usage: dict[str, Any] | None = None, extra: dict[str, Any] | None = None) -> None:
+    logger.info(
+        "firestore_usage_saved scope=%s owner_id=%s session_id=%s export_id=%s usage=%s extra=%s",
+        scope,
+        owner_id,
+        session_id,
+        export_id,
+        usage or {},
+        extra or {},
+    )
+
+
+def _result_payload_size_bytes(result: dict[str, Any] | None) -> int:
+    if not isinstance(result, dict):
+        return 0
+    return len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+
+
+def _empty_usage_metrics() -> dict[str, int]:
+    return {
+        "preview_bytes_uploaded": 0,
+        "preview_object_count": 0,
+        "storage_export_bytes": 0,
+        "storage_export_image_bytes": 0,
+        "storage_export_image_count": 0,
+        "storage_export_count": 0,
+        "storage_download_count": 0,
+    }
+
+
+def _merge_usage_metrics(*values: dict[str, Any] | None) -> dict[str, int]:
+    merged = _empty_usage_metrics()
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        for key in merged:
+            try:
+                merged[key] += max(int(value.get(key) or 0), 0)
+            except (TypeError, ValueError):
+                continue
+    return merged
 
 
 async def _persist_session_update(session_id: str, updates: dict[str, Any]) -> None:
@@ -778,6 +938,8 @@ async def get_frontend_config():
     client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
     project_number = os.environ.get("GOOGLE_PROJECT_NUMBER", "")
     return {
+        "app_base_url": _app_base_url(),
+        "public_app_origin": _public_app_origin(),
         "google_client_id": client_id,
         "google_api_key": os.environ.get("GOOGLE_API_KEY", ""),
         "google_app_id": project_number or client_id,
@@ -847,6 +1009,9 @@ class NameMemoryRecordRequest(BaseModel):
     source: str = "manual"
 
 
+DRIVE_APP_FOLDER_NAME = ".photoidentifier"
+
+
 def _require_logged_in_google_user_id(request: Request) -> str:
     userinfo = _get_google_userinfo(request)
     if not isinstance(userinfo, dict):
@@ -857,8 +1022,42 @@ def _require_logged_in_google_user_id(request: Request) -> str:
     return google_user_id
 
 
-def _find_drive_name_memory_file_id(drive_service) -> str | None:
-    query = f"name = '{NAME_MEMORY_FILE_NAME}' and 'root' in parents and trashed = false"
+def _find_drive_app_folder_id(drive_service) -> str | None:
+    query = (
+        f"name = '{DRIVE_APP_FOLDER_NAME}' and "
+        "mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and trashed = false"
+    )
+    response = drive_service.files().list(
+        q=query,
+        fields="files(id)",
+        pageSize=1,
+    ).execute()
+    files = response.get("files", [])
+    if not files:
+        return None
+    return str(files[0].get("id") or "").strip() or None
+
+
+def _ensure_drive_app_folder_id(drive_service) -> str:
+    existing = _find_drive_app_folder_id(drive_service)
+    if existing:
+        return existing
+    created = drive_service.files().create(
+        body={
+            "name": DRIVE_APP_FOLDER_NAME,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": ["root"],
+        },
+        fields="id",
+    ).execute()
+    folder_id = str(created.get("id") or "").strip()
+    if not folder_id:
+        raise RuntimeError("無法建立 Google Drive 應用資料夾")
+    return folder_id
+
+
+def _find_drive_name_memory_file_id(drive_service, parent_id: str) -> str | None:
+    query = f"name = '{NAME_MEMORY_FILE_NAME}' and '{parent_id}' in parents and trashed = false"
     response = drive_service.files().list(
         q=query,
         fields="files(id)",
@@ -874,7 +1073,10 @@ def _load_drive_name_memory_document(credentials) -> dict[str, Any]:
     from googleapiclient.discovery import build
 
     drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
-    file_id = _find_drive_name_memory_file_id(drive_service)
+    folder_id = _find_drive_app_folder_id(drive_service)
+    file_id = _find_drive_name_memory_file_id(drive_service, folder_id) if folder_id else None
+    if not file_id:
+        file_id = _find_drive_name_memory_file_id(drive_service, "root")
     if not file_id:
         return default_name_memory_document()
     try:
@@ -894,7 +1096,8 @@ def _save_drive_name_memory_document(credentials, document: dict[str, Any]) -> d
     normalized_document = normalize_name_memory_document(document)
     content = json.dumps(normalized_document, ensure_ascii=False, indent=2).encode("utf-8")
     media = MediaIoBaseUpload(io.BytesIO(content), mimetype="application/json", resumable=False)
-    file_id = _find_drive_name_memory_file_id(drive_service)
+    folder_id = _ensure_drive_app_folder_id(drive_service)
+    file_id = _find_drive_name_memory_file_id(drive_service, folder_id)
     metadata = {"name": NAME_MEMORY_FILE_NAME}
     if file_id:
         drive_service.files().update(
@@ -905,7 +1108,7 @@ def _save_drive_name_memory_document(credentials, document: dict[str, Any]) -> d
         ).execute()
     else:
         drive_service.files().create(
-            body={**metadata, "mimeType": "application/json", "parents": ["root"]},
+            body={**metadata, "mimeType": "application/json", "parents": [folder_id]},
             media_body=media,
             fields="id",
         ).execute()
@@ -1140,6 +1343,13 @@ async def get_drive_file(file_id: str, request: Request):
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail="Drive image download failed")
     content_type = resp.headers.get("content-type") or "image/jpeg"
+    _log_bytes_telemetry(
+        "drive_file_download",
+        file_name=file_id,
+        byte_count=len(resp.content),
+        content_type=content_type,
+        extra={"status_code": resp.status_code},
+    )
     return Response(
         content=resp.content,
         media_type=content_type,
@@ -1244,6 +1454,16 @@ async def analyze_with_image(
             image_bytes, file.content_type, color_rules=color_rules, collaborative_memory=collaborative_memory
         )
         drawn_b64 = base64.b64encode(drawn_image_bytes).decode('utf-8')
+        _log_bytes_telemetry(
+            "single_analyze_drawn_image",
+            file_name=file.filename or "",
+            byte_count=len(drawn_image_bytes),
+            content_type="image/jpeg",
+            extra={
+                "input_bytes": len(image_bytes),
+                "drawn_b64_chars": len(drawn_b64),
+            },
+        )
         return {
             "analysis": analysis_result.model_dump(),
             "drawn_image_b64": drawn_b64
@@ -1362,6 +1582,8 @@ async def batch_upload_stream(
             "start_time": start_time.isoformat(),
             "end_time": None,
             "results": [],
+            "browser_results": [],
+            "usage": _empty_usage_metrics(),
             "original_images": dict(uploaded_originals),
             "processing_info": {
                 "file_count": expected_total_files,
@@ -1414,9 +1636,42 @@ async def batch_upload_stream(
                     "upload_chunk_total": upload_chunk_total,
                 }
                 if chunk.get("status") == "ok":
+                    browser_chunk = await run_in_threadpool(
+                        _externalize_result_previews,
+                        chunk,
+                        owner_id=owner_id,
+                        session_id=current_session_id,
+                    )
+                    _log_result_telemetry(
+                        "batch_upload_stream",
+                        browser_chunk,
+                        extra={
+                            "session_id": current_session_id,
+                            "index": chunk_index,
+                            "total": expected_total_files,
+                            "upload_chunk_index": upload_chunk_index,
+                            "upload_chunk_total": upload_chunk_total,
+                        },
+                    )
+                    _batch_sessions[current_session_id]["browser_results"].append(browser_chunk)
                     _batch_sessions[current_session_id]["results"].append(chunk)
-                    await _persist_photo_result(current_session_id, owner_id, chunk)
-                yield json.dumps({**chunk, "session_id": current_session_id}, ensure_ascii=False) + "\n"
+                    _batch_sessions[current_session_id]["usage"] = _merge_usage_metrics(
+                        _batch_sessions[current_session_id].get("usage"),
+                        browser_chunk.get("usage"),
+                    )
+                    _log_preview_externalized(
+                        "batch_upload_stream",
+                        browser_chunk,
+                        extra={
+                            "session_id": current_session_id,
+                            "index": chunk_index,
+                            "total": expected_total_files,
+                        },
+                    )
+                    await _persist_photo_result(current_session_id, owner_id, browser_chunk)
+                else:
+                    browser_chunk = chunk
+                yield json.dumps({**browser_chunk, "session_id": current_session_id}, ensure_ascii=False) + "\n"
 
             if is_chunked_upload and not is_final_upload_chunk:
                 await _persist_session_update(
@@ -1425,6 +1680,7 @@ async def batch_upload_stream(
                         "status": "processing",
                         "stage": "photos",
                         "result_count": len(_batch_sessions[current_session_id]["results"]),
+                        "usage": _batch_sessions[current_session_id].get("usage", _empty_usage_metrics()),
                     },
                 )
                 return
@@ -1438,6 +1694,7 @@ async def batch_upload_stream(
                         "status": "cancelled",
                         "completed_at": _batch_sessions[current_session_id]["end_time"],
                         "result_count": len(_batch_sessions[current_session_id]["results"]),
+                        "usage": _batch_sessions[current_session_id].get("usage", _empty_usage_metrics()),
                     },
                 )
                 yield json.dumps(
@@ -1462,12 +1719,23 @@ async def batch_upload_stream(
                     continue
                 yield json.dumps(progress_event, ensure_ascii=False) + "\n"
             face_clustering = await face_task
+            _batch_sessions[current_session_id]["results"] = _batch_sessions[current_session_id].pop(
+                "browser_results", []
+            )
+            _log_firestore_usage_saved(
+                "batch_upload_stream",
+                owner_id=owner_id,
+                session_id=current_session_id,
+                usage=_batch_sessions[current_session_id].get("usage", _empty_usage_metrics()),
+                extra={"status": "completed"},
+            )
             await _persist_session_update(
                 current_session_id,
                 {
                     "status": "completed",
                     "completed_at": _batch_sessions[current_session_id]["end_time"],
                     "result_count": len(_batch_sessions[current_session_id]["results"]),
+                    "usage": _batch_sessions[current_session_id].get("usage", _empty_usage_metrics()),
                     "face_clustering": face_clustering,
                 },
             )
@@ -1490,6 +1758,7 @@ async def batch_upload_stream(
                 {
                     "status": "failed",
                     "completed_at": _batch_sessions[current_session_id]["end_time"],
+                    "usage": _batch_sessions[current_session_id].get("usage", _empty_usage_metrics()),
                     "error_message": "批次處理中斷",
                 },
             )
@@ -2195,6 +2464,8 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
             "start_time": start_time.isoformat(),
             "end_time": None,
             "results": [],
+            "browser_results": [],
+            "usage": _empty_usage_metrics(),
             "processing_info": {
                 "folder_id": req.folder_id,
                 "concurrency": req.concurrency,
@@ -2228,11 +2499,42 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                 ):
                     # 儲存結果到 session
                     if chunk.get("status") == "ok":
+                        browser_chunk = await run_in_threadpool(
+                            _externalize_result_previews,
+                            chunk,
+                            owner_id=owner_id,
+                            session_id=session_id,
+                        )
+                        _log_result_telemetry(
+                            "batch_drive_stream",
+                            browser_chunk,
+                            extra={
+                                "session_id": session_id,
+                                "folder_id": req.folder_id,
+                                "target_folder_id": req.target_folder_id or "",
+                            },
+                        )
+                        _batch_sessions[session_id]["browser_results"].append(browser_chunk)
                         _batch_sessions[session_id]["results"].append(chunk)
-                        await _persist_photo_result(session_id, owner_id, chunk)
+                        _batch_sessions[session_id]["usage"] = _merge_usage_metrics(
+                            _batch_sessions[session_id].get("usage"),
+                            browser_chunk.get("usage"),
+                        )
+                        _log_preview_externalized(
+                            "batch_drive_stream",
+                            browser_chunk,
+                            extra={
+                                "session_id": session_id,
+                                "folder_id": req.folder_id,
+                                "target_folder_id": req.target_folder_id or "",
+                            },
+                        )
+                        await _persist_photo_result(session_id, owner_id, browser_chunk)
+                    else:
+                        browser_chunk = chunk
 
                     # 每一筆結果都轉成 JSON 並加上換行符號推播出去
-                    chunk_with_session = {**chunk, "session_id": session_id}
+                    chunk_with_session = {**browser_chunk, "session_id": session_id}
                     yield json.dumps(chunk_with_session, ensure_ascii=False) + "\n"
 
                 # 標記完成
@@ -2245,6 +2547,7 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                             "status": "cancelled",
                             "completed_at": _batch_sessions[session_id]["end_time"],
                             "result_count": len(_batch_sessions[session_id]["results"]),
+                            "usage": _batch_sessions[session_id].get("usage", _empty_usage_metrics()),
                         },
                     )
                     yield json.dumps(
@@ -2269,12 +2572,23 @@ async def batch_visualize_drive_stream(req: DriveBatchRequest, request: Request)
                         continue
                     yield json.dumps(progress_event, ensure_ascii=False) + "\n"
                 face_clustering = await face_task
+                _batch_sessions[session_id]["results"] = _batch_sessions[session_id].pop(
+                    "browser_results", []
+                )
+                _log_firestore_usage_saved(
+                    "batch_drive_stream",
+                    owner_id=owner_id,
+                    session_id=session_id,
+                    usage=_batch_sessions[session_id].get("usage", _empty_usage_metrics()),
+                    extra={"status": "completed"},
+                )
                 await _persist_session_update(
                     session_id,
                     {
                         "status": "completed",
                         "completed_at": _batch_sessions[session_id]["end_time"],
                         "result_count": len(_batch_sessions[session_id]["results"]),
+                        "usage": _batch_sessions[session_id].get("usage", _empty_usage_metrics()),
                         "face_clustering": face_clustering,
                     },
                 )
@@ -2724,6 +3038,100 @@ def _create_storage_client():
     return storage.Client(project=project_id or None)
 
 
+def _safe_storage_path_segment(value: str, fallback: str) -> str:
+    segment = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip()).strip("._")
+    return segment[:120] or fallback
+
+
+def _upload_storage_preview(
+    bucket_name: str,
+    object_name: str,
+    content: bytes,
+    content_type: str,
+) -> str:
+    client = _create_storage_client()
+    blob = client.bucket(bucket_name).blob(object_name)
+    blob.upload_from_string(content, content_type=content_type)
+    _log_gcs_object_written(
+        "preview_externalize",
+        bucket_name=bucket_name,
+        object_name=object_name,
+        byte_count=len(content),
+        extra={"content_type": content_type},
+    )
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=PREVIEW_SIGNED_URL_TTL_MINUTES)
+    return str(
+        blob.generate_signed_url(
+            version="v4",
+            expiration=expires_at,
+            method="GET",
+            response_disposition="inline",
+            response_type=content_type,
+        )
+    )
+
+
+def _externalize_result_previews(
+    result: dict[str, Any],
+    *,
+    owner_id: str,
+    session_id: str,
+    upload_preview: Callable[[str, str, bytes, str], str] = _upload_storage_preview,
+) -> dict[str, Any]:
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        return result
+
+    preview_fields = (
+        ("original_image_b64", "original_preview_url", "original"),
+        ("drawn_image_b64", "annotated_preview_url", "annotated"),
+    )
+    available = [(source, target, suffix, str(result.get(source) or "").strip()) for source, target, suffix in preview_fields]
+    available = [entry for entry in available if entry[3]]
+    if not available:
+        return result
+
+    safe_owner = _safe_storage_path_segment(owner_id, "anonymous")
+    safe_session = _safe_storage_path_segment(session_id, "session")
+    raw_name = str(result.get("file_name") or result.get("file") or "image.jpg")
+    safe_stem = _safe_storage_path_segment(Path(raw_name).stem, "image")
+    identity = result.get("drive_id") or result.get("index")
+    if identity:
+        safe_stem = f"{safe_stem}_{_safe_storage_path_segment(str(identity), 'item')}"
+    next_result = dict(result)
+    uploaded_urls: dict[str, str] = {}
+    try:
+        bucket_name = _require_exports_bucket_name()
+        for source_field, target_field, suffix, encoded in available:
+            image_bytes = base64.b64decode(encoded, validate=True)
+            object_name = f"previews/{safe_owner}/{safe_session}/{safe_stem}_{suffix}.jpg"
+            uploaded_urls[target_field] = upload_preview(
+                bucket_name,
+                object_name,
+                image_bytes,
+                "image/jpeg",
+            )
+    except Exception as exc:
+        logger.warning(
+            "Preview externalization failed session=%s file=%s error=%s; retaining embedded previews",
+            session_id,
+            raw_name,
+            exc,
+        )
+        return result
+
+    for source_field, target_field, _suffix, _encoded in available:
+        next_result.pop(source_field, None)
+        next_result[target_field] = uploaded_urls[target_field]
+    next_result["usage"] = _merge_usage_metrics(
+        next_result.get("usage"),
+        {
+            "preview_bytes_uploaded": sum(len(base64.b64decode(encoded, validate=True)) for _source, _target, _suffix, encoded in available),
+            "preview_object_count": len(available),
+        },
+    )
+    return next_result
+
+
 def _safe_zip_path_segment(value: str, fallback: str) -> str:
     segment = str(value or fallback or "").strip()
     segment = re.sub(r'[\\/:*?"<>|]+', "_", segment)
@@ -2803,12 +3211,17 @@ def _build_storage_export_images(
             result = result_by_name.get(file_name)
             original_bytes = original_images.get(file_name)
             image_bytes = bytes(original_bytes) if isinstance(original_bytes, (bytes, bytearray)) else None
+            image_source = "session.original_images"
             if image_bytes is None:
                 image_bytes = _storage_export_image_bytes_from_result(result)
+                if image_bytes is not None:
+                    image_source = "result.original_image_b64"
             if image_bytes is None:
                 drive_id = str(photo.get("drive_id") or (result or {}).get("drive_id") or "").strip()
                 try:
                     image_bytes = _download_drive_file_bytes(credentials, drive_id)
+                    if image_bytes is not None:
+                        image_source = "drive_fallback"
                 except Exception as exc:
                     logger.warning(
                         "Storage export image fetch failed session=%s file=%s drive_id=%s error=%s",
@@ -2831,6 +3244,17 @@ def _build_storage_export_images(
             image_entries.append((relative_path, image_bytes))
             archive_by_file_name[file_name] = relative_path
             photo["archive_relative_path"] = relative_path
+            _log_bytes_telemetry(
+                "storage_export_image",
+                file_name=file_name,
+                byte_count=len(image_bytes),
+                content_type="image/jpeg",
+                extra={
+                    "session_id": session.get("session_id"),
+                    "image_source": image_source,
+                    "relative_path": relative_path,
+                },
+            )
 
     for photo in (next_document.get("photos") if isinstance(next_document.get("photos"), list) else []):
         if isinstance(photo, dict) and photo.get("file_name") in archive_by_file_name:
@@ -2863,13 +3287,47 @@ def _build_storage_export_zip(
         archive.writestr(json_file_name, payload)
         for relative_path, image_bytes in image_entries or []:
             archive.writestr(relative_path, image_bytes)
-    return f"results_{session_id}_{timestamp}.zip", buffer.getvalue()
+    zip_bytes = buffer.getvalue()
+    logger.info(
+        "storage_export_zip session=%s json_bytes=%s image_count=%s zip_bytes=%s",
+        session_id,
+        len(payload),
+        len(image_entries or []),
+        len(zip_bytes),
+    )
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "storage_export_zip_detail session=%s image_entries=%s",
+            session_id,
+            [path for path, _ in (image_entries or [])],
+        )
+    return f"results_{session_id}_{timestamp}.zip", zip_bytes
+
+
+def _storage_export_usage_metrics(
+    *,
+    zip_bytes: bytes | bytearray,
+    image_entries: list[tuple[str, bytes]] | None = None,
+) -> dict[str, int]:
+    entries = image_entries or []
+    return {
+        "storage_export_bytes": len(zip_bytes or b""),
+        "storage_export_image_bytes": sum(len(image_bytes) for _path, image_bytes in entries),
+        "storage_export_image_count": len(entries),
+        "storage_export_count": 1,
+    }
 
 
 def _upload_storage_export(bucket_name: str, object_name: str, content: bytes) -> None:
     client = _create_storage_client()
     blob = client.bucket(bucket_name).blob(object_name)
     blob.upload_from_string(content, content_type="application/zip")
+    _log_gcs_object_written(
+        "storage_export_zip",
+        bucket_name=bucket_name,
+        object_name=object_name,
+        byte_count=len(content),
+    )
 
 
 def _generate_storage_signed_url(bucket_name: str, object_name: str, expires_minutes: int) -> tuple[str, str]:
@@ -3049,12 +3507,12 @@ def _build_session_export_document(session: dict[str, Any]) -> dict[str, Any]:
             {
                 key: value
                 for key, value in item.items()
-                if key not in {"image_b64", "original_image_b64", "drawn_image_b64", "output_b64"}
+                if key not in {"image_b64", "thumbnail_b64", "original_image_b64", "drawn_image_b64", "output_b64"}
             }
             for item in results
             if isinstance(item, dict)
         ],
-        "face_clusters": clusters,
+        "face_clusters": [strip_image_payload(cluster) for cluster in clusters if isinstance(cluster, dict)],
         "face_clustering": session.get("face_clustering"),
         "blocked_files": session.get("blocked_files", []),
     }
@@ -3142,6 +3600,7 @@ async def _notify_completed_batch_session(session_id: str, request: Request) -> 
             "notify_email": notify_email,
             "notification_status": "pending",
             "trigger": "batch_completed",
+            "usage": _storage_export_usage_metrics(zip_bytes=content, image_entries=image_entries),
         }
         export_id = await batch_state_store.create_export_record(
             session_id,
@@ -3457,6 +3916,7 @@ async def create_storage_batch_export(req: StorageBatchExportRequest, request: R
                 "download_url_expires_at": download_url_expires_at,
                 "notify_email": str(session.get("user_account") or ""),
                 "notification_status": "pending",
+                "usage": _storage_export_usage_metrics(zip_bytes=content, image_entries=image_entries),
             }
             export_id = await batch_state_store.create_export_record(
                 session_id,

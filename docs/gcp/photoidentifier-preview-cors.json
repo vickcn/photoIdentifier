@@ -1,0 +1,11 @@
+[
+  {
+    "origin": [
+      "http://localhost:6419",
+      "https://photo-identifier.vercel.app"
+    ],
+    "method": ["GET", "HEAD"],
+    "responseHeader": ["Content-Type", "ETag"],
+    "maxAgeSeconds": 3600
+  }
+]

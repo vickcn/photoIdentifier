@@ -59,7 +59,7 @@ def strip_image_payload(value: Any) -> Any:
         return {
             key: strip_image_payload(item)
             for key, item in value.items()
-            if key not in {"image_b64", "original_image_b64", "drawn_image_b64", "output_b64"}
+            if key not in {"image_b64", "thumbnail_b64", "original_image_b64", "drawn_image_b64", "output_b64"}
         }
     if isinstance(value, list):
         return [strip_image_payload(item) for item in value]
@@ -80,6 +80,26 @@ def from_firestore_safe_json(value: Any) -> dict[str, Any]:
         logger.warning("Invalid persisted result_summary_json payload")
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _non_negative_int(value: Any) -> int:
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_usage_metrics(value: Any) -> dict[str, int]:
+    payload = value if isinstance(value, dict) else {}
+    return {
+        "preview_bytes_uploaded": _non_negative_int(payload.get("preview_bytes_uploaded")),
+        "preview_object_count": _non_negative_int(payload.get("preview_object_count")),
+        "storage_export_bytes": _non_negative_int(payload.get("storage_export_bytes")),
+        "storage_export_image_bytes": _non_negative_int(payload.get("storage_export_image_bytes")),
+        "storage_export_image_count": _non_negative_int(payload.get("storage_export_image_count")),
+        "storage_export_count": _non_negative_int(payload.get("storage_export_count")),
+        "storage_download_count": _non_negative_int(payload.get("storage_download_count")),
+    }
 
 
 class NullBatchStateStore:
@@ -195,6 +215,7 @@ class FirestoreBatchStateStore:
             "expires_at": expires_after(DEFAULT_ACTIVE_TTL_DAYS),
             "processing_info": strip_image_payload(session.get("processing_info", {})),
             "result_count": 0,
+            "usage": normalize_usage_metrics(session.get("usage")),
         }
         info = session.get("processing_info", {})
         if "face_cluster_eps" in info:
@@ -208,6 +229,8 @@ class FirestoreBatchStateStore:
 
     async def update_session(self, session_id: str, updates: dict[str, Any]) -> None:
         payload = {**updates, "updated_at": iso_utc()}
+        if "usage" in payload:
+            payload["usage"] = normalize_usage_metrics(payload.get("usage"))
         await run_in_threadpool(
             self._client.collection("batch_sessions").document(session_id).set,
             strip_image_payload(payload),
@@ -423,6 +446,7 @@ class FirestoreBatchStateStore:
             "created_at": iso_utc(),
             "expires_at": expires_after(DEFAULT_HISTORY_TTL_DAYS),
             "metadata": strip_image_payload(metadata or {}),
+            "usage": normalize_usage_metrics((metadata or {}).get("usage")),
         }
         await run_in_threadpool(
             self._client.collection("exports").document(payload["export_id"]).set,
@@ -473,7 +497,11 @@ class FirestoreBatchStateStore:
     ) -> None:
         await run_in_threadpool(
             self._client.collection("exports").document(export_id).set,
-            {"metadata": strip_image_payload(metadata), "updated_at": iso_utc()},
+            {
+                "metadata": strip_image_payload(metadata),
+                "usage": normalize_usage_metrics(metadata.get("usage")),
+                "updated_at": iso_utc(),
+            },
             merge=True,
         )
 

@@ -97,8 +97,22 @@ document.addEventListener('DOMContentLoaded', () => {
         features: { ...DEFAULT_USER_FEATURES },
         preferences: { ...DEFAULT_USER_PREFERENCES },
     };
+    let config = null;
     const PERSON_NAME_MEMORY_DATALIST_ID = 'face-person-name-suggestions';
     let currentPersonNameMemory = [];
+
+    function getConfiguredAppOrigin() {
+        const configuredOrigin = String(config?.public_app_origin || config?.app_base_url || '').trim().replace(/\/$/, '');
+        return configuredOrigin || window.location.origin;
+    }
+
+    function buildAppUrl(path) {
+        const normalizedPath = String(path || '').trim();
+        if (!normalizedPath) return getConfiguredAppOrigin();
+        if (/^https?:\/\//i.test(normalizedPath)) return normalizedPath;
+        const base = getConfiguredAppOrigin();
+        return `${base}${normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`}`;
+    }
 
     function normalizePersonNameInput(name) {
         return String(name || '').replace(/\s+/g, ' ').trim();
@@ -442,7 +456,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     googleLoginBtn.addEventListener('click', () => {
         const next = `${window.location.pathname}${window.location.search}`;
-        window.location.href = `/auth/google?next=${encodeURIComponent(next)}`;
+        window.location.href = buildAppUrl(`/auth/google?next=${encodeURIComponent(next)}`);
     });
 
     async function checkLoginStatus() {
@@ -603,8 +617,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const downloadBatchResultsBtn = document.getElementById('download-batch-results-btn');
     const saveDriveResultsBtn = document.getElementById('save-drive-results-btn');
     const includeAnnotatedDownload = document.getElementById('include-annotated-download');
-    let config = null;
-
     function publicClassificationWasRun(item) {
         const analysis = item?.result || item || {};
         return analysis.public_classification_performed !== false;
@@ -3677,7 +3689,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function sanitizeWorkspaceFaceEvidence(evidence) {
-        const item = {
+        return {
             file_name: evidence?.file_name || '',
             face_id: evidence?.face_id || null,
             drive_id: evidence?.drive_id || null,
@@ -3689,9 +3701,6 @@ document.addEventListener('DOMContentLoaded', () => {
             image_width: Number(evidence?.image_width) || 0,
             image_height: Number(evidence?.image_height) || 0,
         };
-        if (evidence?.image_b64) item.image_b64 = evidence.image_b64;
-        if (evidence?.thumbnail_b64) item.thumbnail_b64 = evidence.thumbnail_b64;
-        return item;
     }
 
     function sanitizeWorkspaceFaceClusters(clusters) {

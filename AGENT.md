@@ -57,3 +57,61 @@
 
 - 圖片登記流程與寫入條件仍可再細化，但已可先用人物關聯與匯出 JSON 運作。
 - 若之後要提高吞吐量，先調上游 fan-out，再考慮放寬雲端服務 cap。
+
+# GCP 部署準則
+
+- 部署位置與業務邏輯要分離，程式不要硬寫特定網域。
+- 一律用 env 注入 `APP_BASE_URL`、`API_BASE_URL`、`PUBLIC_APP_ORIGIN` 這類值。
+- 同一份 code 要能在本機、Vercel、Cloud Run 共用。
+
+- GCP 的 project、billing、IAM、Secret Manager、Artifact Registry、Cloud Run 要分開看。
+- 先確認資源歸屬，再做跨服務串接。
+- 不要把部署流程、runtime secret、OAuth 憑證混在一起。
+
+- 部署用憑證與 runtime 憑證必須分開。
+- CI/CD 只負責 build / deploy。
+- 服務執行時使用的 service account 只負責 runtime 存取。
+
+- OAuth redirect URI 必須和實際上線網域完全一致。
+- 切換部署平台時，先更新 OAuth 設定，再切流量。
+- 不要使用「看起來差不多」的網址。
+
+- 先驗證 staging，再動 production。
+- 先跑通登入、讀寫、下載、CORS、signed URL，再切正式環境。
+- 不要直接把 production traffic 移到未驗證的 deployment。
+
+- 敏感資訊只放 Secret Manager 或等價機制。
+- 不要把 private key、client secret、service account JSON 寫進 repo、log 或測試輸出。
+- 需要輪替時，優先用 secret version，不要改程式碼。
+
+- 先確認服務實際使用的 service account。
+- 不要憑印象補 IAM。
+- Cloud Run 的 runtime identity 要以實際設定為準，不以預期為準。
+
+- IAM 一律最小權限。
+- bucket 權限只給 bucket scope，不要升到 project level。
+- 需要上傳、讀取、刪除，就只給對應最小角色。
+
+- API 啟用、billing、service account、IAM、secret binding 要先於部署完成。
+- 如果 deploy 失敗，先查 API 是否已開、billing 是否已接。
+- 不要先跑部署再回頭補權限。
+
+- 設定項要集中管理，不要散落。
+- OAuth origins、CORS allowlist、bucket 名稱、signed URL TTL、base URL 盡量集中在少數幾個位置。
+- 避免 Vercel、一份 GCP、一份 local 互相不一致。
+
+- 每次改動都要能回答三個問題：
+  - 現在誰在跑？
+  - 它能存取什麼？
+  - 失敗時會落回哪裡？
+
+- 驗證順序由外到內。
+- 先確認 domain、redirect URI、CORS。
+- 再確認 auth、secret、IAM。
+- 最後確認業務功能與資料結果。
+
+- 不要硬綁特定平台網域。
+- 不要混用部署憑證與 runtime 憑證。
+- 不要把測試環境設定直接搬到 production。
+- 不要在未驗證前切 production 流量。
+- 不要用 project-level 大權限去偷跑。

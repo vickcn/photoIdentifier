@@ -14,6 +14,9 @@
     }
 
     function originalImageSrc(item) {
+        if (item?.original_preview_url) {
+            return item.original_preview_url;
+        }
         if (item?.original_image_b64) {
             return `data:image/jpeg;base64,${item.original_image_b64}`;
         }
@@ -21,6 +24,9 @@
     }
 
     function annotatedImageSrc(item) {
+        if (item?.annotated_preview_url) {
+            return item.annotated_preview_url;
+        }
         if (item?.drawn_image_b64) {
             return `data:image/jpeg;base64,${item.drawn_image_b64}`;
         }
