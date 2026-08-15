@@ -1290,20 +1290,21 @@ def _get_batch_user_account(request: Request, batch_mode: str) -> str:
     return str(email or "")
 
 
-def _validate_oauth_request_host(request: Request) -> None:
+def _oauth_request_host_redirect(request: Request) -> str | None:
     redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
     if not redirect_uri:
-        return
+        return None
     redirect_host = (urlparse(redirect_uri).hostname or "").lower()
     request_host = (request.url.hostname or "").lower()
     if redirect_host and request_host and redirect_host != request_host:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Google 登入網址需固定使用 {redirect_host}。"
-                f"目前你是從 {request_host} 開啟，請改用 {redirect_uri.rsplit('/auth/callback', 1)[0]}"
-            ),
-        )
+        target = redirect_uri.rsplit("/auth/callback", 1)[0]
+        query = str(request.url.query or "").strip()
+        if query:
+            target = f"{target}{request.url.path}?{query}"
+        else:
+            target = f"{target}{request.url.path}"
+        return target
+    return None
 
 
 def _normalize_post_auth_redirect(target: str | None) -> str:
@@ -2713,7 +2714,9 @@ async def save_collaborative_memory(request: Request, folder_id: str = Form(...)
 @app.get("/auth/google")
 def google_auth(request: Request, next: str | None = None):
     try:
-        _validate_oauth_request_host(request)
+        redirect_target = _oauth_request_host_redirect(request)
+        if redirect_target:
+            return RedirectResponse(url=redirect_target, status_code=307)
         user_key = request.session.get("user_key")
         if not user_key:
             user_key = uuid.uuid4().hex
