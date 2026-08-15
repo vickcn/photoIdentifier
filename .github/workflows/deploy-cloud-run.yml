@@ -46,6 +46,9 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
+      - name: Configure Docker auth for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
       - name: Validate required deployment vars
         run: |
           test -n "${GOOGLE_CLIENT_ID}"
@@ -60,6 +63,16 @@ jobs:
           PUBLIC_APP_ORIGIN: ${{ vars.PUBLIC_APP_ORIGIN }}
           INSIGHT_API_URL: ${{ vars.INSIGHT_API_URL }}
 
+      - name: Build container image
+        run: docker build -t "${IMAGE}" .
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+
+      - name: Push container image
+        run: docker push "${IMAGE}"
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+
       - name: Deploy to Cloud Run
         run: ./scripts/deploy_photoidentifier_cloud_run.sh
         env:
@@ -69,6 +82,8 @@ jobs:
           REPOSITORY: ${{ env.REPOSITORY }}
           RUNTIME_SA: ${{ env.RUNTIME_SA }}
           IMAGE_TAG: ${{ github.sha }}
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          SKIP_IMAGE_BUILD: "true"
           GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
           GOOGLE_PROJECT_NUMBER: ${{ env.GOOGLE_PROJECT_NUMBER }}
           GOOGLE_REDIRECT_URI: ${{ vars.GOOGLE_REDIRECT_URI }}

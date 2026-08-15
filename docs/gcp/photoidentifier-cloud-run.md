@@ -87,7 +87,7 @@ repo 已新增：
 設計是：
 
 - `push` 到 `master` 時，Vercel 繼續用原本的 Git 自動部署。
-- 同一次 `push` 會由 GitHub Actions 部署 Cloud Run。
+- 同一次 `push` 會由 GitHub Actions 先 `docker build` / `docker push` 到 Artifact Registry，再部署 Cloud Run。
 - `pull_request` 時只跑驗證，不碰 production deploy。
 
 ### GitHub 端還需要手動補的設定

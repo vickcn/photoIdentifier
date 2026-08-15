@@ -9,6 +9,7 @@ REPOSITORY="${REPOSITORY:-photoidentifier}"
 IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d-%H%M%S)}"
 IMAGE="${IMAGE:-${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE_NAME}:${IMAGE_TAG}}"
 ENABLE_GCLOUD_APIS="${ENABLE_GCLOUD_APIS:-false}"
+SKIP_IMAGE_BUILD="${SKIP_IMAGE_BUILD:-false}"
 
 : "${GOOGLE_CLIENT_ID:?Export GOOGLE_CLIENT_ID before deploying}"
 : "${GOOGLE_REDIRECT_URI:?Export GOOGLE_REDIRECT_URI before deploying}"
@@ -25,7 +26,9 @@ gcloud artifacts repositories create "${REPOSITORY}" \
   --repository-format=docker --location="${REGION}" \
   --description="PhotoIdentifier Cloud Run images" --project="${PROJECT_ID}"
 
-gcloud builds submit --project="${PROJECT_ID}" --tag="${IMAGE}" .
+if [[ "${SKIP_IMAGE_BUILD}" != "true" ]]; then
+  gcloud builds submit --project="${PROJECT_ID}" --tag="${IMAGE}" .
+fi
 
 gcloud run deploy "${SERVICE_NAME}" \
   --project="${PROJECT_ID}" \
