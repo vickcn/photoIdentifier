@@ -10,6 +10,7 @@
 - Secret Manager 已建立 `SESSION_SECRET`、`GOOGLE_CLIENT_SECRET`、`INSIGHT_API_KEY`、`VERTEX_API_KEY`。
 - `photoidentifier-run` 已有 `roles/datastore.user`。
 - 既有 `vision-493709` 的 temporary exports bucket 需授予此 SA bucket-scoped `roles/storage.objectAdmin`。
+- `run.googleapis.com`、`cloudbuild.googleapis.com`、`artifactregistry.googleapis.com`、`secretmanager.googleapis.com` 已在 `photoidentifier-prod` 先行啟用。
 
 ## 一次性 IAM
 
@@ -49,6 +50,14 @@ export PUBLIC_APP_ORIGIN='https://<正式網域>'
 ```
 
 若尚未有正式網域，可先使用 Cloud Run URL 部署，取得 URL 後再把該 URL 設為 `GOOGLE_REDIRECT_URI`、`APP_BASE_URL`、`PUBLIC_APP_ORIGIN` 重部署。Google OAuth client 必須同時加入完全相同的 callback URL。
+
+如果你要在人工 provisioning 時順手啟用 API，可以先加：
+
+```bash
+ENABLE_GCLOUD_APIS=true ./scripts/deploy_photoidentifier_cloud_run.sh
+```
+
+但 GitHub Actions 的正式 deploy 不應該依賴這一步。
 
 ## 驗證
 

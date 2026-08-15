@@ -8,13 +8,16 @@ RUNTIME_SA="${RUNTIME_SA:-photoidentifier-run@${PROJECT_ID}.iam.gserviceaccount.
 REPOSITORY="${REPOSITORY:-photoidentifier}"
 IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d-%H%M%S)}"
 IMAGE="${IMAGE:-${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE_NAME}:${IMAGE_TAG}}"
+ENABLE_GCLOUD_APIS="${ENABLE_GCLOUD_APIS:-false}"
 
 : "${GOOGLE_CLIENT_ID:?Export GOOGLE_CLIENT_ID before deploying}"
 : "${GOOGLE_REDIRECT_URI:?Export GOOGLE_REDIRECT_URI before deploying}"
 : "${INSIGHT_API_URL:?Export INSIGHT_API_URL before deploying}"
 
 gcloud config set project "${PROJECT_ID}"
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
+if [[ "${ENABLE_GCLOUD_APIS}" == "true" ]]; then
+  gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
+fi
 
 gcloud artifacts repositories describe "${REPOSITORY}" \
   --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1 || \
