@@ -1,0 +1,103 @@
+name: Deploy Cloud Run
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-cloud-run-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      PROJECT_ID: photoidentifier-prod
+      REGION: asia-east1
+      SERVICE_NAME: photoidentifier
+      REPOSITORY: photoidentifier
+      RUNTIME_SA: photoidentifier-run@photoidentifier-prod.iam.gserviceaccount.com
+      FIRESTORE_PROJECT_ID: photoidentifier-prod
+      FIRESTORE_DATABASE: (default)
+      GOOGLE_PROJECT_NUMBER: "225874268617"
+      PHOTOIDENTIFIER_EXPORTS_BUCKET: vision-493709-photoidentifier-exports
+      FACE_CLUSTERING_ENABLED: "true"
+      PREVIEW_SIGNED_URL_TTL_MINUTES: "1440"
+      EXPORT_SIGNED_URL_TTL_MINUTES: "60"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Validate required deployment vars
+        run: |
+          test -n "${GOOGLE_CLIENT_ID}"
+          test -n "${GOOGLE_REDIRECT_URI}"
+          test -n "${APP_BASE_URL}"
+          test -n "${PUBLIC_APP_ORIGIN}"
+          test -n "${INSIGHT_API_URL}"
+        env:
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          GOOGLE_REDIRECT_URI: ${{ vars.GOOGLE_REDIRECT_URI }}
+          APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+          PUBLIC_APP_ORIGIN: ${{ vars.PUBLIC_APP_ORIGIN }}
+          INSIGHT_API_URL: ${{ vars.INSIGHT_API_URL }}
+
+      - name: Deploy to Cloud Run
+        run: ./scripts/deploy_photoidentifier_cloud_run.sh
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+          REPOSITORY: ${{ env.REPOSITORY }}
+          RUNTIME_SA: ${{ env.RUNTIME_SA }}
+          IMAGE_TAG: ${{ github.sha }}
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          GOOGLE_PROJECT_NUMBER: ${{ env.GOOGLE_PROJECT_NUMBER }}
+          GOOGLE_REDIRECT_URI: ${{ vars.GOOGLE_REDIRECT_URI }}
+          APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+          PUBLIC_APP_ORIGIN: ${{ vars.PUBLIC_APP_ORIGIN }}
+          INSIGHT_API_URL: ${{ vars.INSIGHT_API_URL }}
+          PHOTOIDENTIFIER_EXPORTS_BUCKET: ${{ env.PHOTOIDENTIFIER_EXPORTS_BUCKET }}
+          FIRESTORE_PROJECT_ID: ${{ env.FIRESTORE_PROJECT_ID }}
+          FIRESTORE_DATABASE: ${{ env.FIRESTORE_DATABASE }}
+          FACE_CLUSTERING_ENABLED: ${{ env.FACE_CLUSTERING_ENABLED }}
+          PREVIEW_SIGNED_URL_TTL_MINUTES: ${{ env.PREVIEW_SIGNED_URL_TTL_MINUTES }}
+          EXPORT_SIGNED_URL_TTL_MINUTES: ${{ env.EXPORT_SIGNED_URL_TTL_MINUTES }}
+
+      - name: Smoke test deployed service
+        run: |
+          SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" --project="${PROJECT_ID}" --region="${REGION}" --format='value(status.url)')"
+          echo "SERVICE_URL=${SERVICE_URL}" >> "$GITHUB_ENV"
+          curl -fsS "${SERVICE_URL}/api/config" > /tmp/photoidentifier_api_config.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path("/tmp/photoidentifier_api_config.json").read_text())
+          required = ["app_base_url", "public_app_origin"]
+          missing = [key for key in required if key not in payload]
+          if missing:
+              raise SystemExit(f"Missing keys in /api/config: {missing}")
+          print("api/config smoke test passed")
+          PY
+
+      - name: Deployment summary
+        run: |
+          echo "Cloud Run deployed to ${SERVICE_URL}"
