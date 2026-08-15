@@ -185,6 +185,7 @@ models
 *.jpg
 *.svg
 *.sh
+!scripts/deploy_photoidentifier_cloud_run.sh
 !scripts/provision_photoidentifier_backend_storage.sh
 *.bat
 *.zsh
@@ -220,6 +221,7 @@ report_20250902*
 *.xlsx
 *.xls
 *.doc*
+!.dockerignore
 *.pdf*
 
 *tmp*
