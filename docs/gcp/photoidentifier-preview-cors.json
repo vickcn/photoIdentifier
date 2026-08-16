@@ -2,7 +2,9 @@
   {
     "origin": [
       "http://localhost:6419",
-      "https://photo-identifier.vercel.app"
+      "https://photo-identifier.vercel.app",
+      "https://photoidentifier-225874268617.asia-east1.run.app",
+      "https://photoidentifier-zn7y74nl2a-de.a.run.app"
     ],
     "method": ["GET", "HEAD"],
     "responseHeader": ["Content-Type", "ETag"],

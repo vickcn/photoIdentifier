@@ -95,8 +95,16 @@ python -m pytest
 - `FIRESTORE_DATABASE`
 - `PHOTOIDENTIFIER_BACKEND_SERVICE_ACCOUNT_JSON`（Vercel server-side 優先）
 - `FIRESTORE_SERVICE_ACCOUNT_JSON`（舊值，保留作為遷移 fallback）
-- `PHOTOIDENTIFIER_EXPORTS_BUCKET`（暫存 ZIP 匯出 bucket，預設 `vision-493709-photoidentifier-exports`）
+- `PHOTOIDENTIFIER_EXPORTS_BUCKET`（暫存 ZIP 匯出 bucket；Cloud Run `photoidentifier-prod` 預設 `photoidentifier-prod-exports`，Vercel 舊部署可維持 `vision-493709-photoidentifier-exports`）
 - `EXPORT_SIGNED_URL_TTL_MINUTES`（登入後換取短效下載連結的有效分鐘數，預設 `60`）
+
+目前建議的正式責任邊界如下：
+
+- Vercel 舊部署：維持 `vision-493709` 脈絡，包含舊版 `PHOTOIDENTIFIER_EXPORTS_BUCKET`
+- Cloud Run 正式部署：使用 `photoidentifier-prod` 的 Firestore、runtime secret 與 `photoidentifier-prod-exports`
+- `photoclassifier` 可繼續留在 `vision-493709`，由 `photoidentifier` 透過 `INSIGHT_API_URL` 呼叫
+
+若同一份程式碼同時部署到 Vercel 與 Cloud Run，兩邊都應明確設置自己的 `APP_BASE_URL`、`PUBLIC_APP_ORIGIN`、`GOOGLE_REDIRECT_URI`、`GOOGLE_CLOUD_PROJECT` 與 `PHOTOIDENTIFIER_EXPORTS_BUCKET`，不要依賴 repo 內預設值互相覆蓋。
 
 匯出完成後系統會透過使用者的 Google OAuth credentials 寄出 Gmail 通知，信件中的連結會回到 `photoIdentifier` 重新驗證登入身分，再產生短效 Storage signed URL。若使用者是在加入 Gmail scope 前登入，請先登出再重新連結 Google 帳號。
 

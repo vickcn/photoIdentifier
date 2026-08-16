@@ -9,16 +9,21 @@
 - Firestore `(default)` 已在 `asia-east1` 建立。
 - Secret Manager 已建立 `SESSION_SECRET`、`GOOGLE_CLIENT_SECRET`、`INSIGHT_API_KEY`、`VERTEX_API_KEY`。
 - `photoidentifier-run` 已有 `roles/datastore.user`。
-- 既有 `vision-493709` 的 temporary exports bucket 需授予此 SA bucket-scoped `roles/storage.objectAdmin`。
+- `photoidentifier-prod-exports` 已建立為 `photoidentifier-prod` 專用 temporary exports bucket。
 - `run.googleapis.com`、`cloudbuild.googleapis.com`、`artifactregistry.googleapis.com`、`secretmanager.googleapis.com` 已在 `photoidentifier-prod` 先行啟用。
 
 ## 一次性 IAM
 
 ```bash
 gcloud storage buckets add-iam-policy-binding \
-  gs://vision-493709-photoidentifier-exports \
+  gs://photoidentifier-prod-exports \
   --member=serviceAccount:photoidentifier-run@photoidentifier-prod.iam.gserviceaccount.com \
   --role=roles/storage.objectAdmin
+
+gcloud secrets add-iam-policy-binding PHOTOIDENTIFIER_BACKEND_SERVICE_ACCOUNT_JSON \
+  --project=photoidentifier-prod \
+  --member=serviceAccount:photoidentifier-run@photoidentifier-prod.iam.gserviceaccount.com \
+  --role=roles/secretmanager.secretAccessor
 
 for secret_name in SESSION_SECRET GOOGLE_CLIENT_SECRET INSIGHT_API_KEY VERTEX_API_KEY; do
   gcloud secrets add-iam-policy-binding "${secret_name}" \
@@ -28,7 +33,30 @@ for secret_name in SESSION_SECRET GOOGLE_CLIENT_SECRET INSIGHT_API_KEY VERTEX_AP
 done
 ```
 
-`roles/storage.objectAdmin` 的 scope 只有 `vision-493709-photoidentifier-exports`，沒有授予 project-level Storage Admin。
+`roles/storage.objectAdmin` 的 scope 只有 `photoidentifier-prod-exports`，沒有授予 project-level Storage Admin。
+
+## `photoidentifier-prod` exports bucket
+
+Cloud Run 正式路線使用自己的 bucket，不再依賴 `vision-493709` 的 Vercel exports bucket：
+
+```bash
+gcloud storage buckets create gs://photoidentifier-prod-exports \
+  --project=photoidentifier-prod \
+  --location=asia-east1 \
+  --uniform-bucket-level-access \
+  --public-access-prevention \
+  --lifecycle-file=docs/gcp/photoidentifier-backend-exports-lifecycle.json
+
+gcloud storage buckets update gs://photoidentifier-prod-exports \
+  --project=photoidentifier-prod \
+  --cors-file=docs/gcp/photoidentifier-preview-cors.json
+```
+
+正式邊界：
+
+- Cloud Run `photoidentifier-prod` 使用 `gs://photoidentifier-prod-exports`
+- Vercel 舊部署可繼續使用 `gs://vision-493709-photoidentifier-exports`
+- `photoclassifier` 仍留在 `vision-493709`
 
 ## 初次部署
 
@@ -75,7 +103,7 @@ gcloud run services describe photoidentifier \
 
 ## Vercel 保留
 
-這個部署不會修改 Vercel env，也不會刪除 `FIRESTORE_SERVICE_ACCOUNT_JSON`。Vercel 與 Cloud Run 使用同一份程式碼，但各自設定 `APP_BASE_URL`、`PUBLIC_APP_ORIGIN`、`GOOGLE_REDIRECT_URI`。切換正式網域前，先完成 Cloud Run 的健康檢查與 OAuth callback 驗證。
+這個部署不會修改 Vercel env，也不會刪除 `FIRESTORE_SERVICE_ACCOUNT_JSON`。Vercel 與 Cloud Run 使用同一份程式碼，但各自設定 `APP_BASE_URL`、`PUBLIC_APP_ORIGIN`、`GOOGLE_REDIRECT_URI`，也可各自使用不同的 exports bucket。切換正式網域前，先完成 Cloud Run 的健康檢查與 OAuth callback 驗證。
 
 ## GitHub Actions 自動部署
 

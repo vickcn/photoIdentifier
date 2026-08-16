@@ -1,5 +1,103 @@
 # Vercel + Cloud Run 批次架構改造計畫
 
+## 雙 GCP / 雙部署面總覽
+
+這個專案目前不是單一 GCP 專案結構，而是兩套歷史脈絡並存：
+
+- `vision-493709`：較早期的 Vercel / Firebase / OAuth / exports bucket / classifier 相關資源
+- `photoidentifier-prod`：目前要補齊的正式 Cloud Run + Firestore 部署面
+
+這不是單純的殘留垃圾，而是「舊有可運作路徑」與「新完整 GCP 部署路徑」同時存在。
+後續所有部署、除錯、寄信、匯出、OAuth 設定，都必須先分清楚自己現在在碰哪一套。
+
+### 專案級對照表
+
+| 面向 | `vision-493709` | `photoidentifier-prod` | 目前用途 / 備註 |
+| --- | --- | --- | --- |
+| GCP project id | `vision-493709` | `photoidentifier-prod` | 兩個都仍在實際使用中 |
+| 主要歷史角色 | Vercel 時期後端資源、Firebase / Firestore、暫存匯出 bucket、classifier 相依 | 新的正式 Cloud Run `photoidentifier` 執行面 | 現況是跨專案運作，不是純遷移完成狀態 |
+| 主要 App 服務 | `photoclassifier` | `photoidentifier` | `photoidentifier` 仍會呼叫 `photoclassifier` |
+| Cloud Run URL | `https://photoclassifier-dqmb7r4cla-de.a.run.app` | `https://photoidentifier-zn7y74nl2a-de.a.run.app` | `photoidentifier` 另有 Google-managed alias URL |
+| OAuth / Google client 歷史綁定 | 舊本機 `.env` 與 Vercel 設定仍偏向這邊 | Cloud Run 正在改為這邊的 OAuth client / redirect | 最容易混淆的是 `GOOGLE_CLIENT_ID`、`GOOGLE_PROJECT_NUMBER`、`GOOGLE_REDIRECT_URI` |
+| Firestore | 舊資料面與舊 service account 慣性使用 | Cloud Run 目前設定 `FIRESTORE_PROJECT_ID=photoidentifier-prod` | 現在已經不是全部都在 `vision-493709` |
+| 暫存匯出 bucket | `gs://vision-493709-photoidentifier-exports` | `gs://photoidentifier-prod-exports` | Vercel 舊部署保留舊 bucket，Cloud Run 正式路線改用新 bucket |
+| Gmail 通知前置 | 舊流程曾依賴 Vercel server-side secret | 現在 Cloud Run 需要自行具備 signed URL + Gmail 發信能力 | 這次補的是 `photoidentifier-prod` 這條路 |
+
+### 執行服務 / Service Account 對照表
+
+只列可公開識別資訊，不列 private key、secret 值。
+
+| 類型 | 所屬 project | 名稱 / email | 目前用途 | 備註 |
+| --- | --- | --- | --- | --- |
+| Cloud Run service | `photoidentifier-prod` | `photoidentifier` | 正式 App 後端 | region `asia-east1` |
+| Runtime service account | `photoidentifier-prod` | `photoidentifier-run@photoidentifier-prod.iam.gserviceaccount.com` | `photoidentifier` Cloud Run 執行身分 | 需讀 Secret Manager、存 Firestore、寫 exports bucket |
+| Deploy service account | `photoidentifier-prod` | `github-actions-deploy@photoidentifier-prod.iam.gserviceaccount.com` | GitHub Actions / 部署身分 | 不應直接作為 runtime 使用 |
+| Firebase admin service account | `photoidentifier-prod` | `firebase-adminsdk-fbsvc@photoidentifier-prod.iam.gserviceaccount.com` | Firebase admin 相關用途 | 不是本次批次匯出主角 |
+| Default compute service account | `photoidentifier-prod` | `225874268617-compute@developer.gserviceaccount.com` | GCP 預設 compute identity | 不建議當正式 runtime 依賴 |
+| Backend service account | `vision-493709` | `photoidentifier-backend@vision-493709.iam.gserviceaccount.com` | 舊 Vercel server-side Firestore / Storage 路徑 | 目前仍存在於舊部署脈絡 |
+| Firestore service account | `vision-493709` | `photoidentifier-firestore@vision-493709.iam.gserviceaccount.com` | 舊 Firestore 回退 / 舊資料路徑 | 與新 Cloud Run runtime 要明確區分 |
+| Classifier service | `vision-493709` | `photoclassifier` | 臉部偵測 / 分群運算 | `photoidentifier` 目前仍呼叫它 |
+
+### 功能環節對照表
+
+| 功能環節 | 目前主要落點 | 使用到的 project / service | 關鍵設定 | 風險 / 混淆點 |
+| --- | --- | --- | --- | --- |
+| 前端頁面 / 使用者互動 | Vercel 與 Cloud Run 兩邊都可能承載 | Vercel deployment、`photoidentifier` Cloud Run | `APP_BASE_URL`、`PUBLIC_APP_ORIGIN` | 如果 UI 入口與 OAuth redirect URI 不一致，登入會出問題 |
+| Google OAuth 登入 | App server + Google OAuth client | 歷史上偏 `vision-493709`，Cloud Run 正在切往 `photoidentifier-prod` | `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_PROJECT_NUMBER`、`GOOGLE_REDIRECT_URI` | 最容易出現「登入成功但 session / redirect 不對」 |
+| Google Drive 存取 | App server | 跟 OAuth client 綁定 | Drive scopes、token session | 本機 `.env` 與 Cloud Run env 如果指向不同專案，會很難 debug |
+| 批次工作控制平面 | `photoidentifier` | `photoidentifier-prod` | Cloud Run env、Firestore state store | 新正式流程主體在這裡 |
+| 人臉分群運算 | `photoclassifier` | `vision-493709` Cloud Run | `INSIGHT_API_URL` 指向 classifier | 這條仍是跨服務、跨專案呼叫 |
+| 批次狀態持久化 | `photoidentifier` | 目前 Cloud Run 指向 `photoidentifier-prod` Firestore | `BATCH_STATE_BACKEND`、`FIRESTORE_PROJECT_ID` | 舊文件與本機 env 仍常寫成 `vision-493709` |
+| 暫存 ZIP 匯出 | `photoidentifier` 建立、GCS 保存 | Vercel 路線在 `vision-493709`；Cloud Run 路線在 `photoidentifier-prod` | Vercel:`vision-493709-photoidentifier-exports`；Cloud Run:`photoidentifier-prod-exports` | 兩套部署面各自用自己的 bucket |
+| signed URL 下載 | `photoidentifier` | Cloud Run runtime SA + GCS bucket | `PHOTOIDENTIFIER_BACKEND_SERVICE_ACCOUNT_JSON` | 沒有 private key 時會在 signed URL 這一步失敗 |
+| Gmail 發信通知 | `photoidentifier` | 使用登入者 OAuth token 呼叫 Gmail API | `gmail.send` scope、Gmail API enablement | 若前一步 signed URL 失敗，寄信不會發生 |
+| 回顧辨識結果 | 前端 + 匯出 ZIP | ZIP 內 `workspace.json` / `result.json` / 原圖 | 匯出結構與 bbox metadata | 如果 ZIP 結構不一致，回顧功能就無法重建 |
+
+### 環境變數責任面對照表
+
+| 變數 | 歷史主要來源 | 現在較應該由誰主導 | 用途 | 備註 |
+| --- | --- | --- | --- | --- |
+| `GOOGLE_CLIENT_ID` | Vercel / 舊 `.env` | 依實際對外登入入口決定，但要全域一致 | Google OAuth client id | 不能一套 local、一套 Cloud Run、另一套 Vercel |
+| `GOOGLE_PROJECT_NUMBER` | 舊 `vision-493709` 設定 | 應與目前 OAuth client 所屬 project 對齊 | Picker / OAuth 識別資訊 | 常跟 project id 混淆 |
+| `GOOGLE_REDIRECT_URI` | 舊 Vercel / local 為主 | 要跟實際對外 URL 完全一致 | OAuth callback | 不能混用兩個 Cloud Run URL |
+| `GOOGLE_CLOUD_PROJECT` | 本機常是 `vision-493709` | Cloud Run `photoidentifier` 應是 `photoidentifier-prod` | App 預設 GCP project | 要和 runtime 身分一致 |
+| `FIRESTORE_PROJECT_ID` | 舊案多半是 `vision-493709` | Cloud Run 現在是 `photoidentifier-prod` | Firestore 狀態保存 | 現在這個已經在新 project |
+| `PHOTOIDENTIFIER_EXPORTS_BUCKET` | 舊 bucket | 依部署面決定 | 暫存 ZIP 保存位置 | Vercel 保留舊 bucket，Cloud Run 改用 `photoidentifier-prod-exports` |
+| `PHOTOIDENTIFIER_BACKEND_SERVICE_ACCOUNT_JSON` | Vercel server-side secret | Cloud Run runtime secret 也需要 | Storage signed URL / server-side GCP auth | 這次寄信問題就是補這個 |
+| `FIRESTORE_SERVICE_ACCOUNT_JSON` | 舊 Vercel / rollback 路徑 | 僅作舊路徑或回退用途 | 舊 Firestore service identity | 應避免與新版 backend JSON 混為一談 |
+| `INSIGHT_API_URL` | 舊 classifier URL | 目前仍要指向 `photoclassifier` | 人臉偵測 / 分群 API | 表示架構仍是雙服務 |
+
+### 目前已確認的真實狀態
+
+| 項目 | 目前狀態 |
+| --- | --- |
+| `photoidentifier` Cloud Run 所在 project | `photoidentifier-prod` |
+| `photoidentifier` runtime SA | `photoidentifier-run@photoidentifier-prod.iam.gserviceaccount.com` |
+| `photoidentifier` Firestore target | `photoidentifier-prod` |
+| `photoidentifier` exports bucket | Cloud Run:`photoidentifier-prod-exports`；Vercel:`vision-493709-photoidentifier-exports` |
+| `photoclassifier` URL | `https://photoclassifier-dqmb7r4cla-de.a.run.app` |
+| 舊本機 `.env` 預設 project | `vision-493709` |
+| 新 Cloud Run 已建立 backend SA secret 名稱 | `PHOTOIDENTIFIER_BACKEND_SERVICE_ACCOUNT_JSON` |
+| 本次缺口 | OAuth / local env 對齊，以及是否同步把本機 `.env` 切到 `photoidentifier-prod` |
+
+### 現階段建議的架構解讀
+
+| 類別 | 建議解讀 |
+| --- | --- |
+| `vision-493709` | 舊資源母體，短期仍承擔 classifier、舊 bucket、部分 OAuth / Vercel 脈絡 |
+| `photoidentifier-prod` | 新正式 App 後端 project，現在已承擔 Cloud Run app、Firestore、runtime secret 與 Cloud Run exports bucket |
+| 是否已完全遷移 | 否，目前是跨專案組合態 |
+| 是否必須立刻合併成單一 project | 不一定，但必須把責任邊界寫清楚並固定 |
+| 近期最重要工作 | 讓 `photoidentifier-prod` 的 OAuth / local env 也完全對齊，避免再混用舊 project 設定 |
+
+### 正式邊界決議
+
+| 部署面 | project | exports bucket | 說明 |
+| --- | --- | --- | --- |
+| Vercel 舊部署 | `vision-493709` 脈絡 | `gs://vision-493709-photoidentifier-exports` | 保留既有 bucket，不強迫一起搬遷 |
+| Cloud Run 正式部署 | `photoidentifier-prod` | `gs://photoidentifier-prod-exports` | 自成一套，不再依賴舊 bucket |
+| Classifier | `vision-493709` | 不適用 | 可繼續獨立存在，供 `photoidentifier` 呼叫 |
+
 狀態：第一階段核心實作完成，持續補強非同步控制平面與持久化。
 
 建議先引用：
