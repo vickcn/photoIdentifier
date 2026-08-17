@@ -21,6 +21,7 @@ class BatchUploadApiTests(unittest.TestCase):
         main._active_batch_owners.clear()
         main._batch_sessions.pop("upload-test", None)
         main._batch_sessions.pop("busy-test", None)
+        main._batch_sessions.pop("drive-status-test", None)
 
     def test_frontend_config_exposes_batch_upload_limits(self):
         response = self.client.get("/api/config")
@@ -260,6 +261,45 @@ class BatchUploadApiTests(unittest.TestCase):
 
         self.assertEqual(config["batch_upload_batch_size"], 30)
         self.assertEqual(config["batch_upload_concurrency"], 20)
+
+    def test_drive_status_marks_session_failed_when_cluster_job_disappears(self):
+        main._batch_sessions["drive-status-test"] = {
+            "session_id": "drive-status-test",
+            "owner_id": "owner-a",
+            "batch_mode": "drive",
+            "status": "processing",
+            "stage": "face_clustering",
+            "results": [{"file_name": "photo.jpg"}],
+            "processing_info": {
+                "run_face_clustering": True,
+                "file_count": 1,
+                "drive_files": [{}],
+                "drive_next_index": 1,
+            },
+            "completed": False,
+            "face_cluster_job_id": "job-missing-123",
+        }
+
+        with (
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+            patch.object(
+                main,
+                "get_cluster_job_snapshot",
+                new=AsyncMock(side_effect=RuntimeError('Insight API HTTP 404: {"detail":"找不到這個辨識工作"}')),
+            ),
+            patch.object(main, "_persist_session_update", new=AsyncMock()) as persist_update,
+            patch.object(main, "_release_batch_slot") as release_slot,
+        ):
+            response = self.client.get("/batch_sessions/drive-status-test/status")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["stage"], "failed")
+        self.assertIn("辨識工作已失效", payload["error_message"])
+        self.assertIsNone(main._batch_sessions["drive-status-test"]["face_cluster_job_id"])
+        persist_update.assert_awaited()
+        release_slot.assert_called_once_with("owner-a", "drive-status-test")
 
     def test_face_clustering_env_overrides_config_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:

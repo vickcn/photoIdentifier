@@ -813,6 +813,11 @@ async def _request_batch_cancel(session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_missing_cluster_job_error(exc: Exception) -> bool:
+    message = str(exc)
+    return "Insight API HTTP 404" in message and "找不到這個辨識工作" in message
+
+
 def _start_face_clustering_task(
     session_id: str,
     *,
@@ -2159,7 +2164,35 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
         )
         return
 
-    snapshot = await get_cluster_job_snapshot(str(session["face_cluster_job_id"]))
+    job_id = str(session["face_cluster_job_id"])
+    try:
+        snapshot = await get_cluster_job_snapshot(job_id)
+    except Exception as exc:
+        if not _is_missing_cluster_job_error(exc):
+            raise
+        logger.warning(
+            "Face cluster job missing session=%s job_id=%s reason=remote_job_missing_after_restart_or_expiry",
+            session_id,
+            job_id,
+        )
+        session["face_cluster_job_id"] = None
+        session["status"] = "failed"
+        session["stage"] = "failed"
+        session["error_message"] = "辨識工作已失效，可能因辨識服務重啟或工作逾期被清除，請重新執行這次整理。"
+        session["completed"] = True
+        session["end_time"] = datetime.now().isoformat()
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "failed",
+                "completed_at": session["end_time"],
+                "error_message": session["error_message"],
+                "face_cluster_job_id": None,
+                "face_cluster_progress": session.get("face_cluster_progress"),
+            },
+        )
+        _release_batch_slot(owner_id, session_id)
+        return
     images, source_by_name = prepare_cluster_images(session.get("results") or [])
     current_start_index = 0
     current_batch_size = len(images)
