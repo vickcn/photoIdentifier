@@ -22,6 +22,7 @@ class BatchUploadApiTests(unittest.TestCase):
         main._batch_sessions.pop("upload-test", None)
         main._batch_sessions.pop("busy-test", None)
         main._batch_sessions.pop("drive-status-test", None)
+        main._batch_sessions.pop("drive-face-timeout-test", None)
 
     def test_frontend_config_exposes_batch_upload_limits(self):
         response = self.client.get("/api/config")
@@ -261,6 +262,60 @@ class BatchUploadApiTests(unittest.TestCase):
 
         self.assertEqual(config["batch_upload_batch_size"], 30)
         self.assertEqual(config["batch_upload_concurrency"], 20)
+
+    def test_drive_status_syncs_failed_face_cluster_job(self):
+        main._batch_sessions["drive-face-timeout-test"] = {
+            "session_id": "drive-face-timeout-test",
+            "owner_id": "owner-a",
+            "batch_mode": "drive",
+            "status": "processing",
+            "stage": "face_clustering",
+            "results": [{"status": "ok", "file_name": "a.jpg"}],
+            "processing_info": {
+                "run_face_clustering": True,
+                "drive_files": [{"id": "file-1", "name": "a.jpg", "mimeType": "image/jpeg"}],
+                "drive_next_index": 1,
+                "file_count": 1,
+            },
+            "face_cluster_job_id": "job-timeout",
+            "face_cluster_progress": {
+                "status": "face_cluster_progress",
+                "session_id": "drive-face-timeout-test",
+                "job_id": "job-timeout",
+                "job_status": "running",
+                "stage": "detecting",
+                "progress": {"completed": 0, "total": 1, "percent": 0},
+            },
+            "completed": False,
+        }
+
+        with (
+            patch.object(main, "_get_client_id", return_value="owner-a"),
+            patch.object(
+                main,
+                "get_cluster_job_snapshot",
+                new=AsyncMock(
+                    return_value={
+                        "job_id": "job-timeout",
+                        "status": "failed",
+                        "stage": "timeout",
+                        "error_message": "running timeout after 3600s",
+                        "progress": {"completed": 0, "total": 1, "percent": 0.0},
+                        "total": 1,
+                    }
+                ),
+            ),
+            patch.object(main, "_persist_session_update", new=AsyncMock()) as persist_update,
+        ):
+            response = self.client.get("/batch_sessions/drive-face-timeout-test/status")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["stage"], "failed")
+        self.assertEqual(payload["error_message"], "running timeout after 3600s")
+        self.assertTrue(main._batch_sessions["drive-face-timeout-test"]["completed"])
+        persist_update.assert_awaited()
 
     def test_drive_status_marks_session_failed_when_cluster_job_disappears(self):
         main._batch_sessions["drive-status-test"] = {

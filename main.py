@@ -2275,6 +2275,130 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
     _release_batch_slot(owner_id, session_id)
 
 
+async def _sync_face_cluster_terminal_status(session: dict[str, Any]) -> bool:
+    if session.get("completed"):
+        return False
+    job_id = str(session.get("face_cluster_job_id") or "").strip()
+    if not job_id:
+        return False
+
+    status = str(session.get("status") or "")
+    stage = str(session.get("stage") or "")
+    if status not in {"processing", "queued"} and stage != "face_clustering":
+        return False
+
+    try:
+        snapshot = await get_cluster_job_snapshot(job_id)
+    except Exception as exc:
+        if not _is_missing_cluster_job_error(exc):
+            return False
+        logger.warning(
+            "Face cluster job missing during status sync session=%s job_id=%s reason=remote_job_missing_after_restart_or_expiry",
+            session.get("session_id"),
+            job_id,
+        )
+        session["face_cluster_job_id"] = None
+        session["status"] = "failed"
+        session["stage"] = "failed"
+        session["error_message"] = "辨識工作已失效，可能因辨識服務重啟或工作逾期被清除，請重新執行這次整理。"
+        session["completed"] = True
+        session["end_time"] = datetime.now().isoformat()
+        await _persist_session_update(
+            str(session["session_id"]),
+            {
+                "status": "failed",
+                "completed_at": session["end_time"],
+                "error_message": session["error_message"],
+                "face_cluster_job_id": None,
+                "face_cluster_progress": session.get("face_cluster_progress"),
+            },
+        )
+        _release_batch_slot(str(session.get("owner_id")), str(session["session_id"]))
+        return True
+
+    snapshot_status = str(snapshot.get("status") or "")
+    if snapshot_status in {"queued", "running"}:
+        return False
+
+    session_id = str(session["session_id"])
+    owner_id = str(session.get("owner_id") or "")
+    session["face_cluster_progress"] = _face_cluster_progress_event(session_id, snapshot)
+
+    if snapshot_status == "success":
+        images, source_by_name = prepare_cluster_images(session.get("results") or [])
+        result = snapshot.get("result") if isinstance(snapshot.get("result"), dict) else {}
+        session["face_cluster_job_id"] = None
+        clusters = build_clusters_from_response(result, source_by_name)
+        session["face_clusters"] = clusters
+        processing_info = session.get("processing_info") if isinstance(session.get("processing_info"), dict) else {}
+        session["face_clustering"] = {
+            "available": True,
+            "cluster_count": len(clusters),
+            "eps": float(processing_info.get("face_cluster_eps", DEFAULT_CLUSTER_EPS)),
+            "min_samples": int(processing_info.get("face_cluster_min_samples", DEFAULT_CLUSTER_MIN_SAMPLES)),
+        }
+        session["status"] = "completed"
+        session["stage"] = "completed"
+        session["completed"] = True
+        session["end_time"] = datetime.now().isoformat()
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "completed",
+                "completed_at": session["end_time"],
+                "result_count": len(session.get("results") or []),
+                "face_clustering": session["face_clustering"],
+                "face_cluster_progress": session["face_cluster_progress"],
+                "face_cluster_job_id": None,
+            },
+        )
+        if batch_state_store.enabled:
+            try:
+                await batch_state_store.save_face_clusters(
+                    session_id,
+                    owner_id,
+                    clusters,
+                    str(session.get("google_user_id") or ""),
+                )
+            except Exception:
+                logger.exception("Failed to persist synced face clusters session=%s", session_id)
+        _release_batch_slot(owner_id, session_id)
+        return True
+
+    if snapshot_status == "cancelled":
+        session["status"] = "cancelled"
+        session["stage"] = "cancelled"
+        session["completed"] = True
+        session["end_time"] = datetime.now().isoformat()
+        await _persist_session_update(
+            session_id,
+            {
+                "status": "cancelled",
+                "completed_at": session["end_time"],
+                "face_cluster_progress": session.get("face_cluster_progress"),
+            },
+        )
+        _release_batch_slot(owner_id, session_id)
+        return True
+
+    session["status"] = "failed"
+    session["stage"] = "failed"
+    session["error_message"] = str(snapshot.get("error_message") or "人臉分群沒有完成")
+    session["completed"] = True
+    session["end_time"] = datetime.now().isoformat()
+    await _persist_session_update(
+        session_id,
+        {
+            "status": "failed",
+            "completed_at": session["end_time"],
+            "error_message": session["error_message"],
+            "face_cluster_progress": session.get("face_cluster_progress"),
+        },
+    )
+    _release_batch_slot(owner_id, session_id)
+    return True
+
+
 @app.post("/batch_drive_start/")
 async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
     _validate_processing_scope(req.run_public_classification, req.run_face_clustering)
@@ -2364,6 +2488,7 @@ async def get_batch_session_status(session_id: str, request: Request):
                     },
                 )
                 _release_batch_slot(str(session.get("owner_id")), session_id)
+        await _sync_face_cluster_terminal_status(session)
     return _batch_status_payload(session)
 
 @app.post("/batch_drive/")
