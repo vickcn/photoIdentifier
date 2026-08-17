@@ -27,7 +27,7 @@ jobs:
       FIRESTORE_PROJECT_ID: photoidentifier-prod
       FIRESTORE_DATABASE: (default)
       GOOGLE_PROJECT_NUMBER: "225874268617"
-      PHOTOIDENTIFIER_EXPORTS_BUCKET: vision-493709-photoidentifier-exports
+      PHOTOIDENTIFIER_EXPORTS_BUCKET: photoidentifier-prod-exports
       FACE_CLUSTERING_ENABLED: "true"
       PREVIEW_SIGNED_URL_TTL_MINUTES: "1440"
       EXPORT_SIGNED_URL_TTL_MINUTES: "60"
