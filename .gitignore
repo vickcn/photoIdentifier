@@ -250,5 +250,6 @@ build/
 **.secrets**
 **.vercel**
 .vercel
+!.vercelignore
 
 MEMORY.md

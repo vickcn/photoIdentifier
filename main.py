@@ -42,7 +42,13 @@ from src.insight_api_client import (
     get_cluster_job_snapshot,
     prepare_cluster_images,
 )
-from src.batch_state_store import create_batch_state_store, get_backend_service_account_json, strip_image_payload
+from src.batch_state_store import (
+    create_batch_state_store,
+    get_backend_service_account_json,
+    person_id_for,
+    photo_id_for,
+    strip_image_payload,
+)
 from src.drive_name_memory import (
     NAME_MEMORY_FILE_NAME,
     default_name_memory_document,
@@ -711,6 +717,7 @@ async def _classify_session_faces(
             min_samples=min_samples,
             batch_size=int(processing_info.get("face_cluster_batch_size") or BATCH_UPLOAD_BATCH_SIZE),
             progress_callback=progress_callback,
+            session_id=session_id,
         )
         if session.get("cancel_requested"):
             session["face_clusters"] = []
@@ -1025,6 +1032,26 @@ def _require_logged_in_google_user_id(request: Request) -> str:
     if not google_user_id:
         raise HTTPException(status_code=400, detail="Google user id 不可留白")
     return google_user_id
+
+
+@app.get("/training-dataset")
+async def get_training_dataset(
+    request: Request,
+    person_id: str | None = None,
+    limit: int = 1000,
+):
+    google_user_id = _require_logged_in_google_user_id(request)
+    items = await batch_state_store.list_training_face_links(
+        google_user_id,
+        person_id=str(person_id or "").strip() or None,
+        limit=max(1, min(int(limit), 5000)),
+    )
+    return {
+        "google_user_id": google_user_id,
+        "person_id": str(person_id or "").strip() or None,
+        "count": len(items),
+        "items": items,
+    }
 
 
 def _find_drive_app_folder_id(drive_service) -> str | None:
@@ -2147,6 +2174,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
             min_samples=int(processing_info.get("face_cluster_min_samples", DEFAULT_CLUSTER_MIN_SAMPLES)),
             start_index=0,
             batch_size=len(images),
+            session_id=session_id,
         )
         session["face_cluster_job_id"] = job.get("job_id")
         processing_info["face_cluster_current_start_index"] = 0
@@ -2532,6 +2560,7 @@ async def batch_visualize_drive(req: DriveBatchRequest, request: Request):
                 eps=face_cluster_eps,
                 min_samples=face_cluster_min_samples,
                 batch_size=BATCH_UPLOAD_BATCH_SIZE_CLOUD,
+                session_id=session_id,
             )
             face_clustering = {"available": True, "cluster_count": len(face_clusters)}
         elif req.run_face_clustering:
@@ -3569,6 +3598,10 @@ def _build_session_export_document(session: dict[str, Any]) -> dict[str, Any]:
         for cluster in clusters
         if isinstance(cluster, dict) and cluster.get("cluster_id")
     }
+    session_id = str(session.get("session_id") or "")
+    google_user_id = str(session.get("google_user_id") or "")
+    for cluster_id, cluster in cluster_by_id.items():
+        cluster.setdefault("person_id", person_id_for(google_user_id, session_id, cluster_id))
     assignments: dict[str, list[str]] = {}
     for cluster in clusters:
         if not isinstance(cluster, dict):
@@ -3588,6 +3621,7 @@ def _build_session_export_document(session: dict[str, Any]) -> dict[str, Any]:
     people = [
         {
             "cluster_id": str(cluster.get("cluster_id") or ""),
+            "person_id": str(cluster.get("person_id") or ""),
             "display_name": str(cluster.get("display_name") or cluster.get("cluster_id") or ""),
             "status": str(cluster.get("status") or "unconfirmed"),
             "notes": str(cluster.get("notes") or ""),
@@ -3609,11 +3643,18 @@ def _build_session_export_document(session: dict[str, Any]) -> dict[str, Any]:
             assigned_people.append(
                 {
                     "cluster_id": cluster_id,
+                    "person_id": str(cluster.get("person_id") or ""),
                     "display_name": str(cluster.get("display_name") or cluster_id),
+                    "faces": [
+                        strip_image_payload(evidence)
+                        for evidence in cluster.get("evidence_photos") or []
+                        if isinstance(evidence, dict) and str(evidence.get("file_name") or "") == file_name
+                    ],
                 }
             )
         photos.append(
             {
+                "photo_id": photo_id_for(session_id, file_name),
                 "file_name": file_name,
                 "drive_id": item.get("drive_id") or analysis.get("drive_id"),
                 "public_decision": _storage_export_public_decision(item),
@@ -3650,15 +3691,21 @@ def _build_session_export_document(session: dict[str, Any]) -> dict[str, Any]:
                 "people": [
                     {
                         "cluster_id": person.get("cluster_id"),
+                        "person_id": person.get("person_id"),
                         "display_name": person.get("display_name"),
+                        "faces": person.get("faces") or [],
                     }
                     for person in assigned_people
                 ],
             }
         )
     return {
-        "schema_version": "photoidentifier.export.v1",
+        "schema_version": "photoidentifier.export.v2",
         "session_id": session.get("session_id"),
+        "job_id": next((str(cluster.get("source_job_id")) for cluster in clusters if cluster.get("source_job_id")), ""),
+        "embedding_uri": next((cluster.get("embedding_uri") for cluster in clusters if cluster.get("embedding_uri")), None),
+        "manifest_uri": next((cluster.get("manifest_uri") for cluster in clusters if cluster.get("manifest_uri")), None),
+        "model_version": next((str(cluster.get("model_version")) for cluster in clusters if cluster.get("model_version")), ""),
         "batch_mode": session.get("batch_mode"),
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "people": people,
@@ -3677,6 +3724,51 @@ def _build_session_export_document(session: dict[str, Any]) -> dict[str, Any]:
         "face_clustering": session.get("face_clustering"),
         "blocked_files": session.get("blocked_files", []),
     }
+
+
+def _enrich_training_linkage_document(
+    document: dict[str, Any],
+    session: dict[str, Any],
+) -> dict[str, Any]:
+    enriched = json.loads(json.dumps(document, ensure_ascii=False))
+    server_document = _build_session_export_document(session)
+    enriched["schema_version"] = "photoidentifier.export.v2"
+    for key in ("job_id", "embedding_uri", "manifest_uri", "model_version"):
+        enriched[key] = server_document.get(key)
+
+    server_people = {
+        str(item.get("cluster_id") or ""): item
+        for item in server_document.get("people") or []
+        if isinstance(item, dict)
+    }
+    for person in enriched.get("people") or []:
+        if not isinstance(person, dict):
+            continue
+        server_person = server_people.get(str(person.get("cluster_id") or ""), {})
+        person["person_id"] = str(person.get("person_id") or server_person.get("person_id") or "")
+
+    server_photos = {
+        str(item.get("file_name") or ""): item
+        for item in server_document.get("photos") or []
+        if isinstance(item, dict)
+    }
+    for photo in enriched.get("photos") or []:
+        if not isinstance(photo, dict):
+            continue
+        server_photo = server_photos.get(str(photo.get("file_name") or ""), {})
+        photo["photo_id"] = str(photo.get("photo_id") or server_photo.get("photo_id") or "")
+        server_assignments = {
+            str(item.get("cluster_id") or ""): item
+            for item in server_photo.get("people") or []
+            if isinstance(item, dict)
+        }
+        for person in photo.get("people") or []:
+            if not isinstance(person, dict):
+                continue
+            server_person = server_assignments.get(str(person.get("cluster_id") or ""), {})
+            person["person_id"] = str(person.get("person_id") or server_person.get("person_id") or "")
+            person["faces"] = server_person.get("faces") or []
+    return enriched
 
 
 async def _notify_completed_batch_session(session_id: str, request: Request) -> dict[str, Any] | None:
@@ -3918,7 +4010,8 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
     if req.document.get("session_id") != session_id:
         raise HTTPException(status_code=400, detail="JSON 文件的 session_id 與批次不一致")
 
-    content = json.dumps(req.document, ensure_ascii=False, indent=2).encode("utf-8")
+    export_document = _enrich_training_linkage_document(req.document, session)
+    content = json.dumps(export_document, ensure_ascii=False, indent=2).encode("utf-8")
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="JSON 文件超過 10 MB 上限")
 
@@ -3933,7 +4026,7 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
             content,
         )
         people_copy = {"copied_count": 0, "folder_count": 0, "errors": []}
-        photo_angle_folders = req.document.get("photo_angle_folders")
+        photo_angle_folders = export_document.get("photo_angle_folders")
         if isinstance(photo_angle_folders, list) and photo_angle_folders:
             people_copy = await run_in_threadpool(
                 _copy_people_folders_to_drive,
@@ -3966,7 +4059,7 @@ async def create_drive_batch_export(req: DriveBatchExportRequest, request: Reque
             await batch_state_store.save_photo_assignments(
                 session_id,
                 session["owner_id"],
-                req.document,
+                export_document,
                 str(session.get("user_account") or ""),
                 str(session.get("google_user_id") or ""),
             )
@@ -4006,6 +4099,8 @@ async def create_storage_batch_export(req: StorageBatchExportRequest, request: R
     if req.document.get("session_id") != session_id:
         raise HTTPException(status_code=400, detail="JSON 文件的 session_id 與批次不一致")
 
+    input_document = _enrich_training_linkage_document(req.document, session)
+
     credentials = None
     file_name = f"results_{session_id}_failed.zip"
     bucket_name = _require_exports_bucket_name()
@@ -4017,7 +4112,7 @@ async def create_storage_batch_export(req: StorageBatchExportRequest, request: R
             credentials = None
         export_document, image_entries = await run_in_threadpool(
             _build_storage_export_images,
-            req.document,
+            input_document,
             session,
             credentials,
         )

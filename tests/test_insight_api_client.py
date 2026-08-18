@@ -32,6 +32,27 @@ class FakeResponse:
 
 
 class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_client_sends_session_id_as_classifier_client_key(self):
+        configured_headers = []
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                configured_headers.append(kwargs["headers"])
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, path, **kwargs):
+                return FakeResponse(200, {"job_id": "job-1", "status": "success"})
+
+        with patch("src.insight_api_client.httpx.AsyncClient", FakeAsyncClient):
+            await InsightApiClient("https://insight.test", "secret", client_id="session-1").get_cluster_job("job-1")
+
+        self.assertEqual(configured_headers[0]["X-Client-Id"], "session-1")
+
     async def test_cluster_uses_queued_job_endpoint(self):
         calls = []
 
@@ -234,6 +255,9 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
 
     def test_build_clusters_from_response_allows_missing_source_image(self):
         response = {
+            "job_id": "job-1",
+            "model_version": "buffalo_l-v1",
+            "embedding_uri": "gs://bucket/job-1/embeddings.npy",
             "images": [
                 {
                     "file_name": "DSC_2387.JPG",
@@ -243,6 +267,9 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
                             "bbox": [0, 0, 10, 10],
                             "score": 0.9,
                             "cluster": 0,
+                            "face_id": "face-1",
+                            "embedding_sha256": "abc123",
+                            "embedding_row": 0,
                         }
                     ],
                 }
@@ -255,6 +282,9 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
         evidence = clusters[0]["evidence_photos"][0]
         self.assertEqual(evidence["file_name"], "DSC_2387.JPG")
         self.assertIsNone(evidence["image_b64"])
+        self.assertEqual(evidence["face_id"], "face-1")
+        self.assertEqual(clusters[0]["source_job_id"], "job-1")
+        self.assertEqual(clusters[0]["embedding_uri"], response["embedding_uri"])
 
     def test_strip_image_payload_removes_snapshot_fields_and_keeps_source_key(self):
         cluster = {

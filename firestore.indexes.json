@@ -39,6 +39,14 @@
         { "fieldPath": "owner_id", "order": "ASCENDING" },
         { "fieldPath": "created_at", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "training_face_links",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "google_user_id", "order": "ASCENDING" },
+        { "fieldPath": "person_id", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

@@ -45,9 +45,15 @@ def _read_float_env(name: str, default: float, *, minimum: float) -> float:
 
 
 class InsightApiClient:
-    def __init__(self, base_url: str | None = None, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        client_id: str | None = None,
+    ) -> None:
         self.base_url = (base_url or os.environ.get("INSIGHT_API_URL", "")).rstrip("/")
         self.api_key = api_key or os.environ.get("INSIGHT_API_KEY", "")
+        self.client_id = str(client_id or "").strip()
         if not self.base_url or not self.api_key:
             raise RuntimeError("必須設定 INSIGHT_API_URL 與 INSIGHT_API_KEY")
 
@@ -368,6 +374,8 @@ class InsightApiClient:
 
     async def _request(self, method: str, path: str, **kwargs) -> dict:
         headers = {"Authorization": f"Bearer {self.api_key}"}
+        if self.client_id:
+            headers["X-Client-Id"] = self.client_id
         connect_timeout = _read_float_env(
             "INSIGHT_API_CONNECT_TIMEOUT_SEC",
             DEFAULT_INSIGHT_API_CONNECT_TIMEOUT_SEC,
@@ -424,6 +432,7 @@ async def cluster_batch_results(
     min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
     batch_size: int = DEFAULT_CLUSTER_BATCH_SIZE,
     progress_callback: ProgressCallback | None = None,
+    session_id: str | None = None,
 ) -> list[dict]:
     images, source_by_name = prepare_cluster_images(results)
     if not images:
@@ -455,7 +464,7 @@ async def cluster_batch_results(
 
     # The classifier receives one logical job and performs detection in small
     # internal batches before fitting DBSCAN once across all embeddings.
-    response = await InsightApiClient().cluster(
+    response = await InsightApiClient(client_id=session_id).cluster(
         images,
         eps=eps,
         min_samples=min_samples,
@@ -634,6 +643,12 @@ def build_clusters_from_response(response: dict, source_by_name: dict[str, dict]
                     "bbox_basis_width": image_width,
                     "bbox_basis_height": image_height,
                     "score": face["score"],
+                    "face_id": str(face.get("face_id") or ""),
+                    "embedding_sha256": str(face.get("embedding_sha256") or ""),
+                    "embedding_row": face.get("embedding_row"),
+                    "embedding_uri": face.get("embedding_uri") or response.get("embedding_uri"),
+                    "model_version": str(face.get("model_version") or response.get("model_version") or ""),
+                    "job_id": str(response.get("job_id") or ""),
                     "image_b64": source.get("original_image_b64") if source else None,
                     "thumbnail_b64": _thumbnail_b64_for_source(source),
                     "image_width": image_width,
@@ -658,6 +673,10 @@ def build_clusters_from_response(response: dict, source_by_name: dict[str, dict]
                 "photo_count": len({face["file_name"] for face in faces}),
                 "evidence_photos": evidence_photos,
                 "notes": "",
+                "source_job_id": str(response.get("job_id") or ""),
+                "embedding_uri": response.get("embedding_uri"),
+                "manifest_uri": response.get("manifest_uri"),
+                "model_version": str(response.get("model_version") or ""),
             }
         )
     return clusters
@@ -674,13 +693,14 @@ async def create_cluster_job_from_results(
     min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
     start_index: int = 0,
     batch_size: int = DEFAULT_CLUSTER_BATCH_SIZE,
+    session_id: str | None = None,
 ) -> dict:
     images, _source_by_name = prepare_cluster_images(results)
     if not images:
         return {"job_id": None, "status": "success", "result": {"images": []}}
     # One classifier job owns the complete dataset. The classifier itself
     # detects images in bounded internal batches, then fits globally.
-    job = await InsightApiClient().create_cluster_job(
+    job = await InsightApiClient(client_id=session_id).create_cluster_job(
         images,
         eps=eps,
         min_samples=min_samples,

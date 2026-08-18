@@ -125,6 +125,46 @@ class FakeBatchStateStore:
 
 
 class FaceWorkspaceApiTests(unittest.TestCase):
+    def test_export_document_is_enriched_with_server_side_face_linkage(self):
+        session = {
+            "session_id": "session-1",
+            "google_user_id": "google-1",
+            "results": [{"file_name": "one.jpg"}],
+            "face_clusters": [
+                {
+                    "cluster_id": "cluster_001",
+                    "display_name": "小明",
+                    "source_job_id": "job-1",
+                    "embedding_uri": "gs://bucket/job-1/embeddings.npy",
+                    "model_version": "buffalo_l-v1",
+                    "evidence_photos": [
+                        {
+                            "file_name": "one.jpg",
+                            "face_id": "face-1",
+                            "embedding_row": 0,
+                            "embedding_sha256": "abc123",
+                        }
+                    ],
+                }
+            ],
+        }
+        browser_document = {
+            "session_id": "session-1",
+            "people": [{"cluster_id": "cluster_001", "display_name": "小明"}],
+            "photos": [
+                {
+                    "file_name": "one.jpg",
+                    "people": [{"cluster_id": "cluster_001", "display_name": "小明"}],
+                }
+            ],
+        }
+
+        enriched = main._enrich_training_linkage_document(browser_document, session)
+
+        self.assertEqual(enriched["job_id"], "job-1")
+        self.assertTrue(enriched["people"][0]["person_id"].startswith("person_"))
+        self.assertEqual(enriched["photos"][0]["people"][0]["faces"][0]["face_id"], "face-1")
+
     def setUp(self):
         self.client = TestClient(main.app)
         self.feature_patch = patch.object(
@@ -368,10 +408,12 @@ class FaceWorkspaceApiTests(unittest.TestCase):
         self.assertEqual(response.json()["file_id"], "file-1")
         self.assertEqual(save.call_args.args[1], "target-1")
         self.assertEqual(save.call_args.args[2], response.json()["file_name"])
-        self.assertEqual(
-            save.call_args.args[3],
-            json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8"),
-        )
+        saved_document = json.loads(save.call_args.args[3].decode("utf-8"))
+        self.assertEqual(saved_document["session_id"], document["session_id"])
+        self.assertEqual(saved_document["photos"], document["photos"])
+        self.assertIn("job_id", saved_document)
+        self.assertIn("embedding_uri", saved_document)
+        self.assertIn("model_version", saved_document)
 
     def test_drive_export_copies_people_folders_when_present(self):
         main._batch_sessions["face-workspace-test"]["batch_mode"] = "drive"

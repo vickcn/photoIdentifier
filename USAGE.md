@@ -100,6 +100,7 @@ python -m pytest
 
 目前建議的正式責任邊界如下：
 
+- Firebase CLI / Firestore 正式預設專案：`photoidentifier-prod`
 - Vercel 舊部署：維持 `vision-493709` 脈絡，包含舊版 `PHOTOIDENTIFIER_EXPORTS_BUCKET`
 - Cloud Run 正式部署：使用 `photoidentifier-prod` 的 Firestore、runtime secret 與 `photoidentifier-prod-exports`
 - `photoclassifier` 可繼續留在 `vision-493709`，由 `photoidentifier` 透過 `INSIGHT_API_URL` 呼叫

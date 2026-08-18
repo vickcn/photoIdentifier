@@ -40,6 +40,11 @@ def photo_id_for(session_id: str, file_name: str) -> str:
     return f"photo_{digest}"
 
 
+def person_id_for(google_user_id: str, session_id: str, cluster_id: str) -> str:
+    value = f"{google_user_id}:{session_id}:{cluster_id}"
+    return f"person_{hashlib.sha256(value.encode('utf-8')).hexdigest()[:24]}"
+
+
 def cluster_doc_id(session_id: str, cluster_id: str) -> str:
     return f"{session_id}__{cluster_id}"
 
@@ -51,6 +56,90 @@ def assignment_doc_id(session_id: str, photo_id: str) -> str:
 def export_doc_id(session_id: str, file_name: str) -> str:
     digest = hashlib.sha1(f"{session_id}:{file_name}:{iso_utc()}".encode("utf-8")).hexdigest()[:16]
     return f"export_{digest}"
+
+
+def build_training_linkage_records(
+    session_id: str,
+    owner_id: str,
+    google_user_id: str,
+    document: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    now = iso_utc()
+    people_by_cluster: dict[str, dict[str, Any]] = {}
+    people_records: list[dict[str, Any]] = []
+    for person in document.get("people") or []:
+        if not isinstance(person, dict):
+            continue
+        cluster_id = str(person.get("cluster_id") or "")
+        if not cluster_id:
+            continue
+        person_id = str(person.get("person_id") or person_id_for(google_user_id, session_id, cluster_id))
+        record = {
+            "person_id": person_id,
+            "google_user_id": google_user_id,
+            "display_name": str(person.get("display_name") or cluster_id),
+            "status": str(person.get("status") or "unconfirmed"),
+            "source_session_id": session_id,
+            "source_cluster_id": cluster_id,
+            "updated_at": now,
+        }
+        people_by_cluster[cluster_id] = record
+        people_records.append(record)
+
+    assignments: list[dict[str, Any]] = []
+    faces: list[dict[str, Any]] = []
+    for photo in document.get("photos") or []:
+        if not isinstance(photo, dict):
+            continue
+        file_name = str(photo.get("file_name") or photo.get("file") or "")
+        photo_id = str(photo.get("photo_id") or photo_id_for(session_id, file_name))
+        assigned_people = [item for item in photo.get("people") or [] if isinstance(item, dict)]
+        cluster_ids = [str(item.get("cluster_id")) for item in assigned_people if item.get("cluster_id")]
+        person_ids: list[str] = []
+        for item in assigned_people:
+            cluster_id = str(item.get("cluster_id") or "")
+            definition = people_by_cluster.get(cluster_id, {})
+            person_id = str(item.get("person_id") or definition.get("person_id") or "")
+            if person_id:
+                person_ids.append(person_id)
+            for face in item.get("faces") or []:
+                if not isinstance(face, dict) or not face.get("face_id"):
+                    continue
+                faces.append(
+                    {
+                        "face_id": str(face["face_id"]),
+                        "google_user_id": google_user_id,
+                        "person_id": person_id,
+                        "session_id": session_id,
+                        "job_id": str(document.get("job_id") or face.get("job_id") or ""),
+                        "photo_id": photo_id,
+                        "file_name": file_name,
+                        "cluster_id": cluster_id,
+                        "bbox": face.get("bbox"),
+                        "score": face.get("score"),
+                        "embedding_row": face.get("embedding_row"),
+                        "embedding_sha256": str(face.get("embedding_sha256") or ""),
+                        "embedding_uri": str(document.get("embedding_uri") or face.get("embedding_uri") or ""),
+                        "model_version": str(document.get("model_version") or face.get("model_version") or ""),
+                        "label_source": "user_export",
+                        "updated_at": now,
+                    }
+                )
+        assignments.append(
+            {
+                "session_id": session_id,
+                "owner_id": owner_id,
+                "google_user_id": google_user_id,
+                "photo_id": photo_id,
+                "file_name": file_name,
+                "cluster_ids": cluster_ids,
+                "person_ids": person_ids,
+                "updated_at": now,
+                "updated_by": owner_id,
+                "expires_at": expires_after(DEFAULT_ACTIVE_TTL_DAYS),
+            }
+        )
+    return {"people": people_records, "assignments": assignments, "faces": faces}
 
 
 def strip_image_payload(value: Any) -> Any:
@@ -147,6 +236,15 @@ class NullBatchStateStore:
         google_user_id: str = "",
     ) -> None:
         return None
+
+    async def list_training_face_links(
+        self,
+        google_user_id: str,
+        *,
+        person_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        return []
 
     async def list_sessions(self, owner_id: str) -> list[dict[str, Any]]:
         return []
@@ -376,34 +474,33 @@ class FirestoreBatchStateStore:
     ) -> None:
         def write_batch() -> None:
             batch = self._client.batch()
-            has_writes = False
-            for photo in document.get("photos", []):
-                file_name = str(photo.get("file_name") or photo.get("file") or "")
-                photo_id = str(photo.get("photo_id") or photo_id_for(session_id, file_name))
-                people = photo.get("people") or []
-                cluster_ids = [
-                    str(person.get("cluster_id"))
-                    for person in people
-                    if person.get("cluster_id")
-                ]
-                payload = {
-                    "session_id": session_id,
-                    "owner_id": owner_id,
-                    "user_account": user_account,
-                    "google_user_id": str(google_user_id or ""),
-                    "photo_id": photo_id,
-                    "file_name": file_name,
-                    "cluster_ids": cluster_ids,
-                    "updated_at": iso_utc(),
-                    "updated_by": owner_id,
-                    "expires_at": expires_after(DEFAULT_ACTIVE_TTL_DAYS),
-                }
+            write_count = 0
+
+            def queue_set(ref, payload: dict[str, Any], *, merge: bool = False) -> None:
+                nonlocal batch, write_count
+                batch.set(ref, payload, merge=merge)
+                write_count += 1
+                if write_count >= 400:
+                    batch.commit()
+                    batch = self._client.batch()
+                    write_count = 0
+
+            records = build_training_linkage_records(
+                session_id, owner_id, str(google_user_id or ""), document
+            )
+            for payload in records["assignments"]:
+                payload = {**payload, "user_account": user_account}
                 ref = self._client.collection("photo_assignments").document(
-                    assignment_doc_id(session_id, photo_id)
+                    assignment_doc_id(session_id, str(payload["photo_id"]))
                 )
-                batch.set(ref, payload)
-                has_writes = True
-            if has_writes:
+                queue_set(ref, payload)
+            for payload in records["people"]:
+                ref = self._client.collection("person_definitions").document(str(payload["person_id"]))
+                queue_set(ref, payload, merge=True)
+            for payload in records["faces"]:
+                ref = self._client.collection("training_face_links").document(str(payload["face_id"]))
+                queue_set(ref, payload, merge=True)
+            if write_count:
                 batch.commit()
 
         await run_in_threadpool(write_batch)
@@ -420,6 +517,23 @@ class FirestoreBatchStateStore:
                 sessions = [doc.to_dict() for doc in docs]
                 sessions.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
                 return sessions[:50]
+
+        return await run_in_threadpool(read)
+
+    async def list_training_face_links(
+        self,
+        google_user_id: str,
+        *,
+        person_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        def read() -> list[dict[str, Any]]:
+            query = self._client.collection("training_face_links").where(
+                "google_user_id", "==", str(google_user_id)
+            )
+            if person_id:
+                query = query.where("person_id", "==", str(person_id))
+            return [doc.to_dict() for doc in query.limit(max(1, min(int(limit), 5000))).stream()]
 
         return await run_in_threadpool(read)
 

@@ -3,6 +3,7 @@
 狀態：先記錄邊界與清理策略，不改程式。
 
 這份只描述 `photoIdentifier` 這個 repo 要負責的部分。`photoclassifier` 的 job queue、Firestore job state、stale job 判定，請看對應的本地 repo 文件：`../photoclassifier/issues/photoidentifier-photoclassifier-job-flow.md`。
+如果之後要做「依使用者 / 人物回收 embedding 來訓練 DBSCAN 或其他模型」，請先看 `issues/todo-embedding_storage_plan.md`；那份文件處理的是分析資料底座，不是這份的 session / export 清理。
 
 ## 這個 repo 要管的東西
 

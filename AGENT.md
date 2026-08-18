@@ -2,7 +2,7 @@
 
 ## 目前進度
 
-- Firebase 專案已初始化並綁定到 `vision-493709`。
+- Firebase 專案已初始化並綁定到 `photoidentifier-prod`。
 - Firestore 已完成 `firebase init` 設定。
 - Firestore database location 設為 `asia-east1`。
 - 已產生並寫入以下檔案：
