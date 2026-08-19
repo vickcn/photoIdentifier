@@ -85,6 +85,7 @@ DEFAULT_PREVIEW_SIGNED_URL_TTL_MINUTES = 24 * 60
 FACE_CLUSTER_EPS_MIN = 0.05
 FACE_CLUSTER_EPS_MAX = 1.5
 IS_VERCEL = os.getenv("VERCEL") == "1"
+IS_GCP = bool(os.getenv("K_SERVICE") or os.getenv("GAE_SERVICE"))
 CONFIG_BATCH_UPLOAD_CONCURRENCY_CAP = None
 CONFIG_PATH = Path(__file__).with_name("config.json")
 logger = logging.getLogger(__name__)
@@ -171,6 +172,38 @@ def _read_bool(raw_value: Any, *, key_name: str, default: bool) -> bool:
             return False
     logger.warning("%s 無效，改用預設值 %s。", key_name, default)
     return default
+
+
+def _runtime_platform_name() -> str | None:
+    if IS_VERCEL:
+        return "vercel"
+    if IS_GCP:
+        return "gcp"
+    return None
+
+
+def _apply_platform_upload_overrides(config: dict[str, Any]) -> None:
+    platform_name = _runtime_platform_name()
+    if not platform_name:
+        return
+    suffix = platform_name.upper()
+    for key, minimum, maximum in (
+        ("batch_upload_max_file_mb", 1, None),
+        ("batch_upload_max_total_mb", 1, None),
+        ("local_upload_request_max_files", 1, None),
+        ("local_upload_request_max_total_mb", 1, None),
+    ):
+        env_key = f"{key.upper()}_{suffix}"
+        raw_value = os.environ.get(env_key)
+        if raw_value is None or raw_value == "":
+            continue
+        config[key] = _read_positive_int(
+            raw_value,
+            key_name=env_key,
+            default=int(config[key]),
+            minimum=minimum,
+            maximum=maximum,
+        )
 
 
 def _read_face_cluster_params(raw_eps: Any, raw_min_samples: Any, *, max_files: int) -> tuple[float, int]:
@@ -317,6 +350,7 @@ def load_config() -> dict[str, Any]:
             minimum=minimum,
             maximum=maximum,
         )
+    _apply_platform_upload_overrides(config)
     config["host"] = str(os.environ.get("HOST", raw_config.get("host", "0.0.0.0")) or "0.0.0.0")
     config["port"] = _read_positive_int(
         os.environ.get("PORT", raw_config.get("port", 8000)) or 8000,
