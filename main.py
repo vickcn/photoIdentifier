@@ -188,6 +188,8 @@ def _apply_platform_upload_overrides(config: dict[str, Any]) -> None:
         return
     suffix = platform_name.upper()
     for key, minimum, maximum in (
+        ("batch_upload_batch_size_local", 1, None),
+        ("batch_upload_batch_size_cloud", 1, None),
         ("batch_upload_max_file_mb", 1, None),
         ("batch_upload_max_total_mb", 1, None),
         ("local_upload_request_max_files", 1, None),
