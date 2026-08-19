@@ -305,7 +305,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function getBatchUploadLimits(source = getSelectedBatchSource()) {
         const localRequestMaxBytes = (config?.local_upload_request_max_total_mb || 4) * 1024 * 1024;
         return {
-            totalMaxFiles: config?.batch_upload_total_max_files || 200,
+            totalMaxFiles: source === 'drive'
+                ? (config?.batch_upload_max_files_cloud || config?.batch_upload_total_max_files || 200)
+                : (config?.batch_upload_max_files_local || config?.batch_upload_max_files || config?.batch_upload_total_max_files || 200),
             batchSize: source === 'drive'
                 ? (config?.batch_upload_batch_size_cloud || config?.batch_upload_max_files_cloud || 20)
                 : (config?.batch_upload_batch_size_local || config?.batch_upload_max_files_local || config?.batch_upload_batch_size || config?.batch_upload_max_files || 20),
@@ -324,6 +326,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return config?.batch_upload_limits_cloud_message || `Google 雲端會每 ${getBatchUploadLimits(source).batchSize} 張分成一批送出，全部準備好後再整理人物。`;
         }
         const limits = getBatchUploadLimits(source);
+        if (config && config.local_upload_logged_in === false) {
+            return config?.batch_upload_limits_local_message || `這台裝置未登入時，一次最多先準備 ${limits.totalMaxFiles} 張；登入 Google 後可使用這個平台較寬鬆的上傳限制。`;
+        }
         return config?.batch_upload_limits_local_message || `這台裝置一次可先準備 ${limits.totalMaxFiles} 張，會每 ${limits.batchSize} 張分成一批整理；單檔 ${config?.batch_upload_max_file_mb || 2}MB、合計 ${config?.batch_upload_max_total_mb || 4}MB 以內。`;
     }
 
@@ -492,6 +497,7 @@ document.addEventListener('DOMContentLoaded', () => {
             await loadDriveNameMemory();
             syncAutoEmailPreferenceUi();
             syncPermissionUi();
+            await fetchConfig();
         } catch (err) {
             console.warn("Failed to check login status:", err);
             currentUser = {
@@ -504,6 +510,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderPersonNameSuggestionList();
             syncAutoEmailPreferenceUi();
             syncPermissionUi();
+            await fetchConfig();
         }
     }
 

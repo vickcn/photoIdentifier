@@ -75,6 +75,7 @@ DEFAULT_BATCH_UPLOAD_MAX_FILE_MB = 20
 DEFAULT_BATCH_UPLOAD_MAX_TOTAL_MB = 500
 DEFAULT_LOCAL_UPLOAD_REQUEST_MAX_FILES = 3
 DEFAULT_LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB = 4
+DEFAULT_LOCAL_UPLOAD_ANONYMOUS_MAX_FILES = 10
 DEFAULT_BATCH_UPLOAD_CONCURRENCY = 5
 DEFAULT_BATCH_UPLOAD_CONCURRENCY_LOCAL_CAP = 5
 DEFAULT_BATCH_UPLOAD_CONCURRENCY_CLOUD_CAP = 3
@@ -931,6 +932,30 @@ def _load_creds_from_session(request: Request):
         return None
 
 
+def _is_logged_in_google_user(request: Request) -> bool:
+    return _get_google_userinfo(request) is not None
+
+
+def _local_upload_total_max_files(request: Request) -> int:
+    if _is_logged_in_google_user(request):
+        return BATCH_UPLOAD_TOTAL_MAX_FILES
+    return DEFAULT_LOCAL_UPLOAD_ANONYMOUS_MAX_FILES
+
+
+def _local_upload_limits_message(request: Request) -> str:
+    local_total_max_files = _local_upload_total_max_files(request)
+    if local_total_max_files >= BATCH_UPLOAD_TOTAL_MAX_FILES:
+        return (
+            f"這台電腦一次可先準備 {local_total_max_files} 張；"
+            f"上傳會每次最多 {LOCAL_UPLOAD_REQUEST_MAX_FILES} 張、"
+            f"合計 {LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB}MB 分批送出。"
+        )
+    return (
+        f"這台電腦未登入時，一次最多先準備 {local_total_max_files} 張；"
+        "登入 Google 後可使用這個平台較寬鬆的上傳限制。"
+    )
+
+
 def get_drive_credentials(request: Request):
     """
     取得 Drive OAuth credentials：
@@ -978,7 +1003,7 @@ def get_drive_credentials(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    config = _build_frontend_config()
+    config = _build_frontend_config(request)
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -988,10 +1013,11 @@ async def read_root(request: Request):
     )
 
 
-def _build_frontend_config() -> dict[str, Any]:
+def _build_frontend_config(request: Request) -> dict[str, Any]:
     """提供前端啟動 Google Picker 所需的公開設定 (不含 Secret)"""
     client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
     project_number = os.environ.get("GOOGLE_PROJECT_NUMBER", "")
+    local_total_max_files = _local_upload_total_max_files(request)
     return {
         "app_base_url": _app_base_url(),
         "public_app_origin": _public_app_origin(),
@@ -1002,8 +1028,8 @@ def _build_frontend_config() -> dict[str, Any]:
         "batch_upload_batch_size_local": BATCH_UPLOAD_BATCH_SIZE_LOCAL,
         "batch_upload_batch_size_cloud": BATCH_UPLOAD_BATCH_SIZE_CLOUD,
         "batch_upload_total_max_files": BATCH_UPLOAD_TOTAL_MAX_FILES,
-        "batch_upload_max_files": BATCH_UPLOAD_TOTAL_MAX_FILES,
-        "batch_upload_max_files_local": BATCH_UPLOAD_TOTAL_MAX_FILES,
+        "batch_upload_max_files": local_total_max_files,
+        "batch_upload_max_files_local": local_total_max_files,
         "batch_upload_max_files_cloud": BATCH_UPLOAD_TOTAL_MAX_FILES,
         "batch_upload_max_file_mb": BATCH_UPLOAD_MAX_FILE_MB,
         "batch_upload_max_total_mb": BATCH_UPLOAD_MAX_TOTAL_MB,
@@ -1012,9 +1038,10 @@ def _build_frontend_config() -> dict[str, Any]:
         "batch_upload_concurrency": BATCH_UPLOAD_CONCURRENCY,
         "batch_upload_concurrency_local_cap": LOCAL_BATCH_CONCURRENCY_CAP,
         "batch_upload_concurrency_cloud_cap": CLOUD_API_CONCURRENCY_CAP,
+        "local_upload_logged_in": local_total_max_files >= BATCH_UPLOAD_TOTAL_MAX_FILES,
         "batch_upload_concurrency_local_message": f"這台電腦一次最多先看 {LOCAL_BATCH_CONCURRENCY_CAP} 張，我會慢慢幫你整理好。",
         "batch_upload_concurrency_cloud_message": f"Google 雲端一次最多先看 {CLOUD_API_CONCURRENCY_CAP} 張，這樣整理起來會比較穩。",
-        "batch_upload_limits_local_message": f"這台電腦一次可先準備 {BATCH_UPLOAD_TOTAL_MAX_FILES} 張；上傳會每次最多 {LOCAL_UPLOAD_REQUEST_MAX_FILES} 張、合計 {LOCAL_UPLOAD_REQUEST_MAX_TOTAL_MB}MB 分批送出。",
+        "batch_upload_limits_local_message": _local_upload_limits_message(request),
         "batch_upload_limits_cloud_message": f"Google 雲端會每 {BATCH_UPLOAD_BATCH_SIZE_CLOUD} 張分成一批送出，全部準備好後再整理人物。",
         "batch_download_max_mb": BATCH_DOWNLOAD_MAX_MB,
         "face_clustering_enabled": FACE_CLUSTERING_ENABLED,
@@ -1026,8 +1053,8 @@ def _build_frontend_config() -> dict[str, Any]:
 
 
 @app.get("/api/config")
-async def get_frontend_config():
-    return _build_frontend_config()
+async def get_frontend_config(request: Request):
+    return _build_frontend_config(request)
 
 @app.get("/api/user/me")
 async def get_current_user(request: Request):
@@ -1582,6 +1609,7 @@ async def batch_upload_stream(
     upload_chunk_total: int = Form(1),
     upload_total_files: Optional[int] = Form(None),
 ):
+    local_total_max_files = _local_upload_total_max_files(request)
     _validate_processing_scope(run_public_classification, run_face_clustering)
     await _require_public_classification_if_requested(request, run_public_classification)
     _validate_local_api_concurrency(concurrency)
@@ -1594,8 +1622,12 @@ async def batch_upload_stream(
     is_final_upload_chunk = upload_chunk_index == upload_chunk_total - 1
     expected_total_files = upload_total_files if is_chunked_upload and upload_total_files else len(files)
     _validate_batch_file_count(expected_total_files, mode="local")
-    if expected_total_files > BATCH_UPLOAD_TOTAL_MAX_FILES:
-        raise HTTPException(status_code=413, detail=f"一次最多上傳 {BATCH_UPLOAD_TOTAL_MAX_FILES} 張圖片。請減少檔案，或改用 Google 雲端資料夾模式。")
+    if expected_total_files > local_total_max_files:
+        if local_total_max_files >= BATCH_UPLOAD_TOTAL_MAX_FILES:
+            detail = f"一次最多上傳 {local_total_max_files} 張圖片。請減少檔案，或改用 Google 雲端資料夾模式。"
+        else:
+            detail = f"未登入時一次最多上傳 {local_total_max_files} 張圖片；登入 Google 後可使用這個平台較寬鬆的上傳限制。"
+        raise HTTPException(status_code=413, detail=detail)
 
     try:
         color_rules = json.loads(color_rules_json) if color_rules_json else None
@@ -1639,7 +1671,7 @@ async def batch_upload_stream(
     try:
         images = await read_upload_batch(
             files,
-            max_files=LOCAL_UPLOAD_REQUEST_MAX_FILES if is_chunked_upload else BATCH_UPLOAD_TOTAL_MAX_FILES,
+            max_files=LOCAL_UPLOAD_REQUEST_MAX_FILES if is_chunked_upload else local_total_max_files,
             max_file_bytes=BATCH_UPLOAD_MAX_FILE_BYTES,
             max_total_bytes=LOCAL_UPLOAD_REQUEST_MAX_TOTAL_BYTES if is_chunked_upload else BATCH_UPLOAD_MAX_TOTAL_BYTES,
         )
