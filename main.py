@@ -976,11 +976,18 @@ def get_drive_credentials(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    return templates.TemplateResponse(request=request, name="index.html", context={})
+    config = _build_frontend_config()
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={
+            "batch_upload_limits_local_message": config["batch_upload_limits_local_message"],
+        },
+    )
 
-@app.get("/api/config")
-async def get_frontend_config():
-    """提供前端啟動 Google Picker 所需的公開 ID (不含 Secret)"""
+
+def _build_frontend_config() -> dict[str, Any]:
+    """提供前端啟動 Google Picker 所需的公開設定 (不含 Secret)"""
     client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
     project_number = os.environ.get("GOOGLE_PROJECT_NUMBER", "")
     return {
@@ -1014,6 +1021,11 @@ async def get_frontend_config():
         "face_cluster_eps_min": FACE_CLUSTER_EPS_MIN,
         "face_cluster_eps_max": FACE_CLUSTER_EPS_MAX,
     }
+
+
+@app.get("/api/config")
+async def get_frontend_config():
+    return _build_frontend_config()
 
 @app.get("/api/user/me")
 async def get_current_user(request: Request):
