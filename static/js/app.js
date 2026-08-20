@@ -1692,6 +1692,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentBatchCancelRequested = false;
     let currentFaceClusterJobId = null;
     const DRIVE_BATCH_POLL_INTERVAL_MS = 1500;
+    const DRIVE_BATCH_POLL_SLOW_INTERVAL_MS = 15000;
+    const DRIVE_BATCH_POLL_MEDIUM_INTERVAL_MS = 5000;
     const BATCH_VIEW_SNAPSHOT_KEY = 'photoIdentifier.batchViewSnapshot';
     let lastBatchStatusPayload = null;
 
@@ -1958,6 +1960,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function pollDriveBatchStatus(sessionId, signal) {
         let connectionFailures = 0;
+        let unchangedPolls = 0;
+        let lastProgressSignature = '';
         while (true) {
             if (signal?.aborted || currentBatchCancelRequested) {
                 throw new DOMException('Aborted', 'AbortError');
@@ -1976,7 +1980,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (connectionFailures >= 2) {
                     setLoadingMessage('連線不太穩，正在重新確認進度…', '畫面會繼續等服務回報，不會把已完成的結果弄丟。');
                 }
-                await wait(Math.min(DRIVE_BATCH_POLL_INTERVAL_MS * connectionFailures, 6000));
+                await wait(Math.min(DRIVE_BATCH_POLL_MEDIUM_INTERVAL_MS * connectionFailures, DRIVE_BATCH_POLL_SLOW_INTERVAL_MS));
                 continue;
             }
 
@@ -1988,7 +1992,28 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.status === 'failed') {
                 throw new Error(data.error_message || '雲端照片整理沒有完成');
             }
-            await wait(DRIVE_BATCH_POLL_INTERVAL_MS);
+            const faceProgress = data.face_cluster_progress || {};
+            const progress = faceProgress.progress || data.progress || {};
+            const progressSignature = [
+                data.status,
+                data.stage,
+                faceProgress.job_status,
+                faceProgress.stage,
+                faceProgress.queue_position,
+                progress.completed,
+                progress.total,
+            ].join('|');
+            unchangedPolls = progressSignature === lastProgressSignature ? unchangedPolls + 1 : 0;
+            lastProgressSignature = progressSignature;
+
+            const faceStage = String(faceProgress.stage || faceProgress.job_status || data.stage || '');
+            const waitingForClassifier = ['queued', 'staging', 'uploading', 'connection_wait'].includes(faceStage);
+            const pollDelay = waitingForClassifier || unchangedPolls >= 3
+                ? DRIVE_BATCH_POLL_SLOW_INTERVAL_MS
+                : unchangedPolls >= 1
+                    ? DRIVE_BATCH_POLL_MEDIUM_INTERVAL_MS
+                    : DRIVE_BATCH_POLL_INTERVAL_MS;
+            await wait(pollDelay);
         }
     }
 

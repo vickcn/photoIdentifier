@@ -436,6 +436,7 @@ from src.upload_batch import read_upload_batch
 _batch_sessions: dict[str, dict] = {}
 _active_batch_owners: dict[str, str] = {}
 _batch_session_locks: dict[str, asyncio.Lock] = {}
+_cluster_job_snapshot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 batch_state_store = create_batch_state_store()
 user_store = create_user_store()
 
@@ -713,6 +714,31 @@ def _face_cluster_starting_event(session_id: str) -> dict[str, Any]:
             "percent": 0,
         },
     }
+
+
+def _cluster_job_snapshot_cache_ttl_sec() -> float:
+    try:
+        return max(float(os.getenv("CLASSIFIER_STATUS_CACHE_TTL_SEC", "8")), 0.0)
+    except ValueError:
+        return 8.0
+
+
+async def _get_cluster_job_snapshot_cached(job_id: str) -> dict[str, Any]:
+    ttl_sec = _cluster_job_snapshot_cache_ttl_sec()
+    now = time.monotonic()
+    if ttl_sec > 0:
+        cached = _cluster_job_snapshot_cache.get(job_id)
+        if cached and now - cached[0] < ttl_sec:
+            return cached[1]
+    snapshot = await get_cluster_job_snapshot(job_id)
+    if ttl_sec > 0:
+        _cluster_job_snapshot_cache[job_id] = (now, snapshot)
+    return snapshot
+
+
+def _clear_cluster_job_snapshot_cache(job_id: str | None) -> None:
+    if job_id:
+        _cluster_job_snapshot_cache.pop(str(job_id), None)
 
 
 async def _classify_session_faces(
@@ -2274,7 +2300,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
 
     job_id = str(session["face_cluster_job_id"])
     try:
-        snapshot = await get_cluster_job_snapshot(job_id)
+        snapshot = await _get_cluster_job_snapshot_cached(job_id)
     except Exception as exc:
         if not _is_missing_cluster_job_error(exc):
             raise
@@ -2283,6 +2309,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
             session_id,
             job_id,
         )
+        _clear_cluster_job_snapshot_cache(job_id)
         session["face_cluster_job_id"] = None
         session["status"] = "failed"
         session["stage"] = "failed"
@@ -2324,6 +2351,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
         return
     if status == "success":
         result = snapshot.get("result") if isinstance(snapshot.get("result"), dict) else {}
+        _clear_cluster_job_snapshot_cache(job_id)
         session["face_cluster_job_id"] = None
         clusters = build_clusters_from_response(result, source_by_name)
         session["face_clusters"] = clusters
@@ -2358,6 +2386,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
         _release_batch_slot(owner_id, session_id)
         return
     if status == "cancelled":
+        _clear_cluster_job_snapshot_cache(job_id)
         session["status"] = "cancelled"
         session["stage"] = "cancelled"
         session["completed"] = True
@@ -2366,6 +2395,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
         _release_batch_slot(owner_id, session_id)
         return
 
+    _clear_cluster_job_snapshot_cache(job_id)
     session["status"] = "failed"
     session["stage"] = "failed"
     session["error_message"] = snapshot.get("error_message") or "人臉分群沒有完成"
@@ -2396,7 +2426,7 @@ async def _sync_face_cluster_terminal_status(session: dict[str, Any]) -> bool:
         return False
 
     try:
-        snapshot = await get_cluster_job_snapshot(job_id)
+        snapshot = await _get_cluster_job_snapshot_cached(job_id)
     except Exception as exc:
         if not _is_missing_cluster_job_error(exc):
             return False
@@ -2405,6 +2435,7 @@ async def _sync_face_cluster_terminal_status(session: dict[str, Any]) -> bool:
             session.get("session_id"),
             job_id,
         )
+        _clear_cluster_job_snapshot_cache(job_id)
         session["face_cluster_job_id"] = None
         session["status"] = "failed"
         session["stage"] = "failed"
@@ -2435,6 +2466,7 @@ async def _sync_face_cluster_terminal_status(session: dict[str, Any]) -> bool:
     if snapshot_status == "success":
         images, source_by_name = prepare_cluster_images(session.get("results") or [])
         result = snapshot.get("result") if isinstance(snapshot.get("result"), dict) else {}
+        _clear_cluster_job_snapshot_cache(job_id)
         session["face_cluster_job_id"] = None
         clusters = build_clusters_from_response(result, source_by_name)
         session["face_clusters"] = clusters
@@ -2474,6 +2506,7 @@ async def _sync_face_cluster_terminal_status(session: dict[str, Any]) -> bool:
         return True
 
     if snapshot_status == "cancelled":
+        _clear_cluster_job_snapshot_cache(job_id)
         session["status"] = "cancelled"
         session["stage"] = "cancelled"
         session["completed"] = True
@@ -2489,6 +2522,7 @@ async def _sync_face_cluster_terminal_status(session: dict[str, Any]) -> bool:
         _release_batch_slot(owner_id, session_id)
         return True
 
+    _clear_cluster_job_snapshot_cache(job_id)
     session["status"] = "failed"
     session["stage"] = "failed"
     session["error_message"] = str(snapshot.get("error_message") or "人臉分群沒有完成")
