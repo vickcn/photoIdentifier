@@ -167,6 +167,7 @@ class FirestoreUserStore:
 
         ref = self._user_ref(google_user_id)
         snap = ref.get()
+        is_new_user = not snap.exists
         now = iso_utc()
         profile_payload = {
             "google_user_id": google_user_id,
@@ -180,6 +181,12 @@ class FirestoreUserStore:
             ref.set(profile_payload, merge=True)
             user = snap.to_dict() or {}
             user.update(profile_payload)
+            logger.info(
+                "auth.user_synced google_user_id=%s email=%s created=%s store=firestore",
+                google_user_id,
+                profile_payload["email"],
+                False,
+            )
             return user
 
         payload = {
@@ -190,6 +197,12 @@ class FirestoreUserStore:
             "created_at": now,
         }
         ref.set(payload)
+        logger.info(
+            "auth.user_synced google_user_id=%s email=%s created=%s store=firestore",
+            google_user_id,
+            profile_payload["email"],
+            is_new_user,
+        )
         return payload
 
     async def get_or_create_user(self, userinfo: dict[str, Any]) -> dict[str, Any]:

@@ -3101,8 +3101,16 @@ def google_auth_callback(request: Request, code: str, state: str):
         # 同步備份到 session，供 Vercel /tmp 失效時使用
         _save_creds_to_session(request, creds)
         userinfo = _get_google_userinfo(request)
+        synced_user = None
         if isinstance(userinfo, dict):
-            _sync_logged_in_user_sync(request, userinfo)
+            synced_user = _sync_logged_in_user_sync(request, userinfo)
+            logger.info(
+                "auth.callback user synced session_id=%s user_key=%s google_user_id=%s email=%s",
+                request.session.get("session_id"),
+                user_key,
+                str((synced_user or {}).get("google_user_id") or normalize_google_user_id(userinfo) or ""),
+                str((synced_user or {}).get("email") or userinfo.get("email") or ""),
+            )
 
         request.session.pop("oauth_state", None)
         request.session.pop("oauth_code_verifier", None)
