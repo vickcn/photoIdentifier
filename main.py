@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import asyncio
+from collections import deque
 import email.message
 import inspect
 import io
@@ -415,8 +416,18 @@ app.add_middleware(
     secret_key=os.environ.get("SESSION_SECRET", "photo-identifier-local-secret"),
     max_age=3600 * 24 * 7,
     same_site="lax",
-    https_only=False
+    https_only=IS_GCP or os.getenv("SESSION_HTTPS_ONLY", "false").lower() == "true",
 )
+
+
+@app.middleware("http")
+async def protect_state_changing_requests(request: Request, call_next):
+    _same_origin_state_change(request)
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    return response
 
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
 from src.google_auth import get_auth_url, exchange_code_for_token, load_user_credentials, token_store, DEFAULT_SCOPES
@@ -437,8 +448,37 @@ _batch_sessions: dict[str, dict] = {}
 _active_batch_owners: dict[str, str] = {}
 _batch_session_locks: dict[str, asyncio.Lock] = {}
 _cluster_job_snapshot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_request_rate_windows: dict[tuple[str, str], deque[float]] = {}
 batch_state_store = create_batch_state_store()
 user_store = create_user_store()
+
+
+def _request_client_key(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    client_ip = forwarded_for.split(",", 1)[0].strip() if forwarded_for else ""
+    return client_ip or (request.client.host if request.client else "unknown")
+
+
+def _enforce_request_rate_limit(request: Request, bucket: str, limit: int, window_sec: int = 60) -> None:
+    now = time.monotonic()
+    key = (bucket, f"{_request_client_key(request)}:{_get_client_id(request)}")
+    window = _request_rate_windows.setdefault(key, deque())
+    while window and now - window[0] >= window_sec:
+        window.popleft()
+    if len(window) >= limit:
+        raise HTTPException(status_code=429, detail="請稍後再試，要求頻率過高。", headers={"Retry-After": str(window_sec)})
+    window.append(now)
+
+
+def _same_origin_state_change(request: Request) -> None:
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return
+    origin = request.headers.get("origin")
+    if not origin:
+        return
+    allowed = {_public_app_origin(), _app_base_url()}
+    if origin.rstrip("/") not in {value for value in allowed if value}:
+        raise HTTPException(status_code=403, detail="不允許的跨來源要求。")
 
 
 def _get_client_id(request: Request) -> str:
@@ -1635,6 +1675,7 @@ async def batch_upload_stream(
     upload_chunk_total: int = Form(1),
     upload_total_files: Optional[int] = Form(None),
 ):
+    _enforce_request_rate_limit(request, "batch-upload", limit=30)
     local_total_max_files = _local_upload_total_max_files(request)
     _validate_processing_scope(run_public_classification, run_face_clustering)
     await _require_public_classification_if_requested(request, run_public_classification)
@@ -2543,6 +2584,7 @@ async def _sync_face_cluster_terminal_status(session: dict[str, Any]) -> bool:
 
 @app.post("/batch_drive_start/")
 async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
+    _enforce_request_rate_limit(request, "batch-drive-start", limit=6)
     _validate_processing_scope(req.run_public_classification, req.run_face_clustering)
     _validate_cloud_api_concurrency(req.concurrency)
     user_key = request.session.get("user_key")
@@ -2608,6 +2650,7 @@ async def batch_visualize_drive_start(req: DriveBatchRequest, request: Request):
 
 @app.get("/batch_sessions/{session_id}/status")
 async def get_batch_session_status(session_id: str, request: Request):
+    _enforce_request_rate_limit(request, "batch-status", limit=90)
     session = await _owned_batch_session_async(request, session_id)
     async with _batch_session_lock(session_id):
         session = await _owned_batch_session_async(request, session_id)
@@ -4480,6 +4523,7 @@ async def get_face_clusters(session_id: str, request: Request):
 
 @app.post("/batch_sessions/{session_id}/cancel")
 async def cancel_batch_session(session_id: str, request: Request, req: BatchCancelRequest | None = None):
+    _enforce_request_rate_limit(request, "batch-cancel", limit=10)
     session = await _owned_batch_session_async(request, session_id)
     processing_info = session.get("processing_info") if isinstance(session.get("processing_info"), dict) else {}
     has_active_face_job = bool(processing_info.get("run_face_clustering")) and not session.get("face_clustering")
