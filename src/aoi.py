@@ -1,5 +1,8 @@
 import io
 from PIL import Image, ImageDraw, ImageOps
+from src.pillow_heif_compat import register_pillow_heif
+
+register_pillow_heif()
 
 def draw_bboxes_on_image(
     image_bytes: bytes,

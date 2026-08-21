@@ -12,4 +12,5 @@ google-cloud-storage
 itsdangerous
 httpx
 jinja2
-Pillow
+Pillow<12
+pillow-heif<1.0

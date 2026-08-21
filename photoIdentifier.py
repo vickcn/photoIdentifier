@@ -10,9 +10,11 @@ from typing import Tuple, List, Optional
 from src.google_usage import analyze_brand_strap_image, PhotoAnalysisResult
 from src.aoi import draw_bboxes_on_image
 from src.insight_api_client import detect_normalized_bboxes
+from src.pillow_heif_compat import register_pillow_heif
 from src.upload_batch import UploadedImage
 
 logger = logging.getLogger(__name__)
+register_pillow_heif()
 
 # 讀取 config.json 中的 request_timeout 設定
 try:
@@ -28,15 +30,19 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 def make_frontend_preview_b64(image_bytes: bytes, max_size: int = 800, quality: int = 75) -> str:
     """Return an oriented JPEG preview used as the browser-side bbox coordinate base."""
     output = io.BytesIO()
-    with Image.open(io.BytesIO(image_bytes)) as img:
-        img = ImageOps.exif_transpose(img)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        elif img.mode != "RGB":
-            img = img.convert("RGB")
-        img.thumbnail((max_size, max_size))
-        img.save(output, format="JPEG", quality=quality)
-    return base64.b64encode(output.getvalue()).decode("utf-8")
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img = ImageOps.exif_transpose(img)
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            img.thumbnail((max_size, max_size))
+            img.save(output, format="JPEG", quality=quality)
+        return base64.b64encode(output.getvalue()).decode("utf-8")
+    except Exception as exc:
+        logger.warning("frontend preview skipped: %s", exc)
+        return ""
 
 def resize_image_if_needed(image_bytes: bytes, max_size: int = 1600) -> bytes:
     """如果圖片太大的話，將長邊縮放至 max_size，節省傳輸頻寬與 AI 處理時間"""

@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 from PIL import Image, ImageOps
+from src.pillow_heif_compat import register_pillow_heif
 
 DEFAULT_CLUSTER_EPS = 0.9
 DEFAULT_CLUSTER_MIN_SAMPLES = 2
@@ -22,6 +23,7 @@ DEFAULT_CLUSTER_JOB_TIMEOUT_SEC = 900.0
 DEFAULT_INSIGHT_API_CONNECT_TIMEOUT_SEC = 20.0
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
+register_pillow_heif()
 
 
 def _open_oriented_rgb_image(image_bytes: bytes) -> Image.Image:
