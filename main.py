@@ -44,10 +44,12 @@ from src.insight_api_client import (
     prepare_cluster_images,
 )
 from src.batch_state_store import (
+    build_usage_cost_summary,
     create_batch_state_store,
     get_backend_service_account_json,
     person_id_for,
     photo_id_for,
+    resolve_job_actor,
     strip_image_payload,
 )
 from src.drive_name_memory import (
@@ -756,6 +758,44 @@ def _face_cluster_starting_event(session_id: str) -> dict[str, Any]:
     }
 
 
+def _classifier_accounting_updates(session: dict[str, Any], snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(snapshot, dict):
+        return {}
+    resource_actual = snapshot.get("resource_actual") if isinstance(snapshot.get("resource_actual"), dict) else None
+    cost_actual = snapshot.get("cost_actual") if isinstance(snapshot.get("cost_actual"), dict) else None
+    if resource_actual is None or cost_actual is None:
+        return {}
+    actor = snapshot.get("actor") if isinstance(snapshot.get("actor"), dict) else resolve_job_actor(session)
+    job_record = {
+        "job_id": str(snapshot.get("job_id") or ""),
+        "actor": actor,
+        "resource_actual": resource_actual,
+        "cost_actual": cost_actual,
+        "pricing": snapshot.get("pricing") if isinstance(snapshot.get("pricing"), dict) else {},
+    }
+    summary = build_usage_cost_summary([job_record])
+    return {
+        "actor": actor,
+        "classifier_job_id": job_record["job_id"],
+        "classifier_accounting": strip_image_payload(job_record),
+        "resource_actual_summary": {
+            key: value for key, value in summary.items() if key != "cost"
+        },
+        "cost_actual_summary": summary["cost"],
+        "pricing": job_record["pricing"],
+    }
+
+
+async def _persist_classifier_accounting(session_id: str, snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    session = _batch_sessions.get(session_id) or {}
+    updates = _classifier_accounting_updates(session, snapshot)
+    if not updates:
+        return {}
+    session.update(updates)
+    await _persist_session_update(session_id, updates)
+    return updates
+
+
 def _cluster_job_snapshot_cache_ttl_sec() -> float:
     try:
         return max(float(os.getenv("CLASSIFIER_STATUS_CACHE_TTL_SEC", "8")), 0.0)
@@ -821,6 +861,8 @@ async def _classify_session_faces(
             batch_size=int(processing_info.get("face_cluster_batch_size") or BATCH_UPLOAD_BATCH_SIZE),
             progress_callback=progress_callback,
             session_id=session_id,
+            actor=resolve_job_actor(session),
+            source_kind=str(session.get("batch_mode") or ""),
         )
         if session.get("cancel_requested"):
             session["face_clusters"] = []
@@ -939,6 +981,7 @@ def _start_face_clustering_task(
         session = _batch_sessions.get(session_id)
         if session is not None:
             session["face_cluster_job_id"] = snapshot.get("job_id")
+            session["classifier_job_snapshot"] = strip_image_payload(snapshot)
             if (
                 session.get("cancel_requested")
                 and snapshot.get("job_id")
@@ -1154,6 +1197,71 @@ async def update_current_user_preferences(request: Request, req: UserPreferences
     return {
         "success": True,
         "preferences": public_user_payload(user_record).get("preferences", {}),
+    }
+
+
+def _admin_google_user_ids() -> set[str]:
+    return {
+        value.strip()
+        for value in str(os.getenv("ADMIN_GOOGLE_USER_IDS") or "").split(",")
+        if value.strip()
+    }
+
+
+async def _require_admin(request: Request) -> str:
+    google_user_id = _require_logged_in_google_user_id(request)
+    if google_user_id not in _admin_google_user_ids():
+        raise HTTPException(status_code=403, detail="沒有查帳權限")
+    return google_user_id
+
+
+@app.get("/api/admin/usage-cost")
+async def get_admin_usage_cost(
+    request: Request,
+    start_at: str = "",
+    end_at: str = "",
+    actor_id: str = "",
+    job_id: str = "",
+    source_kind: str = "",
+    limit: int = 500,
+):
+    await _require_admin(request)
+    sessions = await batch_state_store.list_usage_cost_sessions(
+        start_at=start_at,
+        end_at=end_at,
+        actor_id=actor_id,
+        job_id=job_id,
+        source_kind=source_kind,
+        limit=limit,
+    )
+    jobs: list[dict[str, Any]] = []
+    for session in sessions:
+        accounting = session.get("classifier_accounting") if isinstance(session.get("classifier_accounting"), dict) else {}
+        if not accounting:
+            continue
+        jobs.append(
+            {
+                "session_id": session.get("session_id"),
+                "batch_mode": session.get("batch_mode"),
+                "completed_at": session.get("completed_at"),
+                "actor": session.get("actor") if isinstance(session.get("actor"), dict) else accounting.get("actor"),
+                "job_id": accounting.get("job_id") or session.get("classifier_job_id"),
+                "resource_actual": accounting.get("resource_actual") if isinstance(accounting.get("resource_actual"), dict) else {},
+                "cost_actual": accounting.get("cost_actual") if isinstance(accounting.get("cost_actual"), dict) else {},
+                "pricing": accounting.get("pricing") if isinstance(accounting.get("pricing"), dict) else session.get("pricing") or {},
+            }
+        )
+    return {
+        "filters": {
+            "start_at": start_at,
+            "end_at": end_at,
+            "actor_id": actor_id,
+            "job_id": job_id,
+            "source_kind": source_kind,
+            "limit": limit,
+        },
+        "summary": build_usage_cost_summary(jobs),
+        "jobs": jobs,
     }
 
 
@@ -1919,6 +2027,10 @@ async def batch_upload_stream(
                     "face_clustering": face_clustering,
                 },
             )
+            await _persist_classifier_accounting(
+                current_session_id,
+                _batch_sessions[current_session_id].get("classifier_job_snapshot"),
+            )
             completion_notification = await _notify_completed_batch_session(current_session_id, request)
             yield json.dumps(
                 {
@@ -2032,6 +2144,10 @@ async def batch_visualize(req: BatchRequest, request: Request):
                 "result_count": len(results),
                 "face_clustering": face_clustering,
             },
+        )
+        await _persist_classifier_accounting(
+            session_id,
+            _batch_sessions[session_id].get("classifier_job_snapshot"),
         )
         completion_notification = await _notify_completed_batch_session(session_id, request)
 
@@ -2322,6 +2438,8 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
             start_index=0,
             batch_size=len(images),
             session_id=session_id,
+            actor=resolve_job_actor(session),
+            source_kind=str(session.get("batch_mode") or ""),
         )
         session["face_cluster_job_id"] = job.get("job_id")
         processing_info["face_cluster_current_start_index"] = 0
@@ -2377,6 +2495,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
         "batch_start_index": current_start_index,
         "total": len(images),
     }
+    session["classifier_job_snapshot"] = strip_image_payload(snapshot)
     session["face_cluster_progress"] = _face_cluster_progress_event(session_id, snapshot)
     session["stage"] = "face_clustering"
     status = snapshot.get("status")
@@ -2423,6 +2542,7 @@ async def _advance_drive_session(session: dict[str, Any], request: Request) -> N
                 "face_cluster_progress": session["face_cluster_progress"],
             },
         )
+        await _persist_classifier_accounting(session_id, snapshot)
         await _notify_completed_batch_session(session_id, request)
         _release_batch_slot(owner_id, session_id)
         return
@@ -2502,6 +2622,7 @@ async def _sync_face_cluster_terminal_status(session: dict[str, Any]) -> bool:
 
     session_id = str(session["session_id"])
     owner_id = str(session.get("owner_id") or "")
+    session["classifier_job_snapshot"] = strip_image_payload(snapshot)
     session["face_cluster_progress"] = _face_cluster_progress_event(session_id, snapshot)
 
     if snapshot_status == "success":
@@ -2533,6 +2654,7 @@ async def _sync_face_cluster_terminal_status(session: dict[str, Any]) -> bool:
                 "face_cluster_job_id": None,
             },
         )
+        await _persist_classifier_accounting(session_id, snapshot)
         if batch_state_store.enabled:
             try:
                 await batch_state_store.save_face_clusters(

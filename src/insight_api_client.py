@@ -52,10 +52,14 @@ class InsightApiClient:
         base_url: str | None = None,
         api_key: str | None = None,
         client_id: str | None = None,
+        actor: dict[str, str] | None = None,
+        source_kind: str | None = None,
     ) -> None:
         self.base_url = (base_url or os.environ.get("INSIGHT_API_URL", "")).rstrip("/")
         self.api_key = api_key or os.environ.get("INSIGHT_API_KEY", "")
         self.client_id = str(client_id or "").strip()
+        self.actor = actor if isinstance(actor, dict) else {}
+        self.source_kind = str(source_kind or "").strip()
         if not self.base_url or not self.api_key:
             raise RuntimeError("必須設定 INSIGHT_API_URL 與 INSIGHT_API_KEY")
 
@@ -378,6 +382,13 @@ class InsightApiClient:
         headers = {"Authorization": f"Bearer {self.api_key}"}
         if self.client_id:
             headers["X-Client-Id"] = self.client_id
+        actor_type = str(self.actor.get("type") or "").strip()
+        actor_id = str(self.actor.get("id") or "").strip()
+        if actor_type and actor_id:
+            headers["X-Actor-Type"] = actor_type
+            headers["X-Actor-Id"] = actor_id
+        if self.source_kind:
+            headers["X-Source-Kind"] = self.source_kind
         connect_timeout = _read_float_env(
             "INSIGHT_API_CONNECT_TIMEOUT_SEC",
             DEFAULT_INSIGHT_API_CONNECT_TIMEOUT_SEC,
@@ -435,6 +446,8 @@ async def cluster_batch_results(
     batch_size: int = DEFAULT_CLUSTER_BATCH_SIZE,
     progress_callback: ProgressCallback | None = None,
     session_id: str | None = None,
+    actor: dict[str, str] | None = None,
+    source_kind: str | None = None,
 ) -> list[dict]:
     images, source_by_name = prepare_cluster_images(results)
     if not images:
@@ -466,7 +479,7 @@ async def cluster_batch_results(
 
     # The classifier receives one logical job and performs detection in small
     # internal batches before fitting DBSCAN once across all embeddings.
-    response = await InsightApiClient(client_id=session_id).cluster(
+    response = await InsightApiClient(client_id=session_id, actor=actor, source_kind=source_kind).cluster(
         images,
         eps=eps,
         min_samples=min_samples,
@@ -696,13 +709,15 @@ async def create_cluster_job_from_results(
     start_index: int = 0,
     batch_size: int = DEFAULT_CLUSTER_BATCH_SIZE,
     session_id: str | None = None,
+    actor: dict[str, str] | None = None,
+    source_kind: str | None = None,
 ) -> dict:
     images, _source_by_name = prepare_cluster_images(results)
     if not images:
         return {"job_id": None, "status": "success", "result": {"images": []}}
     # One classifier job owns the complete dataset. The classifier itself
     # detects images in bounded internal batches, then fits globally.
-    job = await InsightApiClient(client_id=session_id).create_cluster_job(
+    job = await InsightApiClient(client_id=session_id, actor=actor, source_kind=source_kind).create_cluster_job(
         images,
         eps=eps,
         min_samples=min_samples,

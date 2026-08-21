@@ -53,6 +53,35 @@ class InsightApiClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(configured_headers[0]["X-Client-Id"], "session-1")
 
+    async def test_client_sends_actor_and_source_headers_to_classifier(self):
+        configured_headers = []
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                configured_headers.append(kwargs["headers"])
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, path, **kwargs):
+                return FakeResponse(200, {"job_id": "job-1", "status": "success"})
+
+        with patch("src.insight_api_client.httpx.AsyncClient", FakeAsyncClient):
+            await InsightApiClient(
+                "https://insight.test",
+                "secret",
+                client_id="session-1",
+                actor={"type": "user", "id": "google-1"},
+                source_kind="drive",
+            ).get_cluster_job("job-1")
+
+        self.assertEqual(configured_headers[0]["X-Actor-Type"], "user")
+        self.assertEqual(configured_headers[0]["X-Actor-Id"], "google-1")
+        self.assertEqual(configured_headers[0]["X-Source-Kind"], "drive")
+
     async def test_cluster_uses_queued_job_endpoint(self):
         calls = []
 

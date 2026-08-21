@@ -191,6 +191,64 @@ def normalize_usage_metrics(value: Any) -> dict[str, int]:
     }
 
 
+def resolve_job_actor(session: dict[str, Any]) -> dict[str, str]:
+    google_user_id = str(session.get("google_user_id") or "").strip()
+    if google_user_id:
+        return {"type": "user", "id": google_user_id}
+    return {"type": "anonymous", "id": str(session.get("owner_id") or "").strip()}
+
+
+def _number(value: Any) -> float:
+    try:
+        return max(float(value or 0), 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _integer(value: Any) -> int:
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_usage_cost_summary(jobs: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = {
+        "job_count": 0,
+        "photo_count": 0,
+        "input_bytes": 0,
+        "output_bytes": 0,
+        "processing_seconds": 0.0,
+        "billable_vcpu_seconds": 0.0,
+        "billable_memory_gib_seconds": 0.0,
+        "network_egress_bytes": 0,
+        "cost": {
+            "cpu": 0.0,
+            "ram": 0.0,
+            "network_egress": 0.0,
+            "storage": 0.0,
+            "other_gcp": 0.0,
+            "total": 0.0,
+        },
+    }
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        resource = job.get("resource_actual") if isinstance(job.get("resource_actual"), dict) else {}
+        cost = job.get("cost_actual") if isinstance(job.get("cost_actual"), dict) else {}
+        summary["job_count"] += 1
+        summary["photo_count"] += _integer(resource.get("photo_count"))
+        summary["input_bytes"] += _integer(resource.get("input_bytes"))
+        summary["output_bytes"] += _integer(resource.get("output_bytes"))
+        summary["processing_seconds"] += _number(resource.get("processing_seconds"))
+        summary["billable_vcpu_seconds"] += _number(resource.get("billable_vcpu_seconds"))
+        summary["billable_memory_gib_seconds"] += _number(resource.get("billable_memory_gib_seconds"))
+        summary["network_egress_bytes"] += _integer(resource.get("network_egress_bytes"))
+        for key in ("cpu", "ram", "network_egress", "storage", "other_gcp", "total"):
+            summary["cost"][key] += _number(cost.get(key))
+    return summary
+
+
 class NullBatchStateStore:
     enabled = False
 
@@ -247,6 +305,18 @@ class NullBatchStateStore:
         return []
 
     async def list_sessions(self, owner_id: str) -> list[dict[str, Any]]:
+        return []
+
+    async def list_usage_cost_sessions(
+        self,
+        *,
+        start_at: str = "",
+        end_at: str = "",
+        actor_id: str = "",
+        job_id: str = "",
+        source_kind: str = "",
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
         return []
 
     async def create_export_record(
@@ -517,6 +587,54 @@ class FirestoreBatchStateStore:
                 sessions = [doc.to_dict() for doc in docs]
                 sessions.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
                 return sessions[:50]
+
+        return await run_in_threadpool(read)
+
+    async def list_usage_cost_sessions(
+        self,
+        *,
+        start_at: str = "",
+        end_at: str = "",
+        actor_id: str = "",
+        job_id: str = "",
+        source_kind: str = "",
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        def read() -> list[dict[str, Any]]:
+            query = self._client.collection("batch_sessions")
+            if start_at:
+                query = query.where("completed_at", ">=", start_at)
+            if end_at:
+                query = query.where("completed_at", "<=", end_at)
+            try:
+                docs = [
+                    doc.to_dict()
+                    for doc in query.order_by("completed_at", direction="DESCENDING")
+                    .limit(max(1, min(int(limit), 2000)))
+                    .stream()
+                ]
+            except Exception as exc:
+                logger.warning("Falling back to unordered usage-cost query: %s", exc)
+                docs = [doc.to_dict() for doc in query.limit(max(1, min(int(limit), 2000))).stream()]
+            filtered: list[dict[str, Any]] = []
+            normalized_actor_id = str(actor_id or "").strip()
+            normalized_job_id = str(job_id or "").strip()
+            normalized_source_kind = str(source_kind or "").strip()
+            for item in docs:
+                if not isinstance(item, dict) or not isinstance(item.get("classifier_accounting"), dict):
+                    continue
+                actor = item.get("actor") if isinstance(item.get("actor"), dict) else {}
+                accounting = item.get("classifier_accounting") if isinstance(item.get("classifier_accounting"), dict) else {}
+                resource = accounting.get("resource_actual") if isinstance(accounting.get("resource_actual"), dict) else {}
+                if normalized_actor_id and str(actor.get("id") or "") != normalized_actor_id:
+                    continue
+                if normalized_job_id and str(accounting.get("job_id") or item.get("classifier_job_id") or "") != normalized_job_id:
+                    continue
+                if normalized_source_kind and str(resource.get("source_kind") or item.get("batch_mode") or "") != normalized_source_kind:
+                    continue
+                filtered.append(item)
+            filtered.sort(key=lambda item: str(item.get("completed_at") or item.get("updated_at") or ""), reverse=True)
+            return filtered
 
         return await run_in_threadpool(read)
 
